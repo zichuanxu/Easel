@@ -1408,6 +1408,14 @@ def _model_channels() -> dict:
                     "baseOptional": (_bk is None) or (not _bk["required"]),
                 })
             channels[_ch] = {"rows": _rows}
+        # 配音的免 key 兜底：没设 VOICE_PROVIDER 时 tts.py 就用 edge-tts。只读展示行（无 slot，不参与保存）。
+        import tts as _tts
+        channels["speech"]["rows"].append({
+            "order": 0, "name": "edge-tts", "sub": "微软在线 · 免 key", "type": "edge",
+            "model": "晓晓（默认音色）", "baseUrl": "—", "keyMasked": "免 key",
+            "role": "兜底" if (env.get("VOICE_PROVIDER") or "").strip() else "主",
+            "result": "已就绪" if _tts.find_edge_tts() else "未装（去环境安装）",
+        })
     except Exception:  # noqa: BLE001
         pass
     return {"channels": channels, "primary": primary}

@@ -61,15 +61,37 @@ def _die(msg: str, code: int = 1) -> "NoReturn":  # type: ignore[valid-type]
     sys.exit(code)
 
 
-def _edge_tts_bin() -> str:
-    """定位 edge-tts 命令；找不到给清晰安装提示。"""
-    for cand in ("edge-tts", "/root/miniconda3/bin/edge-tts"):
-        p = shutil.which(cand) or (cand if Path(cand).is_file() else None)
+def find_edge_tts() -> str | None:
+    """定位 edge-tts 命令，找不到返回 None。
+
+    PATH 之外还找当前解释器旁边、项目 .venv 里的：edge-tts 装在项目 .venv 中，
+    而 gateway / agent 起脚本时 PATH 不一定激活了 .venv —— 只查 PATH 会误报「未安装」。
+    不找当前目录下的 .venv：cwd 可能是任意目录，不能执行那里的程序。
+    """
+    p = shutil.which("edge-tts")
+    if p:
+        return p
+    here = Path(__file__).resolve()
+    dirs = [Path(sys.executable).parent]
+    if len(here.parents) > 3:   # <项目根>/skills/shared/scripts/tts.py
+        root = here.parents[3]
+        dirs += [root / ".venv" / "bin", root / ".venv" / "Scripts"]
+    dirs.append(Path("/root/miniconda3/bin"))
+    for d in dirs:
+        p = shutil.which("edge-tts", path=str(d))
         if p:
             return p
+    return None
+
+
+def _edge_tts_bin() -> str:
+    """定位 edge-tts 命令；找不到给清晰安装提示。"""
+    p = find_edge_tts()
+    if p:
+        return p
     _die(
-        "未找到 edge-tts 命令。请安装：`pip install edge-tts`，"
-        "或确认它在 PATH 中（如 /root/miniconda3/bin/edge-tts）。",
+        "未找到 edge-tts 命令。请在 Web「设置 → 环境安装」装「常用 Python 库」，"
+        "或在项目 .venv 里 `pip install edge-tts`。",
         code=3,
     )
 

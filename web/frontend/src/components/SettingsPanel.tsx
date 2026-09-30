@@ -297,9 +297,15 @@ export default function SettingsPanel({ onClose }: Props) {
     setMediaRows((m) => ({ ...m, [ch]: (m[ch] || []).map((r, j) => (j === i ? { ...r, ...patch } : r)) }));
 
   const setMediaPrimary = (ch: string, i: number) =>
-    setMediaRows((m) => ({ ...m, [ch]: (m[ch] || []).map((r, j) => ({ ...r, role: j === i ? '主' : '备' })) }));
+    // 选了云端做「主」，edge-tts 兜底行（无 slot）随之退为兜底
+    setMediaRows((m) => ({
+      ...m,
+      [ch]: (m[ch] || []).map((r, j) => (r.slot ? { ...r, role: j === i ? '主' : '备' } : { ...r, role: '兜底' })),
+    }));
 
   const mediaOk = (ch: string) => (mediaRows[ch] || []).some((r) => r.result === '已配置');
+  // 配音的免 key 兜底行（后端给的只读行，无 slot）
+  const edgeReady = (mediaRows.speech || []).some((r) => r.type === 'edge' && r.result === '已就绪');
 
   const renderBoard = (
     rows: ModelRow[],
@@ -501,12 +507,14 @@ export default function SettingsPanel({ onClose }: Props) {
                 {chan === 'speech' && (
                   <section className="st-panel active">
                     <div className="panel-top">
-                      <StatusDot tone={mediaOk('speech') ? 'ok' : 'idle'}>{mediaOk('speech') ? '有可用提供商' : '未配置'}</StatusDot>
+                      <StatusDot tone={mediaOk('speech') || edgeReady ? 'ok' : 'idle'}>
+                        {mediaOk('speech') ? '有可用提供商' : edgeReady ? 'edge-tts 可用（免 Key）' : '未配置'}
+                      </StatusDot>
                       <span className="desc">只填 Key 即用（地址/模型内建）；「主/备」= 默认</span>
                       <span className="spacer" />
                     </div>
                     {renderBoard(mediaRows.speech || [], { onRow: (i, p) => updateMediaRow('speech', i, p), onPrimary: (i) => setMediaPrimary('speech', i), media: true })}
-                    <div className="foot-note">配音脚本按「主」provider 合成；本地 VoxCPM / edge-tts 在视频产线里可直接替代。</div>
+                    <div className="foot-note">没配云端配音时用 edge-tts（免 Key，声音偏机械）。云端设为「主」并保存后改用云端，edge-tts 只在云端失败时兜底；想改回 edge-tts，删掉 .env 里的 VOICE_PROVIDER 那行。换音色在对话里说，比如「用云希的声音配音」。</div>
                   </section>
                 )}
 
