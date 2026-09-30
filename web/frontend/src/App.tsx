@@ -7,6 +7,7 @@ import OutputsPage from './components/OutputsPage';
 import AccountsPage from './components/AccountsPage';
 import ProfilePage from './components/ProfilePage';
 import DashboardPage from './components/DashboardPage';
+import AnalyticsPage from './components/AnalyticsPage';
 import TrendsPage from './components/TrendsPage';
 import CalendarPage from './components/CalendarPage';
 import IdeasPage from './components/IdeasPage';
@@ -737,6 +738,8 @@ export default function App() {
         return <OutputsPage jumpPath={outputsJump} onJumpHandled={clearOutputsJump} />;
       case 'accounts':
         return <AccountsPage />;
+      case 'analytics':
+        return <AnalyticsPage onNavigate={setCurrentPage} />;
       case 'profile':
         return <ProfilePage persona={selectedPersona} onNewProfile={() => setShowWizard(true)} onDeleted={handleProfileDeleted} />;
       default:

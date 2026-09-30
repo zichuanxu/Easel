@@ -6,3 +6,5 @@
 @import './ui/field.css';
 @import './ui/primitives.css';
 @import './ui/overlay.css';
+@import './pages/dashboard.css';
+@import './pages/analytics.css';
