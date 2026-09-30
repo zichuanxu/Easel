@@ -79,7 +79,7 @@
   .settings-modal .prow > :nth-child(5) { grid-area: 2 / 4 / 3 / 6; }
   .settings-modal .prow > :nth-child(6) { grid-area: 2 / 6 / 3 / 8; }
 }
-.settings-modal .add-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 10px 16px; border: 1px dashed var(--c-rule-strong); border-radius: var(--r-panel); background: var(--c-surface); color: var(--c-ink-2); font-size: var(--fs-13); cursor: pointer; transition: border-color var(--t-fast), color var(--t-fast); }
+.settings-modal .add-row { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 8px; font-family: inherit; text-align: left; padding: 10px 16px; border: 1px dashed var(--c-rule-strong); border-radius: var(--r-panel); background: var(--c-surface); color: var(--c-ink-2); font-size: var(--fs-13); cursor: pointer; transition: border-color var(--t-fast), color var(--t-fast); }
 .settings-modal .add-row:hover { border-color: var(--c-ink-3); color: var(--c-ink); }
 .settings-modal .empty { display: flex; align-items: center; gap: 10px; padding: 16px; color: var(--c-ink-2); font-size: var(--fs-13); }
 .settings-modal .stub-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--c-rule); color: var(--c-ink-2); font-size: var(--fs-13); }

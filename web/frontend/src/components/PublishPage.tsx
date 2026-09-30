@@ -341,11 +341,11 @@ export default function PublishPage({ persona }: PublishPageProps) {
             {showPicker ? '收起' : '选择媒体'}
           </Button>
           {selectedMedia.map((path) => (
-            <div key={path} className="media-chip" onClick={() => toggleMedia(path)} title="点击移除">
+            <button type="button" key={path} className="media-chip" onClick={() => toggleMedia(path)} title="点击移除">
               {mediaFiles.find((f) => f.path === path)?.kind === 'image'
                 ? <img src={mediaUrl(path)} alt="" /> : <span className="media-vid">视频</span>}
               <span className="media-x">×</span>
-            </div>
+            </button>
           ))}
         </div>
         {showPicker && (

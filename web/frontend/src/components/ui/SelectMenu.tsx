@@ -193,19 +193,18 @@ export default function SelectMenu({
           {action && (
             <>
               <li role="separator" className="ui-select__sep" />
-              <li role="presentation">
-                <button
-                  type="button"
-                  id={itemId(actionIdx)}
-                  tabIndex={-1}
-                  className={`ui-select__action${activeIdx === actionIdx ? ' is-active' : ''}`}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onMouseMove={() => setActiveIdx(actionIdx)}
-                  onClick={() => commit(actionIdx)}
-                >
-                  <IconPlus size={14} />
-                  <span className="ui-select__label">{action.label}</span>
-                </button>
+              <li
+                id={itemId(actionIdx)}
+                role="option"
+                aria-selected="false"
+                data-action
+                className={`ui-select__action${activeIdx === actionIdx ? ' is-active' : ''}`}
+                onMouseDown={(e) => e.preventDefault()}
+                onMouseMove={() => setActiveIdx(actionIdx)}
+                onClick={() => commit(actionIdx)}
+              >
+                <IconPlus size={14} />
+                <span className="ui-select__label">{action.label}</span>
               </li>
             </>
           )}

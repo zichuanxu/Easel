@@ -129,8 +129,7 @@ export default function OutputsPage({ jumpPath, onJumpHandled }: OutputsPageProp
   const enterDir = useCallback((name: string) => { setStack((s) => [...s, name]); setFilter('all'); }, []);
   const goTo = useCallback((depth: number) => { setStack((s) => s.slice(0, depth)); setFilter('all'); }, []);
 
-  const remove = useCallback(async (node: OutputNode, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const remove = useCallback(async (node: OutputNode) => {
     const isDir = node.type === 'dir';
     const label = isDir ? `项目/文件夹「${node.meta?.title || node.name}」及其全部内容` : `文件「${node.name}」`;
     if (!window.confirm(`确定删除${label}？\n此操作不可恢复。`)) return;
@@ -182,10 +181,10 @@ export default function OutputsPage({ jumpPath, onJumpHandled }: OutputsPageProp
     const m = d.meta;
     const cover = coverNode(m) || firstMedia(d);
     return (
-      <div key={d.path} className="card card-hover gcard" onClick={() => enterDir(d.name)}>
+      <div key={d.path} className="card card-hover gcard">
+        <button type="button" className="gcard-main" onClick={() => enterDir(d.name)}>
         <div className="gcard-thumb">
           <span className="gcard-kind"><Tag>{m?.kind ? (KIND_LABEL[m.kind] || m.kind) : '文件夹'}</Tag></span>
-          <button className="gcard-del" title="删除" aria-label="删除" onClick={(e) => remove(d, e)}><IconTrash size={14} /></button>
           {cover ? <Thumb f={cover} big /> : <div className="gcard-ph"><IconFolder size={38} /></div>}
         </div>
         <div className="gcard-meta">
@@ -198,20 +197,24 @@ export default function OutputsPage({ jumpPath, onJumpHandled }: OutputsPageProp
             <span>{d.fileCount ?? 0} 个文件</span>
           </div>
         </div>
+        </button>
+        <button type="button" className="gcard-del" title="删除" aria-label="删除" onClick={() => remove(d)}><IconTrash size={14} /></button>
       </div>
     );
   };
 
   const renderFile = (f: OutputNode) => (
-    <div key={f.path} className="card card-hover gcard" onClick={() => open(f)}>
-      <div className="gcard-thumb">
-        <span className="gcard-kind"><Tag>{kindLabel(f)}</Tag></span>
-        <button className="gcard-del" title="删除" aria-label="删除" onClick={(e) => remove(f, e)}><IconTrash size={14} /></button>
-        <Thumb f={f} />
-      </div>
-      <div className="gcard-meta">
-        <div className="gcard-name" title={f.name}>{f.name}</div>
-      </div>
+    <div key={f.path} className="card card-hover gcard">
+      <button type="button" className="gcard-main" onClick={() => open(f)}>
+        <div className="gcard-thumb">
+          <span className="gcard-kind"><Tag>{kindLabel(f)}</Tag></span>
+          <Thumb f={f} />
+        </div>
+        <div className="gcard-meta">
+          <div className="gcard-name" title={f.name}>{f.name}</div>
+        </div>
+      </button>
+      <button type="button" className="gcard-del" title="删除" aria-label="删除" onClick={() => remove(f)}><IconTrash size={14} /></button>
     </div>
   );
 
@@ -296,7 +299,7 @@ export default function OutputsPage({ jumpPath, onJumpHandled }: OutputsPageProp
             </div>
             <div className="drawer-body">{preview()}</div>
             <div className="outputs-drawer-foot">
-              <Button variant="danger" size="sm" icon={<IconTrash size={13} />} onClick={(e) => remove(selected, e)}>删除此文件</Button>
+              <Button variant="danger" size="sm" icon={<IconTrash size={13} />} onClick={() => remove(selected)}>删除此文件</Button>
             </div>
           </div>
         </div>

@@ -51,6 +51,11 @@ describe('Sidebar', () => {
   });
 
   describe('画像选择', () => {
+    it('selectedPersona 不在列表里（画像被删）时，触发器显示「选择画像」而非空白', () => {
+      render(<Sidebar {...base} personas={[{ name: '小林' }] as never} selectedPersona="已删除的画像" currentPage="dashboard" onPageChange={() => {}} />);
+      expect(screen.getByRole('button', { name: '画像', expanded: false }).textContent).toContain('选择画像');
+    });
+
     const personas = [{ name: '小林' }, { name: '阿舟' }] as never;
     const trigger = () => screen.getByRole('button', { name: '画像', expanded: false });
 
@@ -71,7 +76,7 @@ describe('Sidebar', () => {
       const onPersonaChange = vi.fn();
       render(<Sidebar {...base} personas={personas} onNewProfile={onNewProfile} onPersonaChange={onPersonaChange} currentPage="dashboard" onPageChange={() => {}} />);
       fireEvent.click(trigger());
-      fireEvent.click(screen.getByRole('button', { name: '新建画像' }));
+      fireEvent.click(screen.getByRole('option', { name: '新建画像' }));
       expect(onNewProfile).toHaveBeenCalledTimes(1);
       expect(onPersonaChange).not.toHaveBeenCalled();
     });

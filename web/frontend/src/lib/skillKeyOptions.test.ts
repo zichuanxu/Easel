@@ -14,4 +14,8 @@ describe('skillKeyOptions', () => {
     expect(o.map((x) => x.value)).toEqual(['', 'z', 'a', 'm']);
     expect(o.map((x) => x.label).join('|')).toBe('当前：sk-***9|z|a|m');
   });
+  it('已配置但掩码缺失：首项显示「当前：已配置」', () => {
+    expect(skillKeyOptions({ choices: ['a'], configured: true, masked: '' })[0].label).toBe('当前：已配置');
+    expect(skillKeyOptions({ choices: ['a'], configured: true })[0].label).toBe('当前：已配置');
+  });
 });

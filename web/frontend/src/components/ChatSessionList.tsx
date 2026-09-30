@@ -52,18 +52,19 @@ export default function ChatSessionList({
       <div
         key={s.id}
         className={`session-item${s.id === activeSessionId ? ' active' : ''}`}
-        onClick={() => onSelect(s.id)}
       >
-        <span className="session-item-title" title={s.title}>{s.title}</span>
+        <button type="button" className="session-item-main" onClick={() => onSelect(s.id)}>
+          <span className="session-item-title" title={s.title}>{s.title}</span>
+        </button>
         <div className="session-actions">
           <button type="button" className="session-act" title="重命名"
-            onClick={(e) => { e.stopPropagation(); startRename(s); }}><IconEdit size={14} /></button>
+            onClick={() => startRename(s)}><IconEdit size={14} /></button>
           <button type="button" className="session-act" title={isArchived ? '取消归档' : '归档'}
-            onClick={(e) => { e.stopPropagation(); onArchive(s.id, !isArchived); }}>
+            onClick={() => onArchive(s.id, !isArchived)}>
             {isArchived ? <IconUnarchive size={14} /> : <IconArchive size={14} />}
           </button>
           <button type="button" className="session-act danger" title="删除"
-            onClick={(e) => { e.stopPropagation(); onDelete(s.id); }}><IconTrash size={14} /></button>
+            onClick={() => onDelete(s.id)}><IconTrash size={14} /></button>
         </div>
       </div>
     );

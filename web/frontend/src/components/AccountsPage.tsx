@@ -320,9 +320,7 @@ export default function AccountsPage() {
                     <Avatar url={info.avatar} name={info.name || a.name} />
                     <span className="account-nick" title={info.name || ''}>{info.name || '已登录'}</span>
                   </>
-                ) : (
-                  <span className="account-note">{logged ? '已登录' : (a.note || '未登录')}</span>
-                )}
+                ) : !logged && <span className="account-note">{a.note || '未登录'}</span>}
               </span>
               {status(a)}
               <span className="account-actions">

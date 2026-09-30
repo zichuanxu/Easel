@@ -224,10 +224,30 @@ describe('SelectMenu', () => {
     const onSelect = vi.fn();
     const { trigger, onChange } = setup({ action: { label: '新建画像', onSelect } });
     fireEvent.click(trigger);
-    fireEvent.click(screen.getByRole('button', { name: /新建画像/ }));
+    fireEvent.click(screen.getByRole('option', { name: /新建画像/ }));
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onChange).not.toHaveBeenCalled();
     expect(listbox()).toBeNull();
+  });
+
+  it('操作项是 listbox 里的 option（aria-activedescendant 指向它），不再嵌套 button', () => {
+    const { trigger } = setup({ action: { label: '新建画像', onSelect: () => {} } });
+    fireEvent.click(trigger);
+    const opt = screen.getByRole('option', { name: /新建画像/ });
+    expect(opt.tagName).toBe('LI');
+    expect(opt.getAttribute('aria-selected')).toBe('false');
+    expect(opt.hasAttribute('data-action')).toBe(true);
+    expect(opt.querySelector('button')).toBeNull();
+    expect(screen.getAllByRole('option').length).toBe(OPTIONS.length + 1);
+    fireEvent.keyDown(listbox()!, { key: 'End' });
+    expect(listbox()!.getAttribute('aria-activedescendant')).toBe(opt.id);
+  });
+
+  it('操作项 mousedown 被 preventDefault，避免抢走焦点', () => {
+    const { trigger } = setup({ action: { label: '新建画像', onSelect: () => {} } });
+    fireEvent.click(trigger);
+    const opt = screen.getByRole('option', { name: /新建画像/ });
+    expect(fireEvent.mouseDown(opt)).toBe(false);
   });
 
   it('操作项是最后一个可高亮项，键盘可达并用 Enter 触发', () => {

@@ -36,4 +36,13 @@ describe('AccountsPage', () => {
     expect(screen.getByRole('heading', { level: 1, name: '账号' })).toBeTruthy();
     expect(container.querySelector('.ui-layer-mark')?.textContent).toBe('发布');
   });
+
+  it('已登录但没有 whoami 信息时，「已登录」只出现一次', async () => {
+    vi.mocked(api.fetchAccounts).mockResolvedValue([
+      { platform: 'bilibili', name: 'B站', backend: 'web', supported: true, loggedIn: true, note: '' },
+    ]);
+    render(<AccountsPage />);
+    const row = (await screen.findByText('B站')).closest('.account-row') as HTMLElement;
+    expect(within(row).getAllByText('已登录').length).toBe(1);
+  });
 });

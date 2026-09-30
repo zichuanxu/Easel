@@ -14,7 +14,12 @@
 .outputs-section-later { margin-top: var(--sp-6); color: var(--c-ink-3); }
 
 /* 画廊卡片 */
-.gcard { padding: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: var(--r-panel); }
+.gcard { position: relative; padding: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: var(--r-panel); }
+.gcard-main {
+  display: flex; flex-direction: column; flex: 1; min-width: 0; margin: 0; padding: 0;
+  border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer;
+}
+.gcard-main:focus-visible { outline-offset: -2px; }
 .gcard-thumb { position: relative; aspect-ratio: 4/3; background: var(--c-sunken); display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .gcard-thumb img, .gcard-thumb video { width: 100%; height: 100%; object-fit: cover; }
 .gcard-ph { color: var(--c-ink-3); display: flex; flex-direction: column; align-items: center; gap: 6px; }
@@ -24,11 +29,12 @@
 .gcard-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: var(--fs-12); color: var(--c-ink-3); }
 .gcard-del {
   position: absolute; top: 6px; right: 6px; z-index: 2; width: 26px; height: 26px;
-  display: none; align-items: center; justify-content: center; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; padding: 0; opacity: 0;
   border-radius: var(--r-control); border: 1px solid var(--c-rule); background: var(--c-surface); color: var(--c-ink-2);
-  cursor: pointer; transition: color var(--t-fast), border-color var(--t-fast);
+  cursor: pointer; transition: opacity var(--t-fast), color var(--t-fast), border-color var(--t-fast);
 }
-.gcard:hover .gcard-del, .gcard:focus-within .gcard-del { display: inline-flex; }
+.gcard:hover .gcard-del, .gcard:focus-within .gcard-del { opacity: 1; }
+@media (hover: none) { .gcard-del { opacity: 1; } }
 .gcard-del:hover { color: var(--c-danger); border-color: var(--c-danger); }
 
 /* 预览抽屉 */

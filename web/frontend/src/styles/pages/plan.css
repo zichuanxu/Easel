@@ -10,8 +10,9 @@
 .kanban-list { display: flex; flex-direction: column; gap: 10px; }
 .kanban-empty { color: var(--c-ink-3); font-size: var(--fs-13); padding: 12px 4px; }
 .idea-card { position: relative; padding: 12px 14px; }
-.idea-card-actions { position: absolute; top: 8px; right: 8px; display: none; gap: 2px; }
-.idea-card:hover .idea-card-actions, .idea-card:focus-within .idea-card-actions { display: flex; }
+.idea-card-actions { position: absolute; top: 8px; right: 8px; display: flex; gap: 2px; opacity: 0; transition: opacity var(--t-fast); }
+.idea-card:hover .idea-card-actions, .idea-card:focus-within .idea-card-actions { opacity: 1; }
+@media (hover: none) { .idea-card-actions { opacity: 1; } }
 .idea-title { font-size: var(--fs-14); font-weight: 600; line-height: 1.45; padding-right: 40px; }
 .idea-source { margin-top: 6px; }
 .idea-note { font-size: var(--fs-13); color: var(--c-ink-2); line-height: 1.5; margin-top: 7px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }

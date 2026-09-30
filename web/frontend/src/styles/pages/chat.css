@@ -12,16 +12,22 @@
 .session-empty { padding: 8px 6px; font-size: var(--fs-12); color: var(--c-ink-3); }
 .session-item {
   display: flex; align-items: center; gap: 4px; min-width: 0;
-  padding: 7px 8px 7px 10px; border-radius: var(--r-control);
-  font-size: var(--fs-13); color: var(--c-ink-2); cursor: pointer;
+  padding: 0 8px 0 0; border-radius: var(--r-control);
+  font-size: var(--fs-13); color: var(--c-ink-2);
   transition: background var(--t-fast), color var(--t-fast);
 }
-.session-item:focus-visible { outline-offset: -2px; }
+.session-item-main {
+  flex: 1; min-width: 0; display: block; margin: 0; padding: 7px 0 7px 10px;
+  border: 0; border-radius: var(--r-control); background: none;
+  font: inherit; color: inherit; text-align: left; cursor: pointer;
+}
+.session-item-main:focus-visible { outline-offset: -2px; }
 .session-item:hover { background: var(--c-hover); color: var(--c-ink); }
 .session-item.active { background: var(--c-surface); color: var(--c-ink); font-weight: 600; box-shadow: 0 1px 0 var(--c-rule); }
 .session-item-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.session-actions { display: none; gap: 2px; flex: none; }
-.session-item:hover .session-actions, .session-item:focus-within .session-actions { display: flex; }
+.session-actions { display: flex; gap: 2px; flex: none; opacity: 0; transition: opacity var(--t-fast); }
+.session-item:hover .session-actions, .session-item:focus-within .session-actions { opacity: 1; }
+@media (hover: none) { .session-actions { opacity: 1; } }
 .session-act { display: inline-flex; padding: 3px; border: none; background: none; border-radius: var(--r-control); color: var(--c-ink-3); cursor: pointer; }
 .session-act:hover { color: var(--c-ink); background: var(--c-hover); }
 .session-act.danger:hover { color: var(--c-danger); background: var(--c-danger-soft); }

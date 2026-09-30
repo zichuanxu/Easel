@@ -53,4 +53,18 @@ describe('ChatSessionList', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(p.onRename).toHaveBeenCalledWith('a', '新标题');
   });
+
+  it('会话主体是真按钮：名称为标题，点击/回车走 onSelect；操作按钮并列且可按角色查到', () => {
+    const p = setup();
+    const body = screen.getByRole('button', { name: '国庆出片文案' });
+    expect(body.tagName).toBe('BUTTON');
+    expect(body.closest('.session-item')?.getAttribute('role')).toBeNull();
+    // 主体按钮不嵌套其他交互元素
+    expect(body.querySelector('button')).toBeNull();
+    fireEvent.click(body);
+    expect(p.onSelect).toHaveBeenCalledWith('a');
+    expect(screen.getAllByRole('button', { name: '重命名' }).length).toBe(2);
+    expect(screen.getAllByRole('button', { name: '归档' }).length).toBe(2);
+    expect(screen.getAllByRole('button', { name: '删除' }).length).toBe(2);
+  });
 });

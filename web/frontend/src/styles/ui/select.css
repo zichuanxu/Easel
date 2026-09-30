@@ -39,7 +39,6 @@
 
 .ui-select__sep { height: 1px; margin: 4px 0; background: var(--c-rule); }
 .ui-select__action {
-  width: 100%; border: 0; background: transparent; color: var(--c-ink-2);
-  font: inherit; font-size: var(--fs-13); text-align: left;
+  color: var(--c-ink-2); font-size: var(--fs-13);
 }
 .ui-select__action:hover, .ui-select__action.is-active { background: var(--c-hover); color: var(--c-ink); }

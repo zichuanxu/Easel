@@ -35,7 +35,7 @@
 .pv-pubstate.fail { background: var(--c-danger-soft); color: var(--c-danger); max-height: 120px; overflow-y: auto; overflow-x: hidden; }
 
 /* 媒体附件选择 */
-.media-chip { position: relative; width: 46px; height: 46px; border-radius: var(--r-control); overflow: hidden; cursor: pointer; border: 2px solid var(--c-ink); flex-shrink: 0; }
+.media-chip { display: block; padding: 0; background: none; position: relative; width: 46px; height: 46px; border-radius: var(--r-control); overflow: hidden; cursor: pointer; border: 2px solid var(--c-ink); flex-shrink: 0; }
 .media-chip img { width: 100%; height: 100%; object-fit: cover; }
 .media-chip .media-vid { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; font-size: var(--fs-12); color: var(--c-ink-2); background: var(--c-sunken); }
 .media-chip .media-x { position: absolute; top: 0; right: 3px; color: var(--c-on-ink); font-weight: 700; line-height: 1.2; background: var(--c-ink); border-radius: 0 0 0 var(--r-control); padding: 0 3px; }

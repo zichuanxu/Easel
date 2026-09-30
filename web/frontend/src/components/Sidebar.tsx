@@ -57,6 +57,7 @@ export default function Sidebar({
       <SelectMenu
         className="persona-select"
         ariaLabel="画像"
+        placeholder="选择画像"
         value={selectedPersona}
         options={[{ value: '', label: '通用模式' }, ...personas.map((p) => ({ value: p.name, label: p.name }))]}
         onChange={onPersonaChange}
