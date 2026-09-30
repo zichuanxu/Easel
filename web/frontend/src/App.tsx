@@ -13,7 +13,8 @@ import CalendarPage from './components/CalendarPage';
 import IdeasPage from './components/IdeasPage';
 import PublishPage from './components/PublishPage';
 import BreakdownPage from './components/BreakdownPage';
-import SubNav from './components/SubNav';
+import ChatSessionList from './components/ChatSessionList';
+import ChatLayout from './components/ChatLayout';
 import OnboardingWizard from './components/OnboardingWizard';
 import SettingsPanel from './components/SettingsPanel';
 import Modal from './components/ui/Modal';
@@ -693,35 +694,51 @@ export default function App() {
           />
         );
       case 'chat':
-        return activeSession ? (
-          <ChatPage
-            key={activeSession.id}
-            session={activeSession}
-            stream={streams[activeSession.id]}
-            onSend={(displayText, attachments) => handleSendMessage(activeSession.id, displayText, attachments)}
-            onStop={() => handleStopStream(activeSession.id)}
-            onResend={(userIndex, displayText, attachments, legacyAgentText) => handleResend(
-              activeSession.id, userIndex, displayText, attachments, legacyAgentText,
+        return (
+          <ChatLayout
+            sessions={(
+              <ChatSessionList
+                sessions={sessions}
+                activeSessionId={activeSessionId}
+                onSelect={handleSessionSelect}
+                onDelete={handleSessionDelete}
+                onRename={handleSessionRename}
+                onArchive={handleSessionArchive}
+                onNew={handleNewChat}
+              />
             )}
-            onQuestionAnswered={(qid) => {
-              answeredRef.current.add(qid);
-              // 已答题从流式状态中移除——切走/切回会话都不再重现（组件内部 state 会在重挂时清零，只藏不移除没用）
-              const a = streamAcc.current[activeSession.id];
-              if (a) {
-                const before = a.questions.length;
-                const kept = a.questions.filter((q) => q.id !== qid);
-                if (kept.length !== before) {
-                  a.questions = kept;
-                  setStreams((p) => {
-                    const cur = p[activeSession.id];
-                    if (!cur) return p;
-                    return { ...p, [activeSession.id]: { ...cur, questions: [...kept] } };
-                  });
-                }
-              }
-            }}
-          />
-        ) : null;
+          >
+            {activeSession ? (
+              <ChatPage
+                key={activeSession.id}
+                session={activeSession}
+                stream={streams[activeSession.id]}
+                onSend={(displayText, attachments) => handleSendMessage(activeSession.id, displayText, attachments)}
+                onStop={() => handleStopStream(activeSession.id)}
+                onResend={(userIndex, displayText, attachments, legacyAgentText) => handleResend(
+                  activeSession.id, userIndex, displayText, attachments, legacyAgentText,
+                )}
+                onQuestionAnswered={(qid) => {
+                  answeredRef.current.add(qid);
+                  // 已答题从流式状态中移除——切走/切回会话都不再重现（组件内部 state 会在重挂时清零，只藏不移除没用）
+                  const a = streamAcc.current[activeSession.id];
+                  if (a) {
+                    const before = a.questions.length;
+                    const kept = a.questions.filter((q) => q.id !== qid);
+                    if (kept.length !== before) {
+                      a.questions = kept;
+                      setStreams((p) => {
+                        const cur = p[activeSession.id];
+                        if (!cur) return p;
+                        return { ...p, [activeSession.id]: { ...cur, questions: [...kept] } };
+                      });
+                    }
+                  }
+                }}
+              />
+            ) : null}
+          </ChatLayout>
+        );
       case 'trends':
         return <TrendsPage onUseTopic={handleUseTopic} />;
       case 'ideas':
@@ -777,21 +794,12 @@ export default function App() {
         selectedPersona={selectedPersona}
         onPersonaChange={handlePersonaChange}
         onNewProfile={() => setShowWizard(true)}
-        sessions={sessions}
-        activeSessionId={activeSessionId}
         activeSessionHasMessages={activeSession ? activeSession.messages.length > 0 : false}
-        onSessionSelect={handleSessionSelect}
-        onSessionDelete={handleSessionDelete}
-        onSessionRename={handleSessionRename}
-        onSessionArchive={handleSessionArchive}
-        onNewChat={handleNewChat}
+        activeChatTitle={activeSession && activeSession.messages.length > 0 ? activeSession.title : undefined}
         gatewayStatus={gatewayStatus}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <main className="main-content">
-        {(['trends', 'ideas', 'calendar', 'publish', 'breakdown'] as Page[]).includes(currentPage) && (
-          <SubNav current={currentPage} onNavigate={setCurrentPage} />
-        )}
         <div className="page-host">
           {renderPage()}
         </div>
