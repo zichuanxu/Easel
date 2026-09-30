@@ -48,5 +48,3 @@
   .dash-cols { grid-template-columns: 1fr; }
 }
 
-/* PublishPage 仍在使用（迁移到发布页任务时再替换） */
-.dash-empty { color: var(--c-ink-3); font-size: var(--fs-13); padding: 8px 0; }

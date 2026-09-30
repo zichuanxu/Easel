@@ -1,5 +1,6 @@
 import { Component } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
+import Button from './ui/Button';
 
 interface Props { children: ReactNode }
 interface State { hasError: boolean; message: string }
@@ -19,17 +20,11 @@ export default class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          height: '100vh', gap: 12, color: 'var(--text)', background: 'var(--bg)', padding: 24, textAlign: 'center',
-        }}>
-          <div style={{ fontSize: 40 }}>😵</div>
-          <h2 style={{ margin: 0 }}>页面出错了</h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: 14, maxWidth: 420 }}>{this.state.message}</p>
-          <button onClick={() => window.location.reload()}
-            style={{ padding: '9px 18px', borderRadius: 8, border: 'none', background: 'var(--text, #17191c)', color: '#fff', cursor: 'pointer' }}>
-            刷新页面
-          </button>
+        <div className="error-page">
+          <h2>页面出错了</h2>
+          <p>刷新页面通常能恢复。如果反复出现，把下面的错误信息发给维护者。</p>
+          <pre>{this.state.message}</pre>
+          <Button variant="primary" onClick={() => window.location.reload()}>刷新页面</Button>
         </div>
       );
     }

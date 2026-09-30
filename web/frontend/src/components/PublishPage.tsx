@@ -7,6 +7,13 @@ import type { AccountItem, OutputFile } from '../lib/api';
 import { loadPublishDraft, savePublishDraft } from '../lib/store';
 import { renderMarkdown } from '../lib/sanitize';
 import { IconPublish, IconCopy, IconCheck, IconCalendar, IconSkills, IconEdit, IconStop, IconTrash } from './icons';
+import PageHeader from './ui/PageHeader';
+import Button from './ui/Button';
+import Tag from './ui/Tag';
+import Panel from './ui/Panel';
+import Modal from './ui/Modal';
+import EmptyState from './ui/EmptyState';
+import { Input, Textarea } from './ui/Field';
 
 interface PublishPageProps {
   persona: string;
@@ -37,6 +44,14 @@ function parseSections(text: string): Record<string, string> {
   const map: Record<string, string> = {};
   for (let i = 1; i < parts.length; i += 2) map[parts[i].trim()] = (parts[i + 1] || '').trim();
   return map;
+}
+
+/** 预检结论：取预检文本里最后出现的「建议修改 / 可发」作为标签（只影响展示）。 */
+function precheckVerdict(text: string): { tone: 'ok' | 'warn'; label: string } | null {
+  const warn = text.lastIndexOf('建议修改');
+  const ok = text.lastIndexOf('可发');
+  if (warn < 0 && ok < 0) return null;
+  return warn > ok ? { tone: 'warn', label: '建议修改' } : { tone: 'ok', label: '可发' };
 }
 
 type PubState = { status: 'publishing' | 'ok' | 'fail'; msg: string };
@@ -219,7 +234,7 @@ export default function PublishPage({ persona }: PublishPageProps) {
           setPub((r) => ({
             ...r,
             [t.key]: res.ok
-              ? { status: 'ok', msg: '已发布 ✅' }
+              ? { status: 'ok', msg: '已发布' }
               : { status: 'fail', msg: res.detail || res.message || '发布失败' },
           }));
         }
@@ -247,7 +262,7 @@ export default function PublishPage({ persona }: PublishPageProps) {
         setPub((r) => ({ ...r, [key]: { status: 'publishing', msg: s.message || '需短信验证' } }));
       } else if (s.state === 'success') {
         clearInterval(iv); setPubSms(null);
-        setPub((r) => ({ ...r, [key]: { status: 'ok', msg: '已发布 ✅' } }));
+        setPub((r) => ({ ...r, [key]: { status: 'ok', msg: '已发布' } }));
         resolve();
       } else if (s.state === 'error') {
         clearInterval(iv); setPubSms(null);
@@ -292,59 +307,65 @@ export default function PublishPage({ persona }: PublishPageProps) {
 
   const canPublish = platforms.some((k) => PUBLISHABLE.has(k));
 
+  const verdict = checkResult ? precheckVerdict(checkResult) : null;
+
   return (
     <div className="publish-page">
       <div className="publish-editor">
-        <h1 className="page-title"><IconPublish size={21} /> 发布中心</h1>
-        <p className="page-subtitle">一次编辑 → AI 一键改写成各平台版本 → 预检 → 附媒体 → 一键真发布。</p>
+        <PageHeader
+          layer="publish"
+          title="发布中心"
+          description="一次编辑，AI 改写成各平台版本，预检、附媒体后发布。"
+        />
 
         <label className="field-label">标题</label>
-        <input className="field" value={title} placeholder="标题（部分平台需要）"
+        <Input value={title} placeholder="标题（部分平台需要）"
           onChange={(e) => setTitle(e.target.value)} />
         <label className="field-label">正文（母版）</label>
-        <textarea className="field" style={{ minHeight: 180 }} value={body}
+        <Textarea className="publish-body" value={body}
           placeholder="写下你的内容，右侧按各平台规则实时预览；点「一键适配」让 AI 分平台改写…"
           onChange={(e) => setBody(e.target.value)} />
 
-        <label className="field-label">话题标签 <span style={{ color: 'var(--text-secondary)', fontWeight: 400, fontSize: 12 }}>（逗号分隔，如「AI,职场,干货」；小红书会用 # 联想真正绑定话题）</span></label>
-        <input className="field" value={tags} placeholder="AI,职场,干货"
+        <label className="field-label">话题标签 <span className="publish-label-hint">（逗号分隔，如「AI,职场,干货」；小红书会用 # 联想真正绑定话题）</span></label>
+        <Input value={tags} placeholder="AI,职场,干货"
           onChange={(e) => setTags(e.target.value)} />
 
         <label className="field-label">发布平台</label>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        <div className="publish-platforms">
           {PLATFORMS.map((p) => (
-            <button key={p.key} className={`chip ${platforms.includes(p.key) ? 'active' : ''}`}
+            <button key={p.key} type="button" className={`chip ${platforms.includes(p.key) ? 'active' : ''}`}
+              aria-pressed={platforms.includes(p.key)}
               onClick={() => toggle(p.key)}>{p.label}</button>
           ))}
         </div>
 
-        <label className="field-label" style={{ marginTop: 14 }}>
-          媒体附件 {selectedMedia.length > 0 && <span className="pv-badge">{selectedMedia.length} 个</span>}
-          <span style={{ color: 'var(--text-secondary)', fontWeight: 400, fontSize: 12 }}>（小红书/抖音/快手/微信视频号/B站必需，从内容库选；抖音、视频号、B站须为视频）</span>
+        <label className="field-label publish-media-label">
+          媒体附件 {selectedMedia.length > 0 && <Tag>{selectedMedia.length} 个</Tag>}
+          <span className="publish-label-hint">（小红书/抖音/快手/微信视频号/B站必需，从内容库选；抖音、视频号、B站须为视频）</span>
         </label>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <button className="btn btn-sm" onClick={() => setShowPicker((v) => !v)}>
-            <IconSkills size={13} /> {showPicker ? '收起' : '选择媒体'}
-          </button>
+        <div className="publish-media-row">
+          <Button size="sm" icon={<IconSkills size={13} />} onClick={() => setShowPicker((v) => !v)}>
+            {showPicker ? '收起' : '选择媒体'}
+          </Button>
           {selectedMedia.map((path) => (
             <div key={path} className="media-chip" onClick={() => toggleMedia(path)} title="点击移除">
               {mediaFiles.find((f) => f.path === path)?.kind === 'image'
-                ? <img src={mediaUrl(path)} alt="" /> : <span className="media-vid">🎬</span>}
+                ? <img src={mediaUrl(path)} alt="" /> : <span className="media-vid">视频</span>}
               <span className="media-x">×</span>
             </div>
           ))}
         </div>
         {showPicker && (
           <div className="media-grid">
-            {mediaFiles.length === 0 && <div className="dash-empty">内容库暂无图片/视频</div>}
+            {mediaFiles.length === 0 && <div className="publish-empty">内容库暂无图片/视频</div>}
             {mediaFiles.slice(0, 40).map((f) => (
               <div key={f.path}
                 className={`media-cell ${selectedMedia.includes(f.path) ? 'sel' : ''}`}
                 onClick={() => toggleMedia(f.path)} title={f.path}>
                 {f.kind === 'image'
                   ? <img src={mediaUrl(f.path)} alt={f.name} loading="lazy" />
-                  : <span className="media-vid">🎬<br />{f.name.slice(0, 12)}</span>}
-                {selectedMedia.includes(f.path) && <span className="media-check">✓</span>}
+                  : <span className="media-vid">视频<br />{f.name.slice(0, 12)}</span>}
+                {selectedMedia.includes(f.path) && <span className="media-check"><IconCheck size={11} /></span>}
               </div>
             ))}
           </div>
@@ -352,40 +373,40 @@ export default function PublishPage({ persona }: PublishPageProps) {
 
         <div className="publish-actions">
           {adapting ? (
-            <button className="btn btn-sm" onClick={stopAdapt}><IconStop size={13} /> 停止生成</button>
+            <Button size="sm" icon={<IconStop size={13} />} onClick={stopAdapt}>停止生成</Button>
           ) : (
-            <button className="btn btn-sm btn-primary" disabled={empty || platforms.length === 0} onClick={adapt}>
-              <IconSkills size={14} /> 一键适配各平台
-            </button>
+            <Button size="sm" icon={<IconSkills size={14} />} disabled={empty || platforms.length === 0} onClick={adapt}>
+              一键适配各平台
+            </Button>
           )}
-          <button className="btn btn-sm" disabled={empty || checking || adapting} onClick={check}>
-            <IconCheck size={14} /> {checking ? '预检中…' : '发布前预检'}
-          </button>
-          <button className="btn btn-sm" disabled={empty} onClick={() => addToCalendar(platforms[0] || 'xiaohongshu')}>
-            <IconCalendar size={14} /> 存草稿并排期
-          </button>
-          <button className="btn btn-sm btn-primary" disabled={empty || publishing || checking || !canPublish}
+          <Button size="sm" icon={<IconCheck size={14} />} disabled={empty || checking || adapting} onClick={check}>
+            {checking ? '预检中…' : '发布前预检'}
+          </Button>
+          <Button size="sm" icon={<IconCalendar size={14} />} disabled={empty} onClick={() => addToCalendar(platforms[0] || 'xiaohongshu')}>
+            存草稿并排期
+          </Button>
+          <Button size="sm" variant="primary" icon={<IconPublish size={14} />}
+            disabled={empty || publishing || checking || !canPublish}
             title={canPublish ? '真实发布到已登录平台' : '所选平台无一键发布（B站走终端 biliup）'}
             onClick={publishAll}>
-            <IconPublish size={14} /> {publishing ? '发布中…' : '一键发布'}
-          </button>
-          <button className="btn btn-sm btn-ghost" disabled={empty || adapting}
+            {publishing ? '发布中…' : '一键发布'}
+          </Button>
+          <Button size="sm" variant="ghost" icon={<IconTrash size={13} />} disabled={empty || adapting}
             onClick={() => { setTitle(''); setBody(''); setTags(''); setOverrides({}); setCheckResult(''); setPub({}); showToast('已清空'); }}>
-            <IconTrash size={13} /> 清空
-          </button>
+            清空
+          </Button>
         </div>
         {adapting && <div className="adapt-hint"><span className="live-pulse" />AI 正在逐字改写各平台版本…可随时停止。</div>}
         <p className="publish-saved-note">草稿已自动保存，切换页面/刷新回来内容都在。一键发布仅对「已登录 + 媒体齐全」的平台生效。</p>
         {checkResult && (
-          <div className="panel" style={{ marginTop: 14 }}>
-            <div className="panel-title"><IconCheck size={14} /> 发布前预检</div>
+          <Panel className="publish-check" title={<>发布前预检{verdict && <Tag tone={verdict.tone}>{verdict.label}</Tag>}</>}>
             <div className="skill-body-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(checkResult) }} />
-          </div>
+          </Panel>
         )}
       </div>
 
       <div className="publish-previews">
-        {platforms.length === 0 && <div className="dash-empty">选择至少一个平台查看预览</div>}
+        {platforms.length === 0 && <EmptyState text="选择至少一个平台查看预览" />}
         {PLATFORMS.filter((p) => platforms.includes(p.key)).map((p) => {
           const text = effective(p.key);
           const over = text.length > p.bodyLimit;
@@ -399,10 +420,10 @@ export default function PublishPage({ persona }: PublishPageProps) {
               <div className="pv-head">
                 <span className="pv-plat">
                   {p.label}
-                  {overrides[p.key] != null && <span className="pv-badge">AI 版</span>}
+                  {overrides[p.key] != null && <Tag>AI 版</Tag>}
                   {publishable && (logged
-                    ? <span className="pv-badge pv-badge-ok">已登录</span>
-                    : <span className="pv-badge">未登录</span>)}
+                    ? <Tag tone="ok">已登录</Tag>
+                    : <Tag>未登录</Tag>)}
                 </span>
                 <span className={`pv-count ${over ? 'over' : ''}`}>{text.length}/{p.bodyLimit}</span>
               </div>
@@ -411,25 +432,25 @@ export default function PublishPage({ persona }: PublishPageProps) {
                   <div className={`pv-title ${titleOver ? 'over' : ''}`}>{title || <span className="pv-ph">标题…</span>}</div>
                 )}
                 {isEdit
-                  ? <textarea className="field" style={{ minHeight: 120 }} value={text} autoFocus
+                  ? <Textarea className="pv-edit" value={text} autoFocus
                       onChange={(e) => setOverrides((o) => ({ ...o, [p.key]: e.target.value }))} />
                   : <div className="pv-text">{text || <span className="pv-ph">正文预览…</span>}{adapting && overrides[p.key] != null && <span className="streaming-cursor" />}</div>}
               </div>
               {ps && (
                 <div className={`pv-pubstate ${ps.status}`}>
                   {ps.status === 'publishing' && <span className="live-pulse" />}
-                  {ps.status === 'ok' ? '✅ ' : ps.status === 'fail' ? '⚠️ ' : ''}{ps.msg}
+                  {ps.msg}
                 </div>
               )}
               <div className="pv-foot">
                 <span className="pv-hint">{p.hint}{over ? ' · 已超字数' : ''}</span>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button className="pv-copy" onClick={() => setEditing(isEdit ? null : p.key)}>
-                    <IconEdit size={13} />{isEdit ? '完成' : '编辑'}
-                  </button>
-                  <button className="pv-copy" onClick={() => copyFor(p.key)}>
-                    {copied === p.key ? <IconCheck size={13} /> : <IconCopy size={13} />}{copied === p.key ? '已复制' : '复制'}
-                  </button>
+                <div className="pv-foot-actions">
+                  <Button size="sm" variant="ghost" icon={<IconEdit size={13} />} onClick={() => setEditing(isEdit ? null : p.key)}>
+                    {isEdit ? '完成' : '编辑'}
+                  </Button>
+                  <Button size="sm" variant="ghost" icon={copied === p.key ? <IconCheck size={13} /> : <IconCopy size={13} />} onClick={() => copyFor(p.key)}>
+                    {copied === p.key ? '已复制' : '复制'}
+                  </Button>
                 </div>
               </div>
             </div>
@@ -440,33 +461,31 @@ export default function PublishPage({ persona }: PublishPageProps) {
       {toast && <div className="toast ok"><span className="toast-icon">✓</span>{toast}</div>}
 
       {pubSms && (
-        <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setPubSms(null); }}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 380 }}>
-            <h3 style={{ margin: '0 0 4px' }}>发布验证 · {pubSms.name}</h3>
-            <p style={{ fontSize: 13, color: /错误|过期|失败|重新|未完成|不正确|失效/.test(pubSms.message || '') ? 'var(--red)' : 'var(--text-secondary)' }}>
-              {pubSms.message || '平台风控要求短信验证，验证码已发到你手机，请输入：'}
-            </p>
-            {pubSms.state === 'verifying' ? (
-              <div className="dash-empty" style={{ padding: 16 }}>正在验证验证码…</div>
-            ) : (
-              <>
-                <input inputMode="numeric" autoFocus
-                  placeholder="请输入手机收到的验证码" value={pubSmsCode}
-                  onChange={(e) => setPubSmsCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
-                  onKeyDown={(e) => { if (e.key === 'Enter') submitPubSms(); }}
-                  style={{ width: '100%', boxSizing: 'border-box', textAlign: 'center',
-                    letterSpacing: 6, fontSize: 20, padding: '10px 12px', margin: '4px 0 10px',
-                    border: '1px solid var(--border)', borderRadius: 8 }} />
-                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                  <button className="btn btn-sm btn-ghost" onClick={() => setPubSms(null)}>关闭</button>
-                  <button className="btn btn-sm btn-primary" disabled={pubSmsBusy} onClick={submitPubSms}>
-                    {pubSmsBusy ? '提交中…' : '提交验证码'}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
+        <Modal
+          title={`发布验证 · ${pubSms.name}`}
+          width={380}
+          onClose={() => setPubSms(null)}
+          footer={pubSms.state === 'verifying' ? undefined : (
+            <>
+              <Button size="sm" variant="ghost" onClick={() => setPubSms(null)}>关闭</Button>
+              <Button size="sm" variant="primary" disabled={pubSmsBusy} onClick={submitPubSms}>
+                {pubSmsBusy ? '提交中…' : '提交验证码'}
+              </Button>
+            </>
+          )}
+        >
+          <p className={`publish-sms-msg${/错误|过期|失败|重新|未完成|不正确|失效/.test(pubSms.message || '') ? ' is-error' : ''}`}>
+            {pubSms.message || '平台风控要求短信验证，验证码已发到你手机，请输入：'}
+          </p>
+          {pubSms.state === 'verifying' ? (
+            <EmptyState text="正在验证验证码…" />
+          ) : (
+            <Input className="publish-sms-input" inputMode="numeric" autoFocus
+              placeholder="请输入手机收到的验证码" value={pubSmsCode}
+              onChange={(e) => setPubSmsCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
+              onKeyDown={(e) => { if (e.key === 'Enter') submitPubSms(); }} />
+          )}
+        </Modal>
       )}
     </div>
   );

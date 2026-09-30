@@ -97,3 +97,6 @@
 
 /* 加载提示：居中一行，旋转圈在文字前（其他页面共用） */
 .loading { display: flex; align-items: center; justify-content: center; gap: var(--sp-3); padding: 32px; color: var(--c-ink-2); font-size: var(--fs-13); }
+
+/* ---- 页内错误提示条 ---- */
+.notice-error { margin: 0 0 var(--sp-4); color: var(--c-danger); background: var(--c-danger-soft); border-radius: var(--r-control); padding: 10px 14px; font-size: var(--fs-13); }
