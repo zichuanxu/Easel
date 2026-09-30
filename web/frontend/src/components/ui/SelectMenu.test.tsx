@@ -124,6 +124,62 @@ describe('SelectMenu', () => {
     fireEvent.keyDown(trigger, { key: 'Enter' });
     fireEvent.keyDown(listbox()!, { key: 'Tab' });
     expect(listbox()).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('Tab / Shift+Tab 收起前焦点已回到触发器，且不 preventDefault', () => {
+    const { trigger } = setup();
+    for (const shiftKey of [false, true]) {
+      fireEvent.keyDown(trigger, { key: 'Enter' });
+      expect(document.activeElement).toBe(listbox());
+      const notPrevented = fireEvent.keyDown(listbox()!, { key: 'Tab', shiftKey });
+      expect(notPrevented).toBe(true);
+      expect(listbox()).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+    }
+  });
+
+  describe('定位', () => {
+    const origRect = HTMLElement.prototype.getBoundingClientRect;
+    const origH = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+    const origInner = [window.innerHeight, window.innerWidth];
+    afterEach(() => {
+      HTMLElement.prototype.getBoundingClientRect = origRect;
+      if (origH) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', origH);
+      Object.defineProperty(window, 'innerHeight', { value: origInner[0], configurable: true });
+      Object.defineProperty(window, 'innerWidth', { value: origInner[1], configurable: true });
+    });
+    function place(rect: Partial<DOMRect>, h: number, innerH: number, innerW = 1000) {
+      Object.defineProperty(window, 'innerHeight', { value: innerH, configurable: true });
+      Object.defineProperty(window, 'innerWidth', { value: innerW, configurable: true });
+      Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { value: h, configurable: true });
+      HTMLElement.prototype.getBoundingClientRect = function () {
+        return { x: 0, y: 0, left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0, toJSON() {}, ...rect } as DOMRect;
+      };
+      const { trigger } = setup();
+      fireEvent.click(trigger);
+      return listbox()!.style;
+    }
+    it('下方空间足够：贴在触发器下方 4px', () => {
+      const st = place({ left: 20, top: 40, bottom: 74, width: 200 }, 115, 700);
+      expect(st.top).toBe('78px');
+      expect(st.left).toBe('20px');
+    });
+    it('下方不够、上方更宽裕：向上翻', () => {
+      const st = place({ left: 20, top: 500, bottom: 534, width: 200 }, 200, 600);
+      expect(st.top).toBe('296px'); // 500 - 4 - 200
+    });
+    it('上下都不够：取较大一侧并限制 max-height，top 不为负，left 夹进视口', () => {
+      const st = place({ left: 950, top: 100, bottom: 134, width: 200 }, 400, 300);
+      // 下方 300-8-138=154，上方 100-4-8=88 → 不翻转，max-height 154
+      expect(st.maxHeight).toBe('154px');
+      expect(st.top).toBe('138px');
+      expect(st.left).toBe('792px'); // 1000 - 200 - 8
+    });
+    it('极矮视口：top 不为负', () => {
+      const st = place({ left: 20, top: 30, bottom: 64, width: 200 }, 400, 100);
+      expect(parseFloat(st.top)).toBeGreaterThanOrEqual(0);
+    });
   });
 
   it('点击浮层外部、resize、外部滚动都会收起；浮层自身滚动不收起', () => {

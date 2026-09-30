@@ -17,7 +17,7 @@ interface SelectMenuProps {
   className?: string;
 }
 
-interface Pos { left: number; top: number; width: number; }
+interface Pos { left: number; top: number; width: number; maxHeight: number; }
 
 const GAP = 4;
 const EDGE = 8;
@@ -56,14 +56,17 @@ export default function SelectMenu({
   useLayoutEffect(() => {
     if (!open || !triggerRef.current || !listRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
-    const h = listRef.current.offsetHeight;
     const below = window.innerHeight - EDGE - (rect.bottom + GAP);
-    const aboveRoom = rect.top - GAP - EDGE;
-    const flip = h > below && aboveRoom > below;
+    const above = rect.top - GAP - EDGE;
+    const maxHeight = Math.max(0, Math.min(280, Math.max(below, above)));
+    const h = Math.min(listRef.current.offsetHeight, maxHeight);
+    const flip = h > below && above > below;
+    const width = Math.max(rect.width, MIN_WIDTH);
     setPos({
-      left: rect.left,
-      width: Math.max(rect.width, MIN_WIDTH),
-      top: flip ? rect.top - GAP - h : rect.bottom + GAP,
+      left: Math.max(EDGE, Math.min(rect.left, window.innerWidth - width - EDGE)),
+      width,
+      top: Math.max(0, flip ? rect.top - GAP - h : rect.bottom + GAP),
+      maxHeight,
     });
   }, [open]);
 
@@ -131,7 +134,11 @@ export default function SelectMenu({
       case 'Enter':
       case ' ': e.preventDefault(); commit(activeIdx); break;
       case 'Escape': e.preventDefault(); e.stopPropagation(); close(true); break;
-      case 'Tab': close(false); break;
+      case 'Tab':
+        // 浮层挂在 body 末尾：先把焦点还给触发器，浏览器才会从触发器位置继续 Tab / Shift+Tab
+        triggerRef.current?.focus();
+        close(false);
+        break;
     }
   };
 
@@ -165,7 +172,7 @@ export default function SelectMenu({
           aria-activedescendant={itemId(activeIdx)}
           className="ui-select__list"
           style={pos
-            ? { left: pos.left, top: pos.top, width: pos.width }
+            ? { left: pos.left, top: pos.top, width: pos.width, maxHeight: pos.maxHeight }
             : { left: 0, top: 0, visibility: 'hidden' }}
           onKeyDown={onListKeyDown}
         >

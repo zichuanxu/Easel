@@ -15,6 +15,7 @@
 .ui-select[aria-expanded="true"] .ui-select__chevron { transform: rotate(-90deg); }
 
 .ui-select__list {
+  /* 3000：高于抽屉/弹窗（overlay.css 1000）和 toast（2000）；项目没有 z-index 变量 */
   position: fixed; z-index: 3000; box-sizing: border-box; margin: 0; padding: 4px; list-style: none;
   max-height: 280px; overflow-y: auto; overscroll-behavior: contain;
   background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: var(--r-panel);

@@ -9,6 +9,7 @@ import Tag from './ui/Tag';
 import Panel from './ui/Panel';
 import { Input, Textarea } from './ui/Field';
 import SelectMenu from './ui/SelectMenu';
+import { skillKeyOptions } from '../lib/skillKeyOptions';
 
 interface SkillDrawerProps {
   skillName: string;
@@ -93,11 +94,7 @@ export default function SkillDrawer({ skillName, persona, onClose, onConfigured 
       <SelectMenu
         ariaLabel={k.env}
         value={envInputs[k.env] ?? ''}
-        placeholder={k.configured ? `当前：${k.masked}` : `请选择 ${k.env}`}
-        options={[
-          { value: '', label: k.configured ? '保持当前' : '不设置' },
-          ...k.choices.map((choice) => ({ value: choice, label: choice })),
-        ]}
+        options={skillKeyOptions(k)}
         onChange={(v) => setEnvInputs((p) => ({ ...p, [k.env]: v }))}
       />
     ) : (
