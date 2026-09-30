@@ -1,7 +1,6 @@
-/* 样式入口：只负责按顺序 @import。legacy 在新层之前，同优先级时新样式胜出。 */
+/* 样式入口：只负责按顺序 @import。 */
 @import './tokens.css';
 @import './base.css';
-@import './legacy.css';
 @import './ui/button.css';
 @import './ui/field.css';
 @import './ui/primitives.css';
