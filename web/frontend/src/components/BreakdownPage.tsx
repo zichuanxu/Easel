@@ -1,7 +1,10 @@
 import { useState } from 'react';
 import { runAgent, createIdea } from '../lib/api';
 import { renderMarkdown } from '../lib/sanitize';
-import { IconFire, IconIdea, IconSkills } from './icons';
+import PageHeader from './ui/PageHeader';
+import Panel from './ui/Panel';
+import Button from './ui/Button';
+import { Textarea } from './ui/Field';
 
 interface BreakdownPageProps {
   persona: string;
@@ -43,31 +46,29 @@ export default function BreakdownPage({ persona }: BreakdownPageProps) {
 
   return (
     <div className="page-scroll breakdown-page">
-      <div className="page-head">
-        <div>
-          <h1 className="page-title"><IconFire size={21} /> 爆款拆解</h1>
-          <p className="page-subtitle">贴一条对标/爆款内容，AI 拆出钩子、结构、火的原因，并给你可复制的模板与选题。</p>
-        </div>
-      </div>
+      <PageHeader
+        layer="discover"
+        title="爆款拆解"
+        description="贴一条对标/爆款内容，AI 拆出钩子、结构、火的原因，并给你可复制的模板与选题。"
+      />
 
       <div className="breakdown-body">
-        <textarea className="field" style={{ minHeight: 160 }} value={input}
+        <Textarea className="breakdown-input" value={input}
           placeholder="把对标账号的爆款文案 / 你收藏的内容粘贴进来…"
           onChange={(e) => setInput(e.target.value)} />
-        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-          <button className="btn btn-primary" disabled={loading || !input.trim()} onClick={run}>
-            <IconSkills size={15} /> {loading ? '拆解中…' : '开始拆解'}
-          </button>
-          {result && <button className="btn" onClick={saveToIdeas}><IconIdea size={14} /> 存入选题库</button>}
-          {result && <button className="btn btn-ghost" onClick={() => { setResult(''); setInput(''); }}>清空</button>}
+        <div className="breakdown-actions">
+          <Button variant="primary" disabled={loading || !input.trim()} onClick={run}>
+            {loading ? '拆解中…' : '开始拆解'}
+          </Button>
+          {result && <Button onClick={saveToIdeas}>存入选题库</Button>}
+          {result && <Button variant="ghost" onClick={() => { setResult(''); setInput(''); }}>清空</Button>}
         </div>
 
-        {loading && <div className="loading" style={{ padding: 40 }}><div className="spinner" />AI 正在拆解…</div>}
+        {loading && <div className="loading breakdown-loading"><div className="spinner" />AI 正在拆解…</div>}
         {result && !loading && (
-          <div className="panel" style={{ marginTop: 18 }}>
-            <div className="panel-title"><IconFire size={14} /> 拆解结果</div>
+          <Panel title="拆解结果" className="breakdown-result">
             <div className="skill-body-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(result) }} />
-          </div>
+          </Panel>
         )}
       </div>
 

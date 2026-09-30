@@ -1,0 +1,32 @@
+/* 发现层：热点雷达、爆款拆解（页面外层覆盖 legacy 的 .page-scroll 内边距） */
+.trends-page, .breakdown-page { padding: 26px 34px 40px; }
+
+/* 热点雷达 */
+.trend-updated { color: var(--c-ink-3); }
+.trend-platforms { display: flex; gap: 8px; flex-wrap: wrap; }
+.trends-page .notice-error { max-width: none; margin: var(--sp-3) 0 0; }
+.trend-grid { margin-top: var(--sp-4); display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: var(--sp-4); align-items: start; }
+.trend-col { padding: 14px 16px 6px; }
+.trend-count { margin-left: var(--sp-2); font-family: var(--font-sans); font-size: var(--fs-12); font-weight: 400; color: var(--c-ink-3); font-variant-numeric: tabular-nums; }
+.trend-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--c-rule); }
+.trend-item:last-child { border-bottom: none; }
+.trend-rank { width: 22px; flex: none; text-align: right; font-family: var(--font-serif); font-size: 15px; font-weight: 600; color: var(--c-ink-3); font-variant-numeric: tabular-nums; }
+.trend-rank.top { color: var(--layer-discover-text); }
+.trend-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.trend-title { font-size: var(--fs-13); color: var(--c-ink); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trend-title:hover { text-decoration: underline; text-underline-offset: 3px; }
+.trend-hot { font-size: var(--fs-12); color: var(--c-ink-3); }
+.trend-save { flex: none; display: inline-flex; padding: 5px; border: none; background: none; border-radius: var(--r-control); color: var(--c-ink-3); cursor: pointer; opacity: 0; transition: opacity var(--t-fast); }
+.trend-item:hover .trend-save, .trend-item:focus-within .trend-save, .trend-save:focus-visible { opacity: 1; }
+.trend-save:hover { color: var(--c-ink); background: var(--c-hover); }
+.trend-use { flex: none; opacity: 0; white-space: nowrap; transition: opacity var(--t-fast); }
+.trend-item:hover .trend-use, .trend-item:focus-within .trend-use, .trend-use:focus-visible { opacity: 1; }
+.trend-empty { color: var(--c-ink-3); font-size: var(--fs-13); padding: 10px 0; }
+@media (hover: none) { .trend-save, .trend-use { opacity: 1; } }
+
+/* 爆款拆解 */
+.breakdown-body { max-width: 900px; }
+.breakdown-input { min-height: 160px; }
+.breakdown-actions { margin-top: var(--sp-3); display: flex; gap: var(--sp-2); }
+.breakdown-loading { padding: 40px; }
+.breakdown-result { margin-top: 18px; }

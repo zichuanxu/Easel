@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { fetchTrends, createIdea } from '../lib/api';
 import type { TrendGroup } from '../lib/api';
-import { IconFire, IconRefresh, IconBookmark, IconCheck } from './icons';
+import { IconRefresh, IconBookmark, IconCheck } from './icons';
+import PageHeader from './ui/PageHeader';
+import Panel from './ui/Panel';
+import Button from './ui/Button';
 
 interface TrendsPageProps {
   onUseTopic: (title: string) => void;   // 一键做成内容 → 跳 chat
@@ -49,18 +52,21 @@ export default function TrendsPage({ onUseTopic }: TrendsPageProps) {
 
   return (
     <div className="page-scroll trends-page">
-      <div className="page-head">
-        <div>
-          <h1 className="page-title"><IconFire size={22} /> 热点雷达</h1>
-          <p className="page-subtitle">
+      <PageHeader
+        layer="discover"
+        title="热点雷达"
+        description={
+          <>
             多平台实时热搜，挑值得蹭的选题，一键交给 AI 做成你的内容。
-            {updated > 0 && <span style={{ color: 'var(--text-tertiary)' }}> · {new Date(updated * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 更新</span>}
-          </p>
-        </div>
-        <button className="btn btn-sm" onClick={() => load(selected)} disabled={loading}>
-          <IconRefresh size={14} /> {loading ? '刷新中…' : '刷新'}
-        </button>
-      </div>
+            {updated > 0 && <span className="trend-updated"> · {new Date(updated * 1000).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 更新</span>}
+          </>
+        }
+        actions={
+          <Button size="sm" icon={<IconRefresh size={14} />} onClick={() => load(selected)} disabled={loading}>
+            {loading ? '刷新中…' : '刷新'}
+          </Button>
+        }
+      />
 
       <div className="trend-platforms">
         {ALL_PLATFORMS.map((p) => (
@@ -73,8 +79,8 @@ export default function TrendsPage({ onUseTopic }: TrendsPageProps) {
 
       <div className="trend-grid">
         {groups.map((g) => (
-          <div key={g.platform} className="card trend-col">
-            <div className="trend-col-head">{g.label}<span className="trend-count">{g.items.length}</span></div>
+          <Panel key={g.platform} className="trend-col"
+            title={<>{g.label}<span className="trend-count">{g.items.length}</span></>}>
             <div className="trend-list">
               {g.items.length === 0 && !loading && <div className="trend-empty">暂无数据</div>}
               {g.items.map((it, i) => (
@@ -89,12 +95,12 @@ export default function TrendsPage({ onUseTopic }: TrendsPageProps) {
                     onClick={() => save(it.title, g.label)}>
                     {saved.has(it.title) ? <IconCheck size={14} /> : <IconBookmark size={14} />}
                   </button>
-                  <button className="trend-use" title="做成内容"
-                    onClick={() => onUseTopic(it.title)}>做内容</button>
+                  <Button variant="ghost" size="sm" className="trend-use" title="做成内容"
+                    onClick={() => onUseTopic(it.title)}>做内容</Button>
                 </div>
               ))}
             </div>
-          </div>
+          </Panel>
         ))}
       </div>
     </div>

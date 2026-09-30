@@ -62,44 +62,7 @@
 
 /* ============ 通用页容器 ============ */
 .page-scroll { height: 100%; overflow-y: auto; padding: 28px 32px 60px; }
-.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; max-width: 1100px; margin: 0 auto 4px; }
 .notice-error { max-width: 1100px; margin: 14px auto 0; color: var(--red); background: var(--red-soft); border: 1px solid transparent; border-radius: var(--radius); padding: 10px 14px; font-size: 13px; }
-
-/* ============ 热点雷达 ============ */
-.trend-platforms { display: flex; gap: 8px; flex-wrap: wrap; max-width: 1100px; margin: 14px auto 0; }
-.trend-grid { max-width: 1100px; margin: 16px auto 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
-.trend-col { padding: 14px 6px 10px; }
-.trend-col-head { font-weight: 650; font-size: 14px; padding: 0 12px 8px; display: flex; align-items: center; gap: 8px; }
-.trend-count { color: var(--text-tertiary); font-size: 12px; font-weight: 500; }
-.trend-item { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 8px; transition: background var(--t-fast); }
-.trend-item:hover { background: var(--surface-hover); }
-.trend-rank { width: 20px; text-align: center; font-size: 13px; font-weight: 700; color: var(--text-tertiary); flex-shrink: 0; }
-.trend-rank.top { color: var(--accent-end); }
-.trend-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.trend-title { font-size: 13px; color: var(--text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.trend-title:hover { color: var(--accent-start); }
-.trend-hot { font-size: 11px; color: var(--text-tertiary); }
-.trend-use { opacity: 0; transition: all var(--t-fast); flex-shrink: 0; font-size: 12px; padding: 4px 9px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg-elev); color: var(--accent-end); cursor: pointer; white-space: nowrap; }
-.trend-item:hover .trend-use { opacity: 1; }
-.trend-use:hover { background: var(--accent-soft); border-color: transparent; }
-.trend-empty { color: var(--text-tertiary); font-size: 13px; padding: 10px 12px; }
-
-/* ============ 内容日历 ============ */
-.cal-nav { display: flex; align-items: center; gap: 8px; }
-.cal-month { font-weight: 650; font-size: 14px; min-width: 120px; text-align: center; }
-.cal-grid-head { max-width: 1100px; margin: 18px auto 6px; display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
-.cal-wd { text-align: center; font-size: 12px; color: var(--text-tertiary); font-weight: 600; }
-.cal-grid { max-width: 1100px; margin: 0 auto; display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
-.cal-cell { height: 132px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 6px 7px; cursor: pointer; transition: all var(--t-fast); display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
-.cal-cell:hover { border-color: var(--border-strong); box-shadow: var(--shadow-sm); }
-.cal-cell.dim { opacity: 0.4; }
-.cal-cell.today { border-color: var(--accent-start); box-shadow: 0 0 0 2px var(--accent-soft); }
-.cal-daynum { font-size: 12px; color: var(--text-secondary); font-weight: 600; }
-.cal-cell.today .cal-daynum { color: var(--accent-end); }
-.cal-events { display: flex; flex-direction: column; gap: 3px; overflow: hidden; }
-.cal-event { display: flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 2px 6px; border-radius: 5px; background: color-mix(in srgb, var(--ev) 13%, transparent); cursor: pointer; }
-.cal-event-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ev); flex-shrink: 0; }
-.cal-event-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 
 /* ============ 内容库画廊 ============ */
 .gallery-page { height: 100%; overflow-y: auto; padding: 28px 32px 60px; }
@@ -120,33 +83,6 @@
 .crumb { cursor: pointer; color: var(--text-secondary); }
 .crumb:hover { color: var(--accent-start); }
 .crumb-sep { color: var(--text-tertiary); margin: 0 2px; font-weight: 400; }
-
-/* ============ 选题库看板 ============ */
-.kanban { max-width: 1160px; margin: 16px auto 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-.kanban-col { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px; min-height: 200px; }
-.kanban-col-head { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; color: var(--text-secondary); padding: 2px 4px 10px; }
-.kanban-dot { width: 9px; height: 9px; border-radius: 3px; }
-.kanban-count { color: var(--text-tertiary); font-weight: 500; }
-.kanban-list { display: flex; flex-direction: column; gap: 10px; }
-.kanban-empty { color: var(--text-tertiary); font-size: 12.5px; padding: 12px 4px; }
-.idea-card { position: relative; padding: 13px 14px; }
-.idea-card-actions { position: absolute; top: 8px; right: 8px; display: none; gap: 2px; }
-.idea-card:hover .idea-card-actions { display: flex; }
-.idea-title { font-size: 14px; font-weight: 600; line-height: 1.45; padding-right: 40px; }
-.idea-note { font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; margin-top: 7px;
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.idea-foot { display: flex; align-items: center; gap: 4px; margin-top: 11px; flex-wrap: wrap; }
-.idea-act { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 4px 8px; border-radius: 7px;
-  border: 1px solid var(--border); background: var(--bg-elev); color: var(--text-secondary); cursor: pointer; transition: all var(--t-fast); }
-.idea-act:hover { color: var(--text); border-color: var(--border-strong); }
-.idea-act.next { margin-left: auto; color: var(--accent-end); }
-.idea-act.next:hover { background: var(--accent-soft); border-color: transparent; }
-
-/* 热点收藏按钮 */
-.trend-save { opacity: 0; transition: all var(--t-fast); flex-shrink: 0; display: inline-flex; align-items: center;
-  padding: 5px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg-elev); color: var(--text-tertiary); cursor: pointer; }
-.trend-item:hover .trend-save { opacity: 1; }
-.trend-save:hover { color: var(--accent-end); background: var(--accent-soft); border-color: transparent; }
 
 /* ============ 发布中心 ============ */
 .publish-page { display: flex; height: 100%; overflow: hidden; }
@@ -191,35 +127,12 @@
 .media-cell img { width: 100%; height: 100%; object-fit: cover; }
 .media-cell .media-vid { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 100%; font-size: 22px; text-align: center; font-size: 11px; }
 .media-cell .media-check { position: absolute; top: 3px; right: 4px; background: var(--accent-end); color: #fff; border-radius: 50%; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 11px; }
-.breakdown-body { max-width: 900px; margin: 16px auto 0; }
 
 /* 发布中心：适配进度提示 + 预览完整显示 */
 .adapt-hint { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12.5px; color: var(--text-secondary); }
 .pv-card { overflow: visible; }
 .pv-text { max-height: none; }
 .publish-saved-note { margin-top: 10px; font-size: 11.5px; color: var(--text-tertiary); }
-
-/* 内容日历：平台活动 / 图例 / 来源 / 规划建议 */
-.cal-event.is-event { background: color-mix(in srgb, var(--ev) 18%, transparent); font-weight: 600; }
-.cal-event.is-event .cal-event-dot { border-radius: 2px; width: 7px; height: 7px; }
-.cal-legend { max-width: 1100px; margin: 0 auto 4px; display: flex; flex-wrap: wrap; gap: 14px; align-items: center; font-size: 12px; color: var(--text-tertiary); }
-.cal-legend-item { display: inline-flex; align-items: center; gap: 5px; }
-.cal-legend-swatch { width: 9px; height: 9px; border-radius: 50%; background: var(--sw); flex-shrink: 0; }
-.cal-legend-swatch.sq { border-radius: 2px; }
-.cal-legend-filter { margin-left: auto; display: inline-flex; gap: 6px; }
-.cal-src { font-size: 10px; color: var(--text-tertiary); margin-left: 3px; }
-.cal-suggest { max-width: 1100px; margin: 0 auto 12px; background: color-mix(in srgb, var(--layer-attribute) 8%, var(--surface)); border: 1px solid color-mix(in srgb, var(--layer-attribute) 25%, var(--border)); border-radius: 10px; padding: 10px 14px; font-size: 13px; }
-.cal-suggest-head { display: flex; justify-content: space-between; align-items: center; font-weight: 600; color: var(--text); }
-.cal-suggest ul { margin: 6px 0 0; padding-left: 18px; }
-.cal-suggest li { margin: 2px 0; color: var(--text-secondary); }
-
-/* 内容日历：折叠「+N 更多」+ 当天详情列表 */
-.cal-more { align-self: flex-start; margin-top: 1px; padding: 1px 7px; font-size: 11px; font-weight: 600;
-  color: var(--text-secondary); background: var(--surface-hover); border: 1px solid var(--border);
-  border-radius: 5px; cursor: pointer; transition: all var(--t-fast); }
-.cal-more:hover { color: var(--text); border-color: var(--border-strong); background: var(--accent-soft); }
-.cal-dayview-list { display: flex; flex-direction: column; gap: 6px; max-height: 56vh; overflow-y: auto; }
-.cal-dayview-list .cal-event { font-size: 13.5px; padding: 7px 10px; }
 
 /* 内容库卡片删除按钮（hover 显现） */
 .gcard-thumb { position: relative; }
