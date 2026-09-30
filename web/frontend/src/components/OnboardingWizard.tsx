@@ -99,18 +99,19 @@ export default function OnboardingWizard({ onClose, onCreated }: OnboardingWizar
 
   const footer = phase === 'form' && !submitting ? (
     <>
-      <Button onClick={() => (step === 0 ? onClose() : setStep(step - 1))}>
-        {step === 0 ? '取消' : '上一步'}
-      </Button>
-      {step < STEPS.length - 1 ? (
-        <Button variant="primary" onClick={() => canNext && setStep(step + 1)} disabled={!canNext}>
-          下一步
-        </Button>
-      ) : (
-        <Button variant="primary" onClick={submit} disabled={!form.name.trim() || !form.direction.trim()}>
-          生成画像
-        </Button>
-      )}
+      <Button variant="ghost" onClick={onClose}>取消</Button>
+      <div className="wiz-foot-right">
+        {step > 0 && <Button onClick={() => setStep(step - 1)}>上一步</Button>}
+        {step < STEPS.length - 1 ? (
+          <Button variant="primary" onClick={() => canNext && setStep(step + 1)} disabled={!canNext}>
+            下一步
+          </Button>
+        ) : (
+          <Button variant="primary" onClick={submit} disabled={!form.name.trim() || !form.direction.trim()}>
+            生成画像
+          </Button>
+        )}
+      </div>
     </>
   ) : undefined;
 

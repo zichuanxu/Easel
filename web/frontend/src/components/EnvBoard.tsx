@@ -114,7 +114,7 @@ export default function EnvBoard({ tools, python, loading, error, jobs, anyRunni
                 return (
                   <div className="card" key={t.id} data-tool={t.id} data-state={v.state}>
                     <div className="card-top">
-                      <span className="card-name"><Icon size={14} />{t.name}</span>
+                      <span className="card-name" title={t.name}><Icon size={14} /><span className="card-name-text">{t.name}</span></span>
                       <StatusDot tone={v.tone}>{v.badge}</StatusDot>
                     </div>
                     <div className="card-desc">{t.desc}</div>
