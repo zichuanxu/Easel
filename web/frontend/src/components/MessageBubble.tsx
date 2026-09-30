@@ -76,20 +76,20 @@ export default function MessageBubble({ message, isStreaming, thinking, activity
       {liveActivity ? (
         <div className="live-activity">
           <span className="live-pulse" />{liveActivity}
-          {liveHint && <span className="live-still"> · {liveHint}</span>}
+          {liveHint && <span className="live-still">{liveHint}</span>}
         </div>
       ) : liveHint ? (
         <div className="live-activity"><span className="live-pulse" />{liveHint}</div>
       ) : null}
       {doneSteps && (
         <details className="thinking-block">
-          <summary>🧠 执行过程（{doneSteps.split('\n').length} 步）</summary>
+          <summary>执行过程（{doneSteps.split('\n').length} 步）</summary>
           <div className="thinking-text">{doneSteps}</div>
         </details>
       )}
       {effThinking && (
         <details className="thinking-block" open={isStreaming && !message.content}>
-          <summary>💭 思考过程</summary>
+          <summary>思考过程</summary>
           <div className="thinking-text">{effThinking}</div>
         </details>
       )}

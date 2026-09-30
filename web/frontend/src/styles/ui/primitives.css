@@ -94,3 +94,6 @@
   border: 2px solid var(--c-rule-strong); border-top-color: var(--c-ink);
   animation: spin 0.8s linear infinite;
 }
+
+/* 加载提示：居中一行，旋转圈在文字前（其他页面共用） */
+.loading { display: flex; align-items: center; justify-content: center; gap: var(--sp-3); padding: 32px; color: var(--c-ink-2); font-size: var(--fs-13); }

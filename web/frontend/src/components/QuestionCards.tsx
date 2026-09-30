@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react';
 import type { ChatQuestion, ChatQuestionItem } from '../lib/api';
 import { answerQuestion } from '../lib/api';
+import Button from './ui/Button';
+import Tag from './ui/Tag';
+import { Input } from './ui/Field';
 
 /**
  * ask_user 问答题卡片。
@@ -72,7 +75,7 @@ function QuestionCard({ question, onAnswered }: { question: ChatQuestion; onAnsw
 
   return (
     <div className="message-row assistant">
-      <div className="msg-col assistant" style={{ maxWidth: '80%' }}>
+      <div className="msg-col assistant question-col">
         <div className="question-card">
           {items.map((it, idx) => {
             const options: { label: string; description?: string }[] = it.options || [];
@@ -82,10 +85,10 @@ function QuestionCard({ question, onAnswered }: { question: ChatQuestion; onAnsw
             return (
               <div key={it.questionId} className="question-card__item">
                 {idx > 0 && <div className="question-card__divider" />}
-                {it.header && <div className="question-card__chip">{it.header}</div>}
+                {it.header && <div className="question-card__chip"><Tag>{it.header}</Tag></div>}
                 <div className="question-card__title">
                   {it.question || '请选择'}
-                  {it.multiSelect && <span className="question-card__multi">可多选</span>}
+                  {it.multiSelect && <span className="question-card__multi"><Tag>可多选</Tag></span>}
                 </div>
                 <div className="question-card__options">
                   {options.map((opt) => (
@@ -107,23 +110,23 @@ function QuestionCard({ question, onAnswered }: { question: ChatQuestion; onAnsw
                       <span>自定义 · 点击移除</span>
                     </button>
                   ))}
-                  <button className="question-card__other" disabled={busy}
+                  <Button variant="ghost" size="sm" className="question-card__other" disabled={busy}
                     onClick={() => setShowCustom((s) => ({ ...s, [it.questionId]: !s[it.questionId] }))}>
-                    {ctl ? '收起自定义输入' : '自行输入…'}
-                  </button>
+                    {ctl ? '收起自定义输入' : '自行输入'}
+                  </Button>
                 </div>
                 {ctl && (
                   <div className="question-card__custom">
-                    <input
+                    <Input
                       type="text"
                       value={custom[it.questionId] || ''}
                       placeholder="输入你的答案"
                       onChange={(e) => setCustom((c) => ({ ...c, [it.questionId]: e.target.value }))}
                     />
-                    <button disabled={busy || !(custom[it.questionId] || '').trim()}
+                    <Button variant="secondary" disabled={busy || !(custom[it.questionId] || '').trim()}
                       onClick={() => fillCustom(it)}>
                       填入
-                    </button>
+                    </Button>
                   </div>
                 )}
               </div>
@@ -133,17 +136,17 @@ function QuestionCard({ question, onAnswered }: { question: ChatQuestion; onAnsw
           {/* 单选题：选完点提交；多题：全部选齐后提交（单选/多选同一规则） */}
           {items.length === 1 ? (
             <div className="question-card__actions">
-              <button className="question-card__submit" disabled={busy || !allAnswered}
+              <Button variant="primary" disabled={busy || !allAnswered}
                 onClick={() => void submit()}>
                 提交
-              </button>
+              </Button>
             </div>
           ) : (
             allAnswered && !busy && (
               <div className="question-card__actions">
-                <button className="question-card__submit" disabled={busy} onClick={() => void submit()}>
+                <Button variant="primary" disabled={busy} onClick={() => void submit()}>
                   全部已选，提交
-                </button>
+                </Button>
               </div>
             )
           )}
