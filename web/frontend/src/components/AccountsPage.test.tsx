@@ -37,12 +37,12 @@ describe('AccountsPage', () => {
     expect(container.querySelector('.ui-layer-mark')?.textContent).toBe('发布');
   });
 
-  it('已登录但没有 whoami 信息时，「已登录」只出现一次', async () => {
+  it('已登录但没有 whoami 信息（B站 不自动校验）时，身份栏不留空，显示「已登录」', async () => {
     vi.mocked(api.fetchAccounts).mockResolvedValue([
-      { platform: 'bilibili', name: 'B站', backend: 'web', supported: true, loggedIn: true, note: '' },
+      { platform: 'bilibili', name: 'B站', backend: 'biliup', supported: true, loggedIn: true, note: '' },
     ]);
     render(<AccountsPage />);
     const row = (await screen.findByText('B站')).closest('.account-row') as HTMLElement;
-    expect(within(row).getAllByText('已登录').length).toBe(1);
+    expect(row.querySelector('.account-who')?.textContent).toBe('已登录');
   });
 });

@@ -320,7 +320,10 @@ export default function AccountsPage() {
                     <Avatar url={info.avatar} name={info.name || a.name} />
                     <span className="account-nick" title={info.name || ''}>{info.name || '已登录'}</span>
                   </>
-                ) : !logged && <span className="account-note">{a.note || '未登录'}</span>}
+                ) : (
+                  // 已登录但还没有 whoami 结果（B站 不自动校验、其他平台校验中）也要占住这一栏，不能留空
+                  <span className="account-note">{logged ? '已登录' : (a.note || '未登录')}</span>
+                )}
               </span>
               {status(a)}
               <span className="account-actions">
