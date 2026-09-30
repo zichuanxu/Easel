@@ -349,12 +349,14 @@ def _k(env, label, required=True, secret=True, aliases=None):
     return {"env": env, "label": label, "required": required, "secret": secret, "aliases": aliases or []}
 
 
-def _model_spec(group: str, label: str | None = None) -> dict:
+def _model_spec(group: str, label: str | None = None, *, api_only: bool = False) -> dict:
+    """api_only：该 SKILL 的脚本只认 API key（不支持免 key 的本机后端，如 Codex CLI）。"""
     spec = model_group(group)
+    providers = [p for p in spec["providers"] if not (api_only and p.get("keyless"))]
     return {
         "label": label or spec["label"],
-        "settings": spec.get("settings", []),
-        "providers": spec["providers"],
+        "settings": [] if api_only else spec.get("settings", []),
+        "providers": providers,
     }
 
 
@@ -381,7 +383,7 @@ def _short_drama_spec() -> dict:
 
 SKILL_API_REQUIREMENTS: dict[str, dict] = {
     "ai-image-gen": _model_spec("image"),
-    "ecom-details-image": _model_spec("image", "电商配图（AI 生图）"),
+    "ecom-details-image": _model_spec("image", "电商配图（AI 生图）", api_only=True),  # 自带脚本，不走 Codex
     "ai-video-gen": _model_spec("video"),
     "ai-music": _model_spec("music"),
     "voice-clone": _model_spec("voice", "声音克隆 / 云端 TTS"),
@@ -714,16 +716,21 @@ def _key_configured(key: dict, env: dict[str, str]) -> bool:
     return any(_is_set(env.get(a)) for a in key.get('aliases', []))
 
 
+def _provider_ready(spec: dict, prov: dict, env: dict[str, str]) -> bool:
+    'provider 是否可用：免 key 的本机后端（Codex CLI）要在 settings 里被选中；其余看必填 key 是否齐全。'
+    if prov.get('keyless'):
+        return any(str(env.get(k['env'], '')).strip() == prov['id']
+                   for k in spec.get('settings', []) if k.get('choices'))
+    return all(_key_configured(k, env) for k in prov['keys'] if k['required'])
+
+
 def _skill_api_configured(skill: str, env: dict[str, str] | None = None) -> bool:
-    'SKILL 是否已具备可用配置：任一 provider 的全部 required key 齐全。'
+    'SKILL 是否已具备可用配置：任一 provider 可用。'
     spec = SKILL_API_REQUIREMENTS.get(skill)
     if not spec:
         return True
     env = _read_env() if env is None else env
-    for prov in spec['providers']:
-        if all(_key_configured(k, env) for k in prov['keys'] if k['required']):
-            return True
-    return False
+    return any(_provider_ready(spec, prov, env) for prov in spec['providers'])
 
 
 # .env 的值是裸写 `KEY=value` 的，而 setup.sh:310/450 会 `source .env`。bash 在赋值右侧
@@ -850,7 +857,8 @@ def _api_spec_status(skill: str, env: dict[str, str]) -> dict:
     providers = []
     for prov in spec['providers']:
         keys = [key_status(k) for k in prov['keys']]
-        providers.append({'id': prov['id'], 'name': prov['name'], 'keys': keys})
+        providers.append({'id': prov['id'], 'name': prov['name'], 'keys': keys,
+                          'ready': _provider_ready(spec, prov, env)})
     return {
         'label': spec['label'],
         'settings': [key_status(k) for k in spec.get('settings', [])],
@@ -1293,6 +1301,11 @@ def _mask_key(v: str) -> str:
     return f"«{v[:5]}…{v[-4:]}»" if len(v) > 14 else "«已配置»"
 
 
+# 媒体通道的「主」provider 写在哪个 .env 键（设置页「设为主」→ 保存时写入）
+_MEDIA_PROVIDER_ENV = {"image": "IMG_PROVIDER", "video": "VIDEO_PROVIDER",
+                       "music": "MUSIC_PROVIDER", "voice": "VOICE_PROVIDER"}
+
+
 def _model_channels() -> dict:
     env = _read_env()
     primary = ""
@@ -1371,7 +1384,7 @@ def _model_channels() -> dict:
     channels: dict = {"chat": {"rows": chat_rows}, "transcribe": {"rows": trans_rows}}
     try:
         import model_registry as _mr  # skills/shared/scripts 已在 sys.path 上
-        _setting_env = {"video": "VIDEO_PROVIDER", "music": "MUSIC_PROVIDER", "voice": "VOICE_PROVIDER"}
+        _setting_env = _MEDIA_PROVIDER_ENV
         for _gid, _ch in (("image", "image"), ("video", "video"), ("music", "music"), ("voice", "speech")):
             _spec = _mr.MODEL_GROUPS[_gid]
             _chosen = (env.get(_setting_env.get(_gid, ""), "") or "").strip()
@@ -1395,17 +1408,37 @@ def _model_channels() -> dict:
                                 _raw = env[_a]
                                 break
                     _masked = _mask_key(_raw)
+                if _gid == "image":
+                    # ai_image.py 只在 IMG_PROVIDER=codex-cli 时走 Codex，其余一律走 API
+                    _main = (_p["id"] == "codex-cli") == (_chosen.lower() == "codex-cli")
+                else:
+                    _main = _chosen == _p["id"]
+                _extra: dict = {}
+                if _p.get("keyless"):
+                    # 免 key 的本机后端：状态看本机安装/登录，不看 .env 里的 key
+                    _extra = {"keyless": True, "baseUrl": "本机"}
+                    _masked = "免 key"
+                    if _p["id"] == "codex-cli":
+                        try:
+                            import codex_image as _ci
+                            _ok, _why = _ci.quick_status({**os.environ, **env})
+                            _extra["modelHint"] = f"{_ci.DEFAULT_MODEL}（默认）"
+                        except Exception as _exc:  # noqa: BLE001 — 只影响这一行，不能连带吞掉其他通道
+                            _ok, _why = False, f"状态检查失败：{_exc}"[:80]
+                        if not _ok:
+                            _extra["resultText"] = _why
                 _rows.append({
                     "slot": _p["id"], "order": 0, "name": _p["name"], "sub": _gid,
                     "type": _p["id"], "model": (env.get(_mk["env"]) or "").strip() if _mk else "",
                     "baseUrl": (env.get(_bk["env"]) or "").strip() if _bk else "",
-                    "keyMasked": _masked, "role": "主" if (_gid == "image" or _chosen == _p["id"]) else "备",
-                    "result": "已配置" if _ok else "未配置",
+                    "keyMasked": _masked, "role": "主" if _main else "备",
+                    "result": "已配置" if _ok else _extra.pop("resultText", "未配置"),
                     "key2Label": _k2["label"] if _k2 else "",
                     "key2Masked": _mask_key(env.get(_k2["env"], "")) if _k2 and _k2["secret"] else "",
                     "modelEditable": _mk is not None,
                     "baseEditable": _bk is not None,
                     "baseOptional": (_bk is None) or (not _bk["required"]),
+                    **_extra,
                 })
             channels[_ch] = {"rows": _rows}
         # 配音的免 key 兜底：没设 VOICE_PROVIDER 时 tts.py 就用 edge-tts。只读展示行（无 slot，不参与保存）。
@@ -1550,7 +1583,7 @@ async def api_settings_models_save(req: ModelSaveRequest):
         _gid0 = {"speech": "voice", "image": "image", "video": "video", "music": "music"}[ch0]
         _spec0 = _mr2.MODEL_GROUPS[_gid0]
         _by_id = {p["id"]: p for p in _spec0["providers"]}
-        _setting0 = {"video": "VIDEO_PROVIDER", "music": "MUSIC_PROVIDER", "voice": "VOICE_PROVIDER"}.get(_gid0)
+        _setting0 = _MEDIA_PROVIDER_ENV.get(_gid0)
         _mupd: dict[str, str] = {}
         _primary0 = ""
         _env0 = _read_env()

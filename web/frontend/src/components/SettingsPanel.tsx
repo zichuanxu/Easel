@@ -304,6 +304,7 @@ export default function SettingsPanel({ onClose }: Props) {
     }));
 
   const mediaOk = (ch: string) => (mediaRows[ch] || []).some((r) => r.result === '已配置');
+  const imgMain = (mediaRows.image || []).find((r) => r.role === '主');
   // 配音的免 key 兜底行（后端给的只读行，无 slot）
   const edgeReady = (mediaRows.speech || []).some((r) => r.type === 'edge' && r.result === '已就绪');
 
@@ -346,10 +347,10 @@ export default function SettingsPanel({ onClose }: Props) {
               )}
               <span className="cell-type" title={r.type}>{r.type}</span>
               {ed && ed.model && (!ops?.media || r.adv) ? (
-                <Input className="mock" value={r.model} placeholder={isCustom ? '模型名' : ''} onChange={(e) => ops?.onRow?.(i, { model: e.target.value })} />
+                <Input className="mock" value={r.model} placeholder={isCustom ? '模型名' : (r.modelHint || '')} onChange={(e) => ops?.onRow?.(i, { model: e.target.value })} />
               ) : (
-                <span className={`cell-text${ops?.media && !r.model ? ' dim' : ''}`} title={r.model || '内建默认'}>
-                  {r.model || (ops?.media ? '默认（内建）' : '')}
+                <span className={`cell-text${ops?.media && !r.model ? ' dim' : ''}`} title={r.model || r.modelHint || '内建默认'}>
+                  {r.model || r.modelHint || (ops?.media ? '默认（内建）' : '')}
                 </span>
               )}
               {ed && ed.base && (!ops?.media || r.adv) ? (
@@ -364,7 +365,7 @@ export default function SettingsPanel({ onClose }: Props) {
                       : '')}
                 </span>
               )}
-              {ed ? (
+              {ed && !r.keyless ? (
                 r.key2Label ? (
                   <span className="key-stack">
                     <Input
@@ -521,12 +522,14 @@ export default function SettingsPanel({ onClose }: Props) {
                 {chan === 'image' && (
                   <section className="st-panel active">
                     <div className="panel-top">
-                      <StatusDot tone={mediaOk('image') ? 'ok' : 'idle'}>{mediaOk('image') ? '已配置' : '未配置'}</StatusDot>
-                      <span className="desc">只填 Key 即用（地址/模型内建，点「高级」可覆盖）</span>
+                      <StatusDot tone={imgMain?.result === '已配置' ? 'ok' : 'idle'}>
+                        {imgMain?.result === '已配置' ? `${imgMain.name} 生效` : '未配置'}
+                      </StatusDot>
+                      <span className="desc">API 只填 Key 即用；Codex CLI 免 Key，用本机 ChatGPT 登录；点「设为主」切换</span>
                       <span className="spacer" />
                     </div>
-                    {renderBoard(mediaRows.image || [], { onRow: (i, p) => updateMediaRow('image', i, p), media: true })}
-                    <div className="foot-note">按 Base URL 自动选同步 / 异步（apimart）模式；模型名留空用服务端默认。</div>
+                    {renderBoard(mediaRows.image || [], { onRow: (i, p) => updateMediaRow('image', i, p), onPrimary: (i) => setMediaPrimary('image', i), media: true })}
+                    <div className="foot-note">API 按 Base URL 自动选同步 / 异步（apimart）模式，模型名留空用服务端默认。Codex CLI 每张约 1 分钟、占 ChatGPT 订阅额度，模型点「高级」可改。</div>
                   </section>
                 )}
 

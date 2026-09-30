@@ -1,12 +1,12 @@
 ---
 name: ai-image-gen
-description: "通用 AI 生图：文生图 / 图生图 / 图像变体。当用户说 AI 生图、AI 画图、文生图、图生图、生成图片、生成配图、图像生成、AI 出图、AI 作图、换图、改图、图像编辑、给我画一张、生成一张图 时使用。支持 OpenAI 兼容 API 与 apimart 异步 API，用户自备 API key。"
+description: "通用 AI 生图：文生图 / 图生图 / 图像变体。当用户说 AI 生图、AI 画图、文生图、图生图、生成图片、生成配图、图像生成、AI 出图、AI 作图、换图、改图、图像编辑、给我画一张、生成一张图 时使用。支持 OpenAI 兼容 API、apimart 异步 API（用户自备 key），以及本机 Codex CLI（ChatGPT 登录，免 key）。"
 layer: produce
 ---
 
 # ai-image-gen Skill
 
-> 通用 AI 文生图 / 图生图 / 图像变体。用户自备图像生成 API key（OpenAI 兼容 或 apimart 异步），产物写入 `outputs/`。
+> 通用 AI 文生图 / 图生图 / 图像变体。后端二选一：用户自备的图像 API key（OpenAI 兼容 或 apimart 异步），或本机 Codex CLI（ChatGPT 登录，免 key）。产物写入 `outputs/`。
 
 调用共享脚本 `skills/shared/scripts/ai_image.py`（纯标准库，无第三方依赖）。
 本 SKILL 不索要、不回显、不写入、不提交任何真实 API key —— key 只存在于用户自己的 `.env`。
@@ -37,6 +37,16 @@ layer: produce
 - **apimart（异步轮询）**：`base_url` 含 `apimart`。提交任务 → 轮询 `/tasks/<id>` → 下载。
   示例：`IMG_BASE_URL=https://api.apimart.ai/v1`。
 
+### 本机 Codex CLI（免 key）
+
+`.env` 设 `IMG_PROVIDER=codex-cli`（或 Web「设置 → 模型配置 → 生图」把 Codex CLI 设为主）后，
+text2img / img2img / variations 都改由本机 `codex exec` 出图，不需要上面三项。前提：本机装了 codex 且已 `codex login`。
+
+- 可选：`IMG_CODEX_MODEL`（默认 `gpt-6.1-sol`）、`IMG_CODEX_TIMEOUT`（单张超时秒数，默认 300）、`IMG_CODEX_BIN`（codex 路径，默认自动查找）。
+- 每张约 1 分钟，占用户的 ChatGPT 订阅额度；`--n` 张逐张生成。**多张先告诉用户预计耗时。**
+- `--size` 只决定横 / 竖 / 方，实际像素由 Codex 决定（如 1024×1536、1672×941）；要精确尺寸再交给 `image-editing`。
+- 不支持 `--mask`：把要改的区域写进 prompt。临时指定后端用 `--mode codex` 或 `--mode sync|async`。
+
 ## 执行步骤
 
 ### 1. 先确认配置（离线，不发请求）
@@ -45,7 +55,7 @@ layer: produce
 python skills/shared/scripts/ai_image.py check
 ```
 
-打印三项配置状态（key 脱敏显示）、命中的别名、自动检测的模式。缺项时给出 `.env` 填写示例并以退出码 2 结束。**配置未就绪就不要往下走**，直接把缺什么、怎么配告诉用户。
+打印三项配置状态（key 脱敏显示）、命中的别名、自动检测的模式；选了 Codex CLI 时改为打印 codex 路径、模型和登录状态。缺项时给出填写示例并以退出码 2 结束。**配置未就绪就不要往下走**，直接把缺什么、怎么配告诉用户。
 
 ### 2. 文生图 text2img
 

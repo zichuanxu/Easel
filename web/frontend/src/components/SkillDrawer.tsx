@@ -153,7 +153,7 @@ export default function SkillDrawer({ skillName, persona, onClose, onConfigured 
                 </div>
               )}
               {detail.apiSpec.providers.map((prov) => {
-                const provOk = prov.keys.filter(k => k.required).every(k => k.configured);
+                const provOk = prov.ready ?? prov.keys.filter(k => k.required).every(k => k.configured);
                 return (
                   <div key={prov.id} className={`skill-provider${provOk ? ' configured' : ''}`}>
                     <div className="skill-provider-head">

@@ -63,6 +63,8 @@ export interface ApiProviderSpec {
   id: string;
   name: string;
   keys: ApiKeySpec[];
+  /** 后端判定的可用性（免 key 的本机后端要被选中才算）；旧后端没有这个字段 */
+  ready?: boolean;
 }
 
 export interface ApiSpec {
@@ -778,6 +780,10 @@ export interface ModelRow {
   baseOptional?: boolean;
   adv?: boolean;
   deletable?: boolean;
+  /** 免 key 的本机后端（如 Codex CLI）：不显示 Key 输入框 */
+  keyless?: boolean;
+  /** 模型留空时实际用的默认值，只做展示 */
+  modelHint?: string;
 }
 
 export interface ModelSaveRow {
