@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react';
 import { buildProfile, profileBuildStatus } from '../lib/api';
+import Modal from './ui/Modal';
+import Button from './ui/Button';
+import { Input, Textarea } from './ui/Field';
 
 const PLATFORMS = ['小红书', '抖音', 'B站', '视频号', '公众号', '微博', '知乎'];
 const TONES = ['专业严谨', '轻松幽默', '亲切日常', '犀利吐槽', '治愈温暖', '干货实用'];
@@ -94,152 +97,125 @@ export default function OnboardingWizard({ onClose, onCreated }: OnboardingWizar
     return () => { alive = false; clearTimeout(t); };
   }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const box: React.CSSProperties = {
-    width: '100%', padding: '10px 12px', marginTop: 6, borderRadius: 'var(--radius)',
-    border: '1px solid var(--border)', background: 'var(--bg-elev)', color: 'var(--text)',
-    fontSize: 14, fontFamily: 'inherit',
-  };
-  const label: React.CSSProperties = { display: 'block', marginTop: 16, fontSize: 13, color: 'var(--text-secondary)' };
-
-  const chip = (active: boolean): React.CSSProperties => ({
-    padding: '6px 13px', borderRadius: 999, fontSize: 13, cursor: 'pointer',
-    border: '1px solid var(--border)',
-    background: active ? 'var(--accent-gradient)' : 'var(--bg-elev)',
-    color: active ? '#fff' : 'var(--text)',
-  });
-
-  return (
-    <div className="overlay">
-      <div className="modal" style={{ width: 560, maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
-        {/* 头部 + 进度 */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ margin: 0, fontSize: 20 }}>配置账号画像</h2>
-          <button onClick={onClose} disabled={submitting}
-            style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: 22, cursor: 'pointer' }}>×</button>
-        </div>
-        <div style={{ display: 'flex', gap: 6, margin: '16px 0 4px' }}>
-          {STEPS.map((s, i) => (
-            <div key={s} style={{ flex: 1 }}>
-              <div style={{ height: 4, borderRadius: 2, background: i <= step ? 'var(--accent-start)' : 'var(--border)' }} />
-              <div style={{ fontSize: 11, color: i === step ? 'var(--text)' : 'var(--text-secondary)', marginTop: 4 }}>{s}</div>
-            </div>
-          ))}
-        </div>
-
-        {submitting ? (
-          <div style={{ padding: '48px 0', textAlign: 'center', color: 'var(--text-secondary)' }}>
-            <div className="spinner" style={{ margin: '0 auto 16px' }} />
-            正在创建画像基线…
-          </div>
-        ) : phase === 'enhancing' ? (
-          <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--text-secondary)' }}>
-            <div className="spinner" style={{ margin: '0 auto 16px' }} />
-            <div style={{ color: 'var(--text)', fontSize: 15, marginBottom: 6 }}>画像已创建 ✓　AI 正在后台增强…</div>
-            <span style={{ fontSize: 12 }}>
-              正在尝试抓取社媒链接并完善各维度，可能需要 1-2 分钟。<br />
-              也可以现在就进去用，增强会在后台继续。
-            </span>
-            <div style={{ marginTop: 20 }}>
-              <button className="btn btn-primary" onClick={() => onCreated(form.name.trim())}>先进去用</button>
-            </div>
-          </div>
+  const footer = phase === 'form' && !submitting ? (
+    <>
+      <Button variant="ghost" onClick={onClose}>取消</Button>
+      <div className="wiz-foot-right">
+        {step > 0 && <Button onClick={() => setStep(step - 1)}>上一步</Button>}
+        {step < STEPS.length - 1 ? (
+          <Button variant="primary" onClick={() => canNext && setStep(step + 1)} disabled={!canNext}>
+            下一步
+          </Button>
         ) : (
-          <div style={{ minHeight: 240 }}>
-            {step === 0 && (
-              <>
-                <label style={label}>画像名 *（一个人设 = 一个画像，可跨多平台）</label>
-                <input style={box} value={form.name} placeholder="如：科技数码达人"
-                  onChange={(e) => set('name', e.target.value)} />
-                <label style={label}>运营平台（可多选）</label>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
-                  {PLATFORMS.map((p) => (
-                    <button key={p} onClick={() => togglePlatform(p)} style={chip(form.platforms.includes(p))}>{p}</button>
-                  ))}
-                </div>
-                <label style={label}>起号状态</label>
-                <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-                  {['全新起号', '已有账号'].map((s) => (
-                    <button key={s} onClick={() => set('accountStage', s)} style={chip(form.accountStage === s)}>{s}</button>
-                  ))}
-                </div>
-              </>
-            )}
-
-            {step === 1 && (
-              <>
-                <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 12 }}>
-                  贴上各平台主页链接，AI 会尽力分析你已发的内容和风格（抓不到会跳过，可留空）。
-                </p>
-                {form.platforms.length === 0 && (
-                  <p style={{ fontSize: 13, color: 'var(--text-secondary)' }}>（未选平台，可直接下一步）</p>
-                )}
-                {form.platforms.map((p) => (
-                  <div key={p}>
-                    <label style={label}>{p} 主页链接</label>
-                    <input style={box} value={form.links[p] || ''} placeholder={`https://…`}
-                      onChange={(e) => set('links', { ...form.links, [p]: e.target.value })} />
-                  </div>
-                ))}
-              </>
-            )}
-
-            {step === 2 && (
-              <>
-                <label style={label}>想做什么方向的内容 *（越具体越好）</label>
-                <input style={box} value={form.direction} placeholder="如：平价护肤测评"
-                  onChange={(e) => set('direction', e.target.value)} />
-                <label style={label}>为什么做这个 / 你的优势·独特经历</label>
-                <textarea style={{ ...box, minHeight: 60, resize: 'vertical' }} value={form.reason}
-                  onChange={(e) => set('reason', e.target.value)} />
-                <label style={label}>运营目标</label>
-                <input style={box} value={form.goal} placeholder="涨粉 / 变现 / 个人品牌 / 引流私域"
-                  onChange={(e) => set('goal', e.target.value)} />
-                <label style={label}>想产出的形式</label>
-                <input style={box} value={form.formats} placeholder="图文 / 短视频 / 中长视频 / 长文"
-                  onChange={(e) => set('formats', e.target.value)} />
-              </>
-            )}
-
-            {step === 3 && (
-              <>
-                <label style={label}>喜欢看的内容 / 对标账号</label>
-                <textarea style={{ ...box, minHeight: 60, resize: 'vertical' }} value={form.likes}
-                  onChange={(e) => set('likes', e.target.value)} />
-                <label style={label}>期望调性</label>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
-                  {TONES.map((t) => (
-                    <button key={t} onClick={() => set('tone', form.tone === t ? '' : t)} style={chip(form.tone === t)}>{t}</button>
-                  ))}
-                </div>
-                <label style={label}>不做的内容 / 合规红线</label>
-                <textarea style={{ ...box, minHeight: 60, resize: 'vertical' }} value={form.avoid}
-                  placeholder="如：不接医疗功效、不做虚假宣传"
-                  onChange={(e) => set('avoid', e.target.value)} />
-              </>
-            )}
-
-            {error && <div style={{ color: 'var(--red)', fontSize: 13, marginTop: 12 }}>{error}</div>}
-          </div>
-        )}
-
-        {/* 底部按钮 */}
-        {phase === 'form' && !submitting && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 20 }}>
-            <button className="btn" onClick={() => (step === 0 ? onClose() : setStep(step - 1))}>
-              {step === 0 ? '取消' : '上一步'}
-            </button>
-            {step < STEPS.length - 1 ? (
-              <button className="btn btn-primary" onClick={() => canNext && setStep(step + 1)} disabled={!canNext}>
-                下一步
-              </button>
-            ) : (
-              <button className="btn btn-primary" onClick={submit} disabled={!form.name.trim() || !form.direction.trim()}>
-                生成画像
-              </button>
-            )}
-          </div>
+          <Button variant="primary" onClick={submit} disabled={!form.name.trim() || !form.direction.trim()}>
+            生成画像
+          </Button>
         )}
       </div>
-    </div>
+    </>
+  ) : undefined;
+
+  const chip = (active: boolean, label: string, onClick: () => void) => (
+    <button key={label} type="button" className="wiz-chip" aria-pressed={active} onClick={onClick}>{label}</button>
+  );
+
+  return (
+    <Modal title="配置账号画像" width={560} closeOnBackdrop={false} onClose={() => { if (!submitting) onClose(); }} footer={footer} className="wizard-modal">
+      <ol className="wiz-steps" aria-label="步骤">
+        {STEPS.map((s, i) => (
+          <li key={s} className="wiz-step" data-done={i <= step} data-current={i === step} aria-current={i === step ? 'step' : undefined}>
+            <span className="wiz-step-bar" />
+            <span className="wiz-step-name">{s}</span>
+          </li>
+        ))}
+      </ol>
+
+      {submitting ? (
+        <div className="wiz-wait">
+          <div className="spinner" />
+          正在创建画像基线…
+        </div>
+      ) : phase === 'enhancing' ? (
+        <div className="wiz-wait">
+          <div className="spinner" />
+          <div className="wiz-wait-title">画像已创建，AI 正在后台增强…</div>
+          <span className="wiz-hint">
+            正在尝试抓取社媒链接并完善各维度，可能需要 1-2 分钟。<br />
+            也可以现在就进去用，增强会在后台继续。
+          </span>
+          <div className="wiz-wait-action">
+            <Button variant="primary" onClick={() => onCreated(form.name.trim())}>先进去用</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="wiz-form">
+          {step === 0 && (
+            <>
+              <label className="wiz-label">画像名 *（一个人设 = 一个画像，可跨多平台）</label>
+              <Input value={form.name} placeholder="如：科技数码达人"
+                onChange={(e) => set('name', e.target.value)} />
+              <label className="wiz-label">运营平台（可多选）</label>
+              <div className="wiz-chips">
+                {PLATFORMS.map((p) => chip(form.platforms.includes(p), p, () => togglePlatform(p)))}
+              </div>
+              <label className="wiz-label">起号状态</label>
+              <div className="wiz-chips">
+                {['全新起号', '已有账号'].map((s) => chip(form.accountStage === s, s, () => set('accountStage', s)))}
+              </div>
+            </>
+          )}
+
+          {step === 1 && (
+            <>
+              <p className="wiz-hint">
+                贴上各平台主页链接，AI 会尽力分析你已发的内容和风格（抓不到会跳过，可留空）。
+              </p>
+              {form.platforms.length === 0 && (
+                <p className="wiz-hint">（未选平台，可直接下一步）</p>
+              )}
+              {form.platforms.map((p) => (
+                <div key={p}>
+                  <label className="wiz-label">{p} 主页链接</label>
+                  <Input value={form.links[p] || ''} placeholder="https://…"
+                    onChange={(e) => set('links', { ...form.links, [p]: e.target.value })} />
+                </div>
+              ))}
+            </>
+          )}
+
+          {step === 2 && (
+            <>
+              <label className="wiz-label">想做什么方向的内容 *（越具体越好）</label>
+              <Input value={form.direction} placeholder="如：平价护肤测评"
+                onChange={(e) => set('direction', e.target.value)} />
+              <label className="wiz-label">为什么做这个 / 你的优势·独特经历</label>
+              <Textarea value={form.reason} onChange={(e) => set('reason', e.target.value)} />
+              <label className="wiz-label">运营目标</label>
+              <Input value={form.goal} placeholder="涨粉 / 变现 / 个人品牌 / 引流私域"
+                onChange={(e) => set('goal', e.target.value)} />
+              <label className="wiz-label">想产出的形式</label>
+              <Input value={form.formats} placeholder="图文 / 短视频 / 中长视频 / 长文"
+                onChange={(e) => set('formats', e.target.value)} />
+            </>
+          )}
+
+          {step === 3 && (
+            <>
+              <label className="wiz-label">喜欢看的内容 / 对标账号</label>
+              <Textarea value={form.likes} onChange={(e) => set('likes', e.target.value)} />
+              <label className="wiz-label">期望调性</label>
+              <div className="wiz-chips">
+                {TONES.map((t) => chip(form.tone === t, t, () => set('tone', form.tone === t ? '' : t)))}
+              </div>
+              <label className="wiz-label">不做的内容 / 合规红线</label>
+              <Textarea value={form.avoid} placeholder="如：不接医疗功效、不做虚假宣传"
+                onChange={(e) => set('avoid', e.target.value)} />
+            </>
+          )}
+
+          {error && <div className="wiz-error">{error}</div>}
+        </div>
+      )}
+    </Modal>
   );
 }

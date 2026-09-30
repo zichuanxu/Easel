@@ -7,6 +7,12 @@ import {
   fetchModelChannels, runChannelSelftest, saveModelConfig,
 } from '../lib/api';
 import type { EnvTool, ModelRow, SelftestResult } from '../lib/api';
+import Modal from './ui/Modal';
+import Tabs from './ui/Tabs';
+import Button from './ui/Button';
+import StatusDot from './ui/StatusDot';
+import Tag from './ui/Tag';
+import { Input } from './ui/Field';
 import { IconSlidersHorizontal, IconPackage, IconEllipsis } from './settingsIcons';
 
 interface Props { onClose: () => void; }
@@ -224,7 +230,7 @@ export default function SettingsPanel({ onClose }: Props) {
         music: d.channels.music?.rows || [],
         speech: d.channels.speech?.rows || [],
       });
-      setSavedNote(d.note ? `✓ 已保存（${d.note}）` : '✓ 已保存');
+      setSavedNote(d.note ? `已保存（${d.note}）` : '已保存');
       void refreshEnv();
     } catch (e) {
       setSavedNote(e instanceof Error ? `保存失败：${e.message}` : '保存失败');
@@ -234,13 +240,6 @@ export default function SettingsPanel({ onClose }: Props) {
     }
   }, [chan, chatRows, transRows, mediaRows, refreshEnv]);
 
-  // Esc 关闭
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   // 本地兜底 whisper：从环境工具状态推出来（fw + 模型都在才算就绪）
   const fw = tools.find((t) => t.id === 'fw');
   const modelTool = tools.find((t) => t.id === 'model');
@@ -248,12 +247,12 @@ export default function SettingsPanel({ onClose }: Props) {
   const localRow: ModelRow = {
     order: 2, name: 'local-whisper', sub: '本机兜底 · 免 key', type: 'local',
     model: 'faster-whisper', baseUrl: '本机', keyMasked: '—', role: '备',
-    result: localReady ? '✓ 已就绪' : (tools.length ? '未装（去环境安装）' : '检测中…'),
+    result: localReady ? '已就绪' : (tools.length ? '未装（去环境安装）' : '检测中…'),
   };
 
   const resultText = (row: ModelRow): { text: string; cls: string } => {
     const st = row.baseUrl && row.baseUrl !== '—' ? selftest?.byBase[row.baseUrl] : undefined;
-    if (st) return st.ok ? { text: `✓ ${st.ms}ms`, cls: 'good' } : { text: `✗ ${(st.detail || '失败').slice(0, 42)}`, cls: 'bad' };
+    if (st) return st.ok ? { text: `${st.ms}ms`, cls: 'good' } : { text: (st.detail || '失败').slice(0, 42), cls: 'bad' };
     if (row.result.includes('已就绪') || row.result.includes('已配置')) return { text: row.result, cls: 'good' };
     if (row.result.includes('缺') || row.result.includes('未装')) return { text: row.result, cls: 'warn-text' };
     return { text: row.result, cls: '' };
@@ -307,7 +306,7 @@ export default function SettingsPanel({ onClose }: Props) {
     ops?: { onRow?: (i: number, patch: Partial<ModelRow>) => void; onPrimary?: (i: number) => void; onRemove?: (i: number) => void; media?: boolean },
   ) => (
     modelLoading && rows.length === 0 ? (
-      <div className="board"><div className="empty"><span className="spin" /> 正在读取配置…<span className="hint">（后台繁忙时可能稍慢，会自动重试）</span></div></div>
+      <div className="board"><div className="empty"><span className="spin" aria-hidden="true" /> 正在读取配置…<span className="hint">（后台繁忙时可能稍慢，会自动重试）</span></div></div>
     ) : rows.length === 0 ? (
       <div className="board"><div className="empty">还没有配置。<span className="hint">可在「环境安装」先补齐本地能力。</span></div></div>
     ) : (
@@ -329,7 +328,7 @@ export default function SettingsPanel({ onClose }: Props) {
               <span className={`step${r.order === 0 ? ' ghost' : ''}`}>{isCustom ? i + 1 : r.order}</span>
               {isCustom ? (
                 <span className="pname">
-                  <input
+                  <Input
                     className="mock"
                     value={r.name}
                     placeholder="名称"
@@ -337,18 +336,18 @@ export default function SettingsPanel({ onClose }: Props) {
                   />
                 </span>
               ) : (
-                <span className="pname">{r.name}<small>{r.sub}</small></span>
+                <span className="pname" title={`${r.name} ${r.sub}`}><span className="pname-name">{r.name}</span><small>{r.sub}</small></span>
               )}
-              <span>{r.type}</span>
+              <span className="cell-type" title={r.type}>{r.type}</span>
               {ed && ed.model && (!ops?.media || r.adv) ? (
-                <input className="mock" value={r.model} placeholder={isCustom ? '模型名' : ''} onChange={(e) => ops?.onRow?.(i, { model: e.target.value })} />
+                <Input className="mock" value={r.model} placeholder={isCustom ? '模型名' : ''} onChange={(e) => ops?.onRow?.(i, { model: e.target.value })} />
               ) : (
                 <span className={`cell-text${ops?.media && !r.model ? ' dim' : ''}`} title={r.model || '内建默认'}>
                   {r.model || (ops?.media ? '默认（内建）' : '')}
                 </span>
               )}
               {ed && ed.base && (!ops?.media || r.adv) ? (
-                <input className="mock" value={r.baseUrl} placeholder="https://…" onChange={(e) => ops?.onRow?.(i, { baseUrl: e.target.value })} />
+                <Input className="mock" value={r.baseUrl} placeholder="https://…" onChange={(e) => ops?.onRow?.(i, { baseUrl: e.target.value })} />
               ) : (
                 <span className={`cell-text${ops?.media && !r.baseUrl ? ' dim' : ''}`} title={r.baseUrl || '内建默认'}>
                   {r.baseUrl
@@ -362,14 +361,14 @@ export default function SettingsPanel({ onClose }: Props) {
               {ed ? (
                 r.key2Label ? (
                   <span className="key-stack">
-                    <input
+                    <Input
                       className="mock key-input"
                       type="password"
                       value={r.keyNew || ''}
                       placeholder={r.keyMasked || 'Key'}
                       onChange={(e) => ops?.onRow?.(i, { keyNew: e.target.value })}
                     />
-                    <input
+                    <Input
                       className="mock key-input"
                       type="password"
                       value={r.keyNew2 || ''}
@@ -378,7 +377,7 @@ export default function SettingsPanel({ onClose }: Props) {
                     />
                   </span>
                 ) : (
-                  <input
+                  <Input
                     className="mock key-input"
                     type="password"
                     value={r.keyNew || ''}
@@ -391,20 +390,23 @@ export default function SettingsPanel({ onClose }: Props) {
               )}
               {r.slot && ops?.onPrimary ? (
                 <button
-                  className={`tag ${r.role === '主' ? 'main' : 'backup'}`}
+                  type="button"
+                  className="role-btn"
                   onClick={() => ops.onPrimary?.(i)}
                   title="设为主通道"
                 >
-                  {r.role}
+                  <Tag tone={r.role === '主' ? 'ok' : 'neutral'}>{r.role}</Tag>
                 </button>
               ) : (
-                <span className={`tag ${r.role === '主' ? 'main' : 'backup'}`}>{r.role}</span>
+                <Tag tone={r.role === '主' ? 'ok' : 'neutral'}>{r.role}</Tag>
               )}
-              <span className={`stt ${rt.cls}`}>{rt.text}</span>
+              <span className={`stt ${rt.cls}`} title={rt.text}>
+                {rt.cls ? <StatusDot tone={rt.cls === 'good' ? 'ok' : rt.cls === 'bad' ? 'danger' : 'warn'}><span className="stt-text">{rt.text}</span></StatusDot> : rt.text}
+              </span>
               {isCustom && ops?.onRemove ? (
-                <button className="row-del" onClick={() => ops.onRemove?.(i)} title="删除该供应商">✕</button>
+                <button className="row-del" onClick={() => ops.onRemove?.(i)} title="删除该供应商" aria-label="删除该供应商">×</button>
               ) : ops?.media && r.slot ? (
-                <button className="adv-btn" onClick={() => ops?.onRow?.(i, { adv: !r.adv })}>
+                <button type="button" className="btn btn-sm adv-btn" onClick={() => ops?.onRow?.(i, { adv: !r.adv })}>
                   {r.adv ? '收起' : '高级'}
                 </button>
               ) : (
@@ -421,71 +423,64 @@ export default function SettingsPanel({ onClose }: Props) {
   const transOk = transRows.length > 1 && transRows[1].result.includes('已配置');
 
   return (
-    <div
-      className="settings-overlay"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    <Modal
+      width={1080}
+      className="settings-modal"
+      onClose={onClose}
+      closeOnBackdrop={false}
+      title={<span className="settings-title">设置<small>模型配置、环境安装和更多设置</small></span>}
     >
-      <div className="settings-panel" role="dialog" aria-modal="true" aria-label="设置">
-        <div className="settings-head">
-          <div>
-            <h2 className="settings-title">设置</h2>
-            <div className="settings-sub">模型配置 · 环境安装 · 更多设置</div>
-          </div>
-          <div className="settings-actions">
-            <button
-              className="btn btn-sm btn-primary"
-              onClick={() => void saveCurrent()}
-              disabled={saving || sec !== 'model'}
-            >
-              {saving ? '保存中…' : '保存配置'}
-            </button>
-            <button
-              className="btn btn-sm"
-              onClick={() => void doSelftest(sec === 'model' ? chan : 'all')}
-              disabled={testing}
-            >
-              {testing ? '自测中…' : '全部自测'}
-            </button>
-            <button className="settings-close" onClick={onClose} title="关闭（Esc）">✕</button>
-          </div>
-        </div>
+      <div className="settings-actions">
+        <Button
+          variant="primary"
+          size="sm"
+          loading={saving}
+          onClick={() => void saveCurrent()}
+          disabled={sec !== 'model'}
+        >
+          {saving ? '保存中…' : '保存配置'}
+        </Button>
+        <Button
+          size="sm"
+          onClick={() => void doSelftest(sec === 'model' ? chan : 'all')}
+          disabled={testing}
+        >
+          {testing ? '自测中…' : '全部自测'}
+        </Button>
+        <Button variant="ghost" size="sm" aria-label="关闭设置" onClick={onClose}>关闭</Button>
+      </div>
+      <div className="settings-shell">
 
         <div className="settings-body">
           <nav className="settings-nav">
             <button className={`snav${sec === 'model' ? ' active' : ''}`} onClick={() => setSec('model')}>
-              <IconSlidersHorizontal size={16} />模型配置<small>六个通道</small>
+              <IconSlidersHorizontal size={16} /><span className="snav-label">模型配置</span><Tag>六个通道</Tag>
             </button>
             <button className={`snav${sec === 'env' ? ' active' : ''}`} onClick={() => setSec('env')}>
-              <IconPackage size={16} />环境安装<small>{total ? (okCount === total ? '全就绪' : `${okCount}/${total}`) : '…'}</small>
+              <IconPackage size={16} /><span className="snav-label">环境安装</span><Tag tone={total > 0 && okCount === total ? 'ok' : 'neutral'}>{total ? (okCount === total ? '全就绪' : `${okCount}/${total}`) : '…'}</Tag>
             </button>
             <button className={`snav${sec === 'more' ? ' active' : ''}`} onClick={() => setSec('more')}>
-              <IconEllipsis size={16} />更多设置
+              <IconEllipsis size={16} /><span className="snav-label">更多设置</span>
             </button>
           </nav>
 
           <div className="settings-main">
             {sec === 'model' && (
               <section className="st-sec active">
-                <div className="tabbar">
-                  {CHANNELS.map((c) => (
-                    <button key={c.id} className={`tab${chan === c.id ? ' active' : ''}`} onClick={() => setChan(c.id)}>
-                      <span className="cdot" />{c.label}
-                    </button>
-                  ))}
-                </div>
+                <Tabs ariaLabel="模型通道" items={CHANNELS.map((c) => ({ key: c.id, label: c.label }))} value={chan} onChange={setChan} />
                 {savedNote ? <div className={`save-note${savedNote.startsWith('保存失败') || savedNote.startsWith('没有') ? ' err' : ''}`}>{savedNote}</div> : null}
 
                 {chan === 'chat' && (
                   <section className="st-panel active">
                     <div className="panel-top">
-                      <span className={`pill ${chatOk ? 'ok' : 'off'}`}><span className="dot" />{chatOk ? '主通道在线' : '未配置'}</span>
+                      <StatusDot tone={chatOk ? 'ok' : 'idle'}>{chatOk ? '主通道在线' : '未配置'}</StatusDot>
                       <span className="desc">经本地网关路由（主备自动降级）</span>
                       {selftest && <span className="desc">上次自测 {hhmm(selftest.testedAt)}</span>}
                       <span className="spacer" />
-                      <button className="btn btn-sm" onClick={() => void doSelftest('chat')} disabled={testing}>自测本通道</button>
+                      <Button size="sm" onClick={() => void doSelftest('chat')} disabled={testing}>自测本通道</Button>
                     </div>
                     {renderBoard(chatRows, { onRow: (i, p) => updateRow(setChatRows, i, p), onPrimary: setPrimaryRow, onRemove: removeRow })}
-                    <div className="add-row" onClick={addProvider}>＋ 添加供应商（填名称 / 模型 / Base URL / Key；点「设为主」切换生效通道）</div>
+                    <button type="button" className="add-row" onClick={addProvider}>＋ 添加供应商（填名称 / 模型 / Base URL / Key；点「设为主」切换生效通道）</button>
                     <div className="foot-note">改完点右上角「保存配置」（key 留空=不改）；自动降级链随统一网关接入开放。</div>
                   </section>
                 )}
@@ -493,10 +488,10 @@ export default function SettingsPanel({ onClose }: Props) {
                 {chan === 'transcribe' && (
                   <section className="st-panel active">
                     <div className="panel-top">
-                      <span className={`pill ${transOk ? 'ok' : 'warn'}`}><span className="dot" />{transOk ? '主通道在线' : (localReady ? '本地兜底生效' : '备用待安装')}</span>
+                      <StatusDot tone={transOk ? 'ok' : 'warn'}>{transOk ? '主通道在线' : (localReady ? '本地兜底生效' : '备用待安装')}</StatusDot>
                       <span className="desc">三级链：自带字幕 → API → 本地兜底</span>
                       <span className="spacer" />
-                      <button className="btn btn-sm" onClick={() => void doSelftest('transcribe')} disabled={testing}>自测本通道</button>
+                      <Button size="sm" onClick={() => void doSelftest('transcribe')} disabled={testing}>自测本通道</Button>
                     </div>
                     {renderBoard([...transRows, localRow], { onRow: (i, p) => updateRow(setTransRows, i, p) })}
                     <div className="foot-note">有字幕不下模型；API 通道缺 key 自动落到本地 whisper（本地组件在「环境安装」页装）。保存即写入 .env 生效。</div>
@@ -506,7 +501,7 @@ export default function SettingsPanel({ onClose }: Props) {
                 {chan === 'speech' && (
                   <section className="st-panel active">
                     <div className="panel-top">
-                      <span className={`pill ${mediaOk('speech') ? 'ok' : 'off'}`}><span className="dot" />{mediaOk('speech') ? '有可用提供商' : '未配置'}</span>
+                      <StatusDot tone={mediaOk('speech') ? 'ok' : 'idle'}>{mediaOk('speech') ? '有可用提供商' : '未配置'}</StatusDot>
                       <span className="desc">只填 Key 即用（地址/模型内建）；「主/备」= 默认</span>
                       <span className="spacer" />
                     </div>
@@ -518,7 +513,7 @@ export default function SettingsPanel({ onClose }: Props) {
                 {chan === 'image' && (
                   <section className="st-panel active">
                     <div className="panel-top">
-                      <span className={`pill ${mediaOk('image') ? 'ok' : 'off'}`}><span className="dot" />{mediaOk('image') ? '已配置' : '未配置'}</span>
+                      <StatusDot tone={mediaOk('image') ? 'ok' : 'idle'}>{mediaOk('image') ? '已配置' : '未配置'}</StatusDot>
                       <span className="desc">只填 Key 即用（地址/模型内建，点「高级」可覆盖）</span>
                       <span className="spacer" />
                     </div>
@@ -530,7 +525,7 @@ export default function SettingsPanel({ onClose }: Props) {
                 {chan === 'video' && (
                   <section className="st-panel active">
                     <div className="panel-top">
-                      <span className={`pill ${mediaOk('video') ? 'ok' : 'off'}`}><span className="dot" />{mediaOk('video') ? '有可用提供商' : '未配置'}</span>
+                      <StatusDot tone={mediaOk('video') ? 'ok' : 'idle'}>{mediaOk('video') ? '有可用提供商' : '未配置'}</StatusDot>
                       <span className="desc">只填 Key 即用（地址/模型内建，点「高级」可覆盖）；「主/备」= 默认</span>
                       <span className="spacer" />
                     </div>
@@ -542,7 +537,7 @@ export default function SettingsPanel({ onClose }: Props) {
                 {chan === 'music' && (
                   <section className="st-panel active">
                     <div className="panel-top">
-                      <span className={`pill ${mediaOk('music') ? 'ok' : 'off'}`}><span className="dot" />{mediaOk('music') ? '有可用提供商' : '未配置'}</span>
+                      <StatusDot tone={mediaOk('music') ? 'ok' : 'idle'}>{mediaOk('music') ? '有可用提供商' : '未配置'}</StatusDot>
                       <span className="desc">只填 Key 即用；「主/备」= 默认</span>
                       <span className="spacer" />
                     </div>
@@ -574,12 +569,12 @@ export default function SettingsPanel({ onClose }: Props) {
             {sec === 'more' && (
               <section className="st-sec active">
                 <div className="panel-top">
-                  <span className="pill off"><span className="dot" />可扩展位</span>
+                  <StatusDot tone="idle">可扩展位</StatusDot>
                   <span className="desc">同一个面板，以后放更多设置</span>
                 </div>
                 <div className="board">
-                  <div className="stub-row"><span className="tag2">预留</span>网关参数（端口 / 绑定 / 会话）<span className="future">就挂在这页旁边</span></div>
-                  <div className="stub-row"><span className="tag2">预留</span>通用设置（语言 / 更新 / 数据目录）<span className="future">按需加</span></div>
+                  <div className="stub-row"><Tag>预留</Tag>网关参数（端口 / 绑定 / 会话）<span className="future">就挂在这页旁边</span></div>
+                  <div className="stub-row"><Tag>预留</Tag>通用设置（语言 / 更新 / 数据目录）<span className="future">按需加</span></div>
                 </div>
                 <div className="foot-note">扩展方式：在这个面板里加标签即可——模型、环境已各就位，其余按需加。</div>
               </section>
@@ -588,9 +583,9 @@ export default function SettingsPanel({ onClose }: Props) {
         </div>
 
         <div className="settings-foot">
-          ⓘ 环境安装在后台执行，装完自动回写状态；模型配置保存写入 .env（对话经本地网关路由，主备自动降级）。
+          环境安装在后台执行，装完自动回写状态；模型配置保存写入 .env（对话经本地网关路由，主备自动降级）。
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

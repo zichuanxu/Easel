@@ -1,9 +1,14 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import type { CSSProperties } from 'react';
 import { fetchOutputs, fetchOutputContent, mediaUrl, deleteOutput } from '../lib/api';
 import type { OutputNode, OutputMeta } from '../lib/api';
 import { renderMarkdown } from '../lib/sanitize';
-import { IconOutputs, IconImage, IconVideo, IconMusic, IconFile, IconFolder, IconRefresh, IconChevron, IconTrash } from './icons';
+import { IconImage, IconVideo, IconMusic, IconFile, IconFolder, IconRefresh, IconChevron, IconTrash } from './icons';
+import PageHeader from './ui/PageHeader';
+import Button from './ui/Button';
+import Tag from './ui/Tag';
+import type { TagTone } from './ui/Tag';
+import Tabs from './ui/Tabs';
+import EmptyState from './ui/EmptyState';
 
 const FILTERS: { key: string; label: string }[] = [
   { key: 'all', label: '全部' },
@@ -18,15 +23,7 @@ const KIND_LABEL: Record<string, string> = {
   poster: '海报', audio: '音频', other: '其他',
 };
 const STATUS_LABEL: Record<string, string> = { draft: '草稿', ready: '待发', published: '已发' };
-const STATUS_COLOR: Record<string, string> = { draft: '#94a3b8', ready: '#d97706', published: '#16a34a' };
-
-const badge: CSSProperties = {
-  fontSize: 11, padding: '1px 7px', borderRadius: 999,
-  background: 'rgba(0,0,0,0.05)', color: 'var(--text-secondary)', whiteSpace: 'nowrap',
-};
-const statusBadge = (s: string): CSSProperties => ({
-  ...badge, background: `${STATUS_COLOR[s] || '#94a3b8'}22`, color: STATUS_COLOR[s] || '#64748b',
-});
+const STATUS_TONE: Record<string, TagTone> = { draft: 'neutral', ready: 'warn', published: 'ok' };
 
 function kindIcon(kind: string | undefined, size = 30) {
   if (kind === 'video') return <IconVideo size={size} />;
@@ -132,8 +129,7 @@ export default function OutputsPage({ jumpPath, onJumpHandled }: OutputsPageProp
   const enterDir = useCallback((name: string) => { setStack((s) => [...s, name]); setFilter('all'); }, []);
   const goTo = useCallback((depth: number) => { setStack((s) => s.slice(0, depth)); setFilter('all'); }, []);
 
-  const remove = useCallback(async (node: OutputNode, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const remove = useCallback(async (node: OutputNode) => {
     const isDir = node.type === 'dir';
     const label = isDir ? `项目/文件夹「${node.meta?.title || node.name}」及其全部内容` : `文件「${node.name}」`;
     if (!window.confirm(`确定删除${label}？\n此操作不可恢复。`)) return;
@@ -161,24 +157,23 @@ export default function OutputsPage({ jumpPath, onJumpHandled }: OutputsPageProp
   const preview = () => {
     if (!selected) return null;
     const url = mediaUrl(selected.path);
-    if (selected.kind === 'image') return <img src={url} alt={selected.name} style={{ maxWidth: '100%', borderRadius: 'var(--radius)' }} />;
-    if (selected.kind === 'video') return <video src={url} controls style={{ maxWidth: '100%', borderRadius: 'var(--radius)' }} />;
-    if (selected.kind === 'audio') return <audio src={url} controls style={{ width: '100%' }} />;
+    if (selected.kind === 'image') return <img className="outputs-media" src={url} alt={selected.name} />;
+    if (selected.kind === 'video') return <video className="outputs-media" src={url} controls />;
+    if (selected.kind === 'audio') return <audio className="outputs-audio" src={url} controls />;
     if (selected.kind === 'text' && isHtml(selected.name)) return (
       <>
         {/* allow-scripts：让预览页自带的「复制到公众号」按钮(execCommand('copy'))能运行；
             allow="clipboard-write"：授予剪贴板写权限。不给 allow-same-origin —— iframe 保持
             opaque origin，脚本跑得起来但访问不到本站，安全。(修复：内嵌预览里复制按钮点了没反应) */}
-        <iframe src={`${url}?v=${selected.mtime ?? 0}`} title={selected.name} sandbox="allow-scripts" allow="clipboard-write"
-          style={{ width: '100%', height: '68vh', border: '1px solid var(--border)', borderRadius: 'var(--radius)', background: '#fff' }} />
-        <div style={{ marginTop: 8 }}><a href={url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-start)', fontSize: 13 }}>在新标签打开 ↗</a></div>
+        <iframe className="outputs-iframe" src={`${url}?v=${selected.mtime ?? 0}`} title={selected.name} sandbox="allow-scripts" allow="clipboard-write" />
+        <div className="outputs-open"><a href={url} target="_blank" rel="noreferrer">在新标签打开</a></div>
       </>
     );
     if (selected.kind === 'text') {
       if (loading) return <div className="loading"><div className="spinner" />加载中…</div>;
       return <div className="outputs-viewer-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }} />;
     }
-    return <div style={{ color: 'var(--text-secondary)', fontSize: 14 }}>无法预览。<a href={url} download style={{ color: 'var(--accent-start)' }}>下载 {selected.name}</a></div>;
+    return <div className="outputs-nopreview">无法预览。<a href={url} download>下载 {selected.name}</a></div>;
   };
 
   /** 项目/文件夹卡片：顶层项目用展示头（标题/平台/状态/封面），嵌套子文件夹回退朴素样式。 */
@@ -186,109 +181,98 @@ export default function OutputsPage({ jumpPath, onJumpHandled }: OutputsPageProp
     const m = d.meta;
     const cover = coverNode(m) || firstMedia(d);
     return (
-      <div key={d.path} className="card card-hover gcard" onClick={() => enterDir(d.name)}>
+      <div key={d.path} className="card card-hover gcard">
+        <button type="button" className="gcard-main" onClick={() => enterDir(d.name)}>
         <div className="gcard-thumb">
-          <span className="gcard-kind">{m?.kind ? (KIND_LABEL[m.kind] || m.kind) : '文件夹'}</span>
-          <button className="gcard-del" title="删除" onClick={(e) => remove(d, e)}><IconTrash size={14} /></button>
+          <span className="gcard-kind"><Tag>{m?.kind ? (KIND_LABEL[m.kind] || m.kind) : '文件夹'}</Tag></span>
           {cover ? <Thumb f={cover} big /> : <div className="gcard-ph"><IconFolder size={38} /></div>}
         </div>
         <div className="gcard-meta">
           <div className="gcard-name" title={m?.title || d.name}>
             {!m && <IconFolder size={13} />} {m?.title || d.name}
           </div>
-          <div className="gcard-sub" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-            {m?.platform && <span style={badge}>{m.platform}</span>}
-            {m?.status && <span style={statusBadge(m.status)}>{STATUS_LABEL[m.status] || m.status}</span>}
+          <div className="gcard-sub">
+            {m?.platform && <Tag>{m.platform}</Tag>}
+            {m?.status && <Tag tone={STATUS_TONE[m.status] || 'neutral'}>{STATUS_LABEL[m.status] || m.status}</Tag>}
             <span>{d.fileCount ?? 0} 个文件</span>
           </div>
         </div>
+        </button>
+        <button type="button" className="gcard-del" title="删除" aria-label="删除" onClick={() => remove(d)}><IconTrash size={14} /></button>
       </div>
     );
   };
 
   const renderFile = (f: OutputNode) => (
-    <div key={f.path} className="card card-hover gcard" onClick={() => open(f)}>
-      <div className="gcard-thumb">
-        <span className="gcard-kind">{kindLabel(f)}</span>
-        <button className="gcard-del" title="删除" onClick={(e) => remove(f, e)}><IconTrash size={14} /></button>
-        <Thumb f={f} />
-      </div>
-      <div className="gcard-meta">
-        <div className="gcard-name" title={f.name}>{f.name}</div>
-      </div>
+    <div key={f.path} className="card card-hover gcard">
+      <button type="button" className="gcard-main" onClick={() => open(f)}>
+        <div className="gcard-thumb">
+          <span className="gcard-kind"><Tag>{kindLabel(f)}</Tag></span>
+          <Thumb f={f} />
+        </div>
+        <div className="gcard-meta">
+          <div className="gcard-name" title={f.name}>{f.name}</div>
+        </div>
+      </button>
+      <button type="button" className="gcard-del" title="删除" aria-label="删除" onClick={() => remove(f)}><IconTrash size={14} /></button>
     </div>
   );
 
   const empty = dirs.length === 0 && files.length === 0;
 
   return (
-    <div className="gallery-page">
-      <div className="gallery-head">
-        <div>
-          <h1 className="page-title">
-            <IconOutputs size={21} />
-            <span className="crumb" onClick={() => goTo(0)}>内容库</span>
-            {stack.map((name, i) => (
-              <span key={i}>
-                <span className="crumb-sep">/</span>
-                {i === stack.length - 1
-                  ? (projectMeta?.title && i === 0 ? projectMeta.title : name)
-                  : <span className="crumb" onClick={() => goTo(i + 1)}>{name}</span>}
-              </span>
-            ))}
-          </h1>
-          <p className="page-subtitle">
-            {atTop
-              ? `按项目归档，共 ${roots.length} 个项目。点项目进去看成品与素材。`
-              : `${dirs.length} 个文件夹 · ${files.length} 个文件（可继续点开子文件夹）`}
-          </p>
-        </div>
-        <button className="btn btn-sm" onClick={load}><IconRefresh size={14} /> 刷新</button>
-      </div>
+    <div className="page-scroll gallery-page">
+      <PageHeader
+        layer="produce"
+        title={<>
+          <button type="button" className="crumb" onClick={() => goTo(0)}>内容库</button>
+          {stack.map((name, i) => (
+            <span key={i}>
+              <span className="crumb-sep">/</span>
+              {i === stack.length - 1
+                ? (projectMeta?.title && i === 0 ? projectMeta.title : name)
+                : <button type="button" className="crumb" onClick={() => goTo(i + 1)}>{name}</button>}
+            </span>
+          ))}
+        </>}
+        description={atTop
+          ? `按项目归档，共 ${roots.length} 个项目。点项目进去看成品与素材。`
+          : `${dirs.length} 个文件夹 · ${files.length} 个文件（可继续点开子文件夹）`}
+        actions={<Button size="sm" icon={<IconRefresh size={14} />} onClick={load}>刷新</Button>}
+      />
 
       {treeError && <div className="notice-error">{treeError}</div>}
 
       {/* 项目主题标签（进入项目根时展示） */}
       {atProjectRoot && projectMeta?.tags && projectMeta.tags.length > 0 && (
-        <div className="gallery-filters" style={{ marginBottom: 4 }}>
-          {projectMeta.tags.map((t) => <span key={t} style={badge}>#{t}</span>)}
+        <div className="gallery-filters">
+          {projectMeta.tags.map((t) => <Tag key={t}>#{t}</Tag>)}
         </div>
       )}
 
       {/* 面包屑返回 + 文件过滤（进入任意层后显示） */}
       {stack.length > 0 && (
         <div className="gallery-filters">
-          <button className="btn btn-sm" onClick={() => goTo(stack.length - 1)}>
-            <span style={{ transform: 'rotate(180deg)', display: 'inline-flex' }}><IconChevron size={13} /></span> 返回上级
-          </button>
-          {files.length > 0 && FILTERS.map((f) => (
-            <button key={f.key} className={`chip ${filter === f.key ? 'active' : ''}`} onClick={() => setFilter(f.key)}>{f.label}</button>
-          ))}
+          <Button size="sm" icon={<span className="gallery-back"><IconChevron size={13} /></span>} onClick={() => goTo(stack.length - 1)}>返回上级</Button>
+          {files.length > 0 && <Tabs size="sm" ariaLabel="文件类型" items={FILTERS} value={filter} onChange={setFilter} />}
         </div>
       )}
 
       {empty && !treeError ? (
-        <div className="empty-state" style={{ height: 300 }}>
-          <div className="empty-icon"><IconOutputs size={44} /></div>
-          <p>{atTop ? '还没有产物——去对话或技能库生成第一条内容吧' : '这个文件夹是空的'}</p>
-        </div>
+        <EmptyState text={atTop ? '还没有产物——去对话或技能库生成第一条内容吧' : '这个文件夹是空的'} />
       ) : hasSplit ? (
         <>
           {/* 成品区 */}
           {deliverableFiles.length > 0 && (
             <>
-              <div className="section-label" style={{ margin: '6px 0 8px', fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
-                成品 · {deliverableFiles.length}
-              </div>
+              <div className="outputs-section">成品 · {deliverableFiles.length}</div>
               <div className="gallery-grid">{deliverableFiles.map(renderFile)}</div>
             </>
           )}
           {/* 素材 / 过程文件区 */}
           {(dirs.length > 0 || restFiles.length > 0) && (
             <>
-              <div className="section-label" style={{ margin: '18px 0 8px', fontSize: 13, fontWeight: 600, color: 'var(--text-tertiary)' }}>
-                素材 / 过程文件
-              </div>
+              <div className="outputs-section outputs-section-later">素材 / 过程文件</div>
               <div className="gallery-grid">
                 {dirs.map(renderDir)}
                 {restFiles.map(renderFile)}
@@ -306,16 +290,16 @@ export default function OutputsPage({ jumpPath, onJumpHandled }: OutputsPageProp
       {selected && (
         <div className="drawer-overlay" onClick={() => setSelected(null)}>
           <div className="drawer" onClick={(e) => e.stopPropagation()}>
-            <div className="drawer-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ minWidth: 0 }}>
-                <div className="skill-detail-title" style={{ fontSize: 16 }}>{selected.name}</div>
-                <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 3, fontFamily: "'SF Mono','Consolas',monospace" }}>{selected.path}</div>
+            <div className="drawer-header outputs-drawer-head">
+              <div className="outputs-drawer-name">
+                <h3 className="outputs-drawer-title">{selected.name}</h3>
+                <div className="outputs-drawer-path">{selected.path}</div>
               </div>
-              <button className="icon-btn" onClick={() => setSelected(null)}>×</button>
+              <button className="icon-btn" aria-label="关闭" onClick={() => setSelected(null)}>×</button>
             </div>
             <div className="drawer-body">{preview()}</div>
-            <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end' }}>
-              <button className="btn btn-sm btn-danger" onClick={(e) => remove(selected, e)}><IconTrash size={13} /> 删除此文件</button>
+            <div className="outputs-drawer-foot">
+              <Button variant="danger" size="sm" icon={<IconTrash size={13} />} onClick={() => remove(selected)}>删除此文件</Button>
             </div>
           </div>
         </div>

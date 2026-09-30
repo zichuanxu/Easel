@@ -1,0 +1,58 @@
+.dash-page { padding: 30px 36px 40px; }
+.dash-head { display: flex; align-items: flex-end; gap: var(--sp-4); }
+.dash-greet { font-family: var(--font-serif); font-weight: 600; font-size: 28px; letter-spacing: 0.5px; }
+.dash-head > div:first-child { min-width: 0; }
+.dash-date { margin-top: var(--sp-1); font-size: var(--fs-13); color: var(--c-ink-3); display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.dash-date-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-date .ui-tag { flex: none; }
+.dash-actions { margin-left: auto; display: flex; gap: var(--sp-2); }
+
+.pipe { margin-top: var(--sp-6); display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: var(--r-panel); overflow: hidden; }
+.pipe-stage { display: flex; flex-direction: column; align-items: flex-start; padding: 0 18px 16px; border-right: 1px solid var(--c-rule); min-width: 0; }
+.pipe-stage:last-child { border-right: 0; }
+.pipe-band { align-self: stretch; height: 5px; margin: 0 -18px 14px; background: var(--layer-general); }
+.pipe-stage[data-stage="discover"] .pipe-band { background: var(--layer-discover); }
+.pipe-stage[data-stage="plan"] .pipe-band { background: var(--layer-plan); }
+.pipe-stage[data-stage="produce"] .pipe-band { background: var(--layer-produce); }
+.pipe-stage[data-stage="publish"] .pipe-band { background: var(--layer-publish); }
+.pipe-stage[data-stage="attribute"] .pipe-band { background: var(--layer-attribute); }
+.pipe-stage-name { font-family: var(--font-serif); font-weight: 600; font-size: var(--fs-14); }
+.pipe-stage[data-stage="discover"] .pipe-stage-name { color: var(--layer-discover-text); }
+.pipe-stage[data-stage="plan"] .pipe-stage-name { color: var(--layer-plan-text); }
+.pipe-stage[data-stage="produce"] .pipe-stage-name { color: var(--layer-produce-text); }
+.pipe-stage[data-stage="publish"] .pipe-stage-name { color: var(--layer-publish-text); }
+.pipe-stage[data-stage="attribute"] .pipe-stage-name { color: var(--layer-attribute-text); }
+.pipe-stage-num { margin-top: var(--sp-2); font-family: var(--font-serif); font-weight: 600; font-size: var(--fs-34); line-height: 1.15; font-variant-numeric: lining-nums tabular-nums; }
+.pipe-stage-label { font-size: var(--fs-13); color: var(--c-ink-2); }
+.pipe-stage-link { margin-top: var(--sp-3); padding: 0; background: none; border: none; border-bottom: 1px solid var(--c-rule-strong); font-size: var(--fs-12); color: var(--c-ink-2); cursor: pointer; }
+.pipe-stage-link:hover { color: var(--c-ink); border-bottom-color: var(--c-ink); }
+
+.dash-cols { display: grid; grid-template-columns: 3fr 2fr; gap: var(--sp-4); margin-top: var(--sp-4); align-items: start; }
+.dash-stack { display: grid; gap: var(--sp-4); }
+/* 列表区按满行数预留高度：数据到达前后（空、部分、满）面板高度不变，下面的内容不跳 */
+.dash-list { display: flex; flex-direction: column; min-height: 191px; } /* 191 ≈ 5 行 × 38.1（14px×1.65 行高 + 上下 7px 内边距 + 1px 虚线） */
+.dash-list-hot { min-height: 437px; } /* 437 ≈ 2 组 ×（标签 21.8 + 5 行 × 38.1）+ 组间距 12 */
+/* 空态：透明底、虚线框，填满预留高度并居中，不像加载骨架 */
+.dash-list > .ui-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; background: transparent; border: 1px dashed var(--c-rule); border-radius: var(--r-panel); }
+.hot-group + .hot-group { margin-top: var(--sp-3); }
+.hot-plat { font-size: var(--fs-12); color: var(--c-ink-3); margin-bottom: 2px; }
+.hot-row, .dash-row {
+  display: flex; align-items: baseline; gap: var(--sp-2); width: 100%; min-width: 0;
+  padding: 7px 0; background: none; border: none; border-bottom: 1px dashed var(--c-rule);
+  text-align: left; cursor: pointer; color: var(--c-ink); font-size: var(--fs-14);
+}
+.hot-row:last-child, .dash-row:last-child { border-bottom: 0; }
+.hot-rank { width: 20px; flex: none; font-family: var(--font-serif); font-weight: 600; color: var(--layer-discover-text); font-variant-numeric: tabular-nums; }
+.hot-title, .dash-row-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hot-act { font-size: var(--fs-12); color: var(--c-ink-3); opacity: 0; transition: opacity var(--t-fast); }
+.hot-row:hover .hot-act, .hot-row:focus-visible .hot-act { opacity: 1; }
+.hot-row:hover .hot-title, .dash-row:hover .dash-row-title { text-decoration: underline; text-underline-offset: 3px; }
+.dash-row-date { flex: none; font-size: var(--fs-12); color: var(--c-ink-3); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 1180px) {
+  .pipe { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .pipe-stage:nth-child(3) { border-right: 0; }
+  .pipe-stage:nth-child(n+4) { border-top: 1px solid var(--c-rule); }
+  .dash-cols { grid-template-columns: 1fr; }
+}
+

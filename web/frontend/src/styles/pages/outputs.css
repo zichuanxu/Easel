@@ -1,0 +1,59 @@
+/* 生产层：内容库（项目画廊 + 文件预览抽屉） */
+.gallery-page { padding: 26px 34px 40px; }
+.gallery-page .page-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 4px; }
+.gallery-filters { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin: 0 0 var(--sp-4); }
+.gallery-back { display: inline-flex; transform: rotate(180deg); }
+.gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+
+/* 面包屑（标题内） */
+.crumb { cursor: pointer; color: var(--c-ink-2); background: none; border: none; padding: 0; font: inherit; }
+.crumb:hover { color: var(--c-ink); text-decoration: underline; text-underline-offset: 4px; }
+.crumb-sep { color: var(--c-ink-3); margin: 0 4px; font-weight: 400; }
+
+.outputs-section { margin: 0 0 var(--sp-2); font-family: var(--font-serif); font-size: var(--fs-14); font-weight: 600; color: var(--c-ink-2); }
+.outputs-section-later { margin-top: var(--sp-6); color: var(--c-ink-3); }
+
+/* 画廊卡片 */
+.gcard { position: relative; padding: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: var(--r-panel); }
+.gcard-main {
+  display: flex; flex-direction: column; flex: 1; min-width: 0; margin: 0; padding: 0;
+  border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer;
+}
+.gcard-main:focus-visible { outline-offset: -2px; }
+.gcard-thumb { position: relative; aspect-ratio: 4/3; background: var(--c-sunken); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.gcard-thumb img, .gcard-thumb video { width: 100%; height: 100%; object-fit: cover; }
+.gcard-ph { color: var(--c-ink-3); display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.gcard-kind { position: absolute; top: 8px; left: 8px; z-index: 1; }
+.gcard-meta { padding: 10px 12px; }
+.gcard-name { font-family: var(--font-serif); font-size: var(--fs-14); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gcard-sub { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: var(--fs-12); color: var(--c-ink-3); }
+.gcard-del {
+  position: absolute; top: 6px; right: 6px; z-index: 2; width: 26px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center; padding: 0; opacity: 0;
+  border-radius: var(--r-control); border: 1px solid var(--c-rule); background: var(--c-surface); color: var(--c-ink-2);
+  cursor: pointer; transition: opacity var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+.gcard:hover .gcard-del, .gcard:focus-within .gcard-del { opacity: 1; }
+@media (hover: none) { .gcard-del { opacity: 1; } }
+.gcard-del:hover { color: var(--c-danger); border-color: var(--c-danger); }
+
+/* 预览抽屉 */
+.outputs-drawer-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
+.outputs-drawer-name { min-width: 0; }
+.outputs-drawer-title { font-size: var(--fs-16); overflow-wrap: anywhere; }
+.outputs-drawer-path { margin-top: 3px; font-family: var(--font-mono); font-size: var(--fs-12); color: var(--c-ink-3); overflow-wrap: anywhere; }
+.outputs-drawer-foot { padding: 10px var(--sp-4); border-top: 1px solid var(--c-rule); display: flex; justify-content: flex-end; }
+.outputs-media { max-width: 100%; border-radius: var(--r-control); }
+.outputs-audio { width: 100%; }
+.outputs-iframe { width: 100%; height: 68vh; border: 1px solid var(--c-rule); border-radius: var(--r-control); background: var(--c-surface); }
+.outputs-open { margin-top: var(--sp-2); font-size: var(--fs-13); }
+.outputs-open a, .outputs-nopreview a { color: var(--c-ink); text-decoration: underline; text-underline-offset: 3px; }
+.outputs-nopreview { color: var(--c-ink-2); font-size: var(--fs-14); }
+
+/* 文本预览的 markdown */
+.outputs-viewer-content { font-size: var(--fs-14); line-height: 1.65; color: var(--c-ink); }
+.outputs-viewer-content h1, .outputs-viewer-content h2, .outputs-viewer-content h3 { font-family: var(--font-serif); font-weight: 600; margin: 18px 0 8px; }
+.outputs-viewer-content p { margin: 0 0 8px; }
+.outputs-viewer-content pre { background: var(--c-sunken); border-radius: var(--r-control); padding: 14px 16px; margin: 10px 0; overflow-x: auto; overflow-y: hidden; font-size: var(--fs-13); }
+.outputs-viewer-content code { background: var(--c-sunken); padding: 2px 6px; border-radius: var(--r-control); font-family: var(--font-mono); font-size: 0.9em; }
+.outputs-viewer-content pre code { background: none; padding: 0; }

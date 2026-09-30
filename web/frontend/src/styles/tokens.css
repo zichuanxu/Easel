@@ -1,0 +1,94 @@
+/* ============================================================
+ * 设计变量：颜色只允许在这个文件里出现
+ * 规格：docs/superpowers/specs/2026-09-30-frontend-redesign-design.md §2
+ * ============================================================ */
+:root {
+  /* ---- 中性色 ---- */
+  --c-canvas: #F6F7F5;       /* 应用底色（画布） */
+  --c-surface: #FFFFFF;      /* 面板、输入框、弹窗（纸面） */
+  --c-side: #EEF0EC;         /* 主侧栏 */
+  --c-sunken: #F2F3F0;       /* 页内次级栏、空状态底 */
+  --c-tint: #EEF0EC;         /* 用户消息气泡 */
+  --c-hover: rgba(31, 35, 40, 0.05);
+  --c-rule: #E3E6E1;
+  --c-rule-strong: #D2D6D0;
+  --c-ink: #1F2328;
+  --c-ink-hover: #343A42;
+  --c-ink-2: #4B5159;
+  --c-ink-3: #676D75;
+  --c-on-ink: #FFFFFF;
+  --c-scrim: rgba(31, 35, 40, 0.38);
+
+  /* ---- 层色（矿物色）：本色 / 文字色 / 浅底 ---- */
+  --layer-discover: #2F4E9C;
+  --layer-discover-text: #2F4E9C;
+  --layer-discover-soft: rgba(47, 78, 156, 0.12);
+  --layer-plan: #9A6034;
+  --layer-plan-text: #8A5530;
+  --layer-plan-soft: rgba(154, 96, 52, 0.12);
+  --layer-produce: #C8412E;
+  --layer-produce-text: #B23A29;
+  --layer-produce-soft: rgba(200, 65, 46, 0.12);
+  --layer-publish: #3E8E6E;
+  --layer-publish-text: #2F7358;
+  --layer-publish-soft: rgba(62, 142, 110, 0.12);
+  --layer-attribute: #D9A21B;
+  --layer-attribute-text: #8A650C;
+  --layer-attribute-soft: rgba(217, 162, 27, 0.14);
+  --layer-general: #868C94;
+  --layer-general-text: #4B5159;
+  --layer-general-soft: rgba(134, 140, 148, 0.14);
+
+  /* ---- 语义色（复用层色） ---- */
+  --c-ok: #3E8E6E;
+  --c-ok-text: #2F7358;      /* 文字用；--c-ok 只用于圆点、边框、色条 */
+  --c-ok-soft: rgba(62, 142, 110, 0.12);
+  --c-warn: #8A650C;
+  --c-warn-soft: rgba(217, 162, 27, 0.14);
+  --c-danger: #B4312A;
+  --c-danger-soft: rgba(180, 49, 42, 0.10);
+  --c-focus: #1F2328;
+
+  /* ---- 字体 ---- */
+  --font-brand: 'Bodoni Moda', 'Didot', 'Bodoni 72', serif;
+  --font-serif: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'SF Mono', Menlo, Consolas, monospace;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-20: 20px;
+  --fs-26: 26px;
+  --fs-34: 34px;
+  --lh-body: 1.65;
+  --lh-title: 1.25;
+
+  /* ---- 间距（4px 基准） ---- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /* ---- 圆角 / 阴影 / 动效 ---- */
+  --r-control: 6px;
+  --r-panel: 10px;
+  --r-overlay: 14px;
+  --shadow-overlay: 0 24px 60px -20px rgba(31, 35, 40, 0.35), 0 2px 8px rgba(31, 35, 40, 0.08);
+  --shadow-pop: 0 12px 32px -12px rgba(31, 35, 40, 0.28);
+  --shadow-composer: 0 8px 24px -16px rgba(31, 35, 40, 0.30);
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --t-fast: 0.12s var(--ease);
+  --t: 0.2s var(--ease);
+
+  /* ---- 控件高度 ---- */
+  --h-ctl: 34px;
+  --h-ctl-sm: 28px;
+
+  /* ---- 布局 ---- */
+  --sidebar-width: 232px;
+  --sidebar-rail: 64px;
+}

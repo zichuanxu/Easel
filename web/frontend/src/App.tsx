@@ -7,14 +7,18 @@ import OutputsPage from './components/OutputsPage';
 import AccountsPage from './components/AccountsPage';
 import ProfilePage from './components/ProfilePage';
 import DashboardPage from './components/DashboardPage';
+import AnalyticsPage from './components/AnalyticsPage';
 import TrendsPage from './components/TrendsPage';
 import CalendarPage from './components/CalendarPage';
 import IdeasPage from './components/IdeasPage';
 import PublishPage from './components/PublishPage';
 import BreakdownPage from './components/BreakdownPage';
-import SubNav from './components/SubNav';
+import ChatSessionList from './components/ChatSessionList';
+import ChatLayout from './components/ChatLayout';
 import OnboardingWizard from './components/OnboardingWizard';
 import SettingsPanel from './components/SettingsPanel';
+import Modal from './components/ui/Modal';
+import Button from './components/ui/Button';
 import { fetchStatus, fetchPersonas, streamChat, fetchLastTurn, stopChat } from './lib/api';
 import type { PersonaItem, UploadedFile, ChatQuestion } from './lib/api';
 import { questionStatus } from './lib/api';
@@ -690,35 +694,51 @@ export default function App() {
           />
         );
       case 'chat':
-        return activeSession ? (
-          <ChatPage
-            key={activeSession.id}
-            session={activeSession}
-            stream={streams[activeSession.id]}
-            onSend={(displayText, attachments) => handleSendMessage(activeSession.id, displayText, attachments)}
-            onStop={() => handleStopStream(activeSession.id)}
-            onResend={(userIndex, displayText, attachments, legacyAgentText) => handleResend(
-              activeSession.id, userIndex, displayText, attachments, legacyAgentText,
+        return (
+          <ChatLayout
+            sessions={(
+              <ChatSessionList
+                sessions={sessions}
+                activeSessionId={activeSessionId}
+                onSelect={handleSessionSelect}
+                onDelete={handleSessionDelete}
+                onRename={handleSessionRename}
+                onArchive={handleSessionArchive}
+                onNew={handleNewChat}
+              />
             )}
-            onQuestionAnswered={(qid) => {
-              answeredRef.current.add(qid);
-              // 已答题从流式状态中移除——切走/切回会话都不再重现（组件内部 state 会在重挂时清零，只藏不移除没用）
-              const a = streamAcc.current[activeSession.id];
-              if (a) {
-                const before = a.questions.length;
-                const kept = a.questions.filter((q) => q.id !== qid);
-                if (kept.length !== before) {
-                  a.questions = kept;
-                  setStreams((p) => {
-                    const cur = p[activeSession.id];
-                    if (!cur) return p;
-                    return { ...p, [activeSession.id]: { ...cur, questions: [...kept] } };
-                  });
-                }
-              }
-            }}
-          />
-        ) : null;
+          >
+            {activeSession ? (
+              <ChatPage
+                key={activeSession.id}
+                session={activeSession}
+                stream={streams[activeSession.id]}
+                onSend={(displayText, attachments) => handleSendMessage(activeSession.id, displayText, attachments)}
+                onStop={() => handleStopStream(activeSession.id)}
+                onResend={(userIndex, displayText, attachments, legacyAgentText) => handleResend(
+                  activeSession.id, userIndex, displayText, attachments, legacyAgentText,
+                )}
+                onQuestionAnswered={(qid) => {
+                  answeredRef.current.add(qid);
+                  // 已答题从流式状态中移除——切走/切回会话都不再重现（组件内部 state 会在重挂时清零，只藏不移除没用）
+                  const a = streamAcc.current[activeSession.id];
+                  if (a) {
+                    const before = a.questions.length;
+                    const kept = a.questions.filter((q) => q.id !== qid);
+                    if (kept.length !== before) {
+                      a.questions = kept;
+                      setStreams((p) => {
+                        const cur = p[activeSession.id];
+                        if (!cur) return p;
+                        return { ...p, [activeSession.id]: { ...cur, questions: [...kept] } };
+                      });
+                    }
+                  }
+                }}
+              />
+            ) : null}
+          </ChatLayout>
+        );
       case 'trends':
         return <TrendsPage onUseTopic={handleUseTopic} />;
       case 'ideas':
@@ -735,6 +755,8 @@ export default function App() {
         return <OutputsPage jumpPath={outputsJump} onJumpHandled={clearOutputsJump} />;
       case 'accounts':
         return <AccountsPage />;
+      case 'analytics':
+        return <AnalyticsPage onNavigate={setCurrentPage} />;
       case 'profile':
         return <ProfilePage persona={selectedPersona} onNewProfile={() => setShowWizard(true)} onDeleted={handleProfileDeleted} />;
       default:
@@ -772,21 +794,12 @@ export default function App() {
         selectedPersona={selectedPersona}
         onPersonaChange={handlePersonaChange}
         onNewProfile={() => setShowWizard(true)}
-        sessions={sessions}
-        activeSessionId={activeSessionId}
         activeSessionHasMessages={activeSession ? activeSession.messages.length > 0 : false}
-        onSessionSelect={handleSessionSelect}
-        onSessionDelete={handleSessionDelete}
-        onSessionRename={handleSessionRename}
-        onSessionArchive={handleSessionArchive}
-        onNewChat={handleNewChat}
+        activeChatTitle={activeSession && activeSession.messages.length > 0 ? activeSession.title : undefined}
         gatewayStatus={gatewayStatus}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <main className="main-content">
-        {(['trends', 'ideas', 'calendar', 'publish', 'breakdown'] as Page[]).includes(currentPage) && (
-          <SubNav current={currentPage} onNavigate={setCurrentPage} />
-        )}
         <div className="page-host">
           {renderPage()}
         </div>
@@ -794,20 +807,21 @@ export default function App() {
 
       {/* 首次使用：推荐配置画像 */}
       {showRecommend && (
-        <div className="overlay">
-          <div className="modal" style={{ width: 420, maxWidth: '100%', textAlign: 'center' }}>
-            <div style={{ fontSize: 40 }}>👋</div>
-            <h2 style={{ margin: '12px 0 8px', fontSize: 20 }}>欢迎使用 Easel</h2>
-            <p style={{ color: 'var(--text-secondary)', fontSize: 14, lineHeight: 1.6 }}>
-              配置你的账号画像，生成的内容会更贴合你的风格、受众和平台调性。<br />
-              大约 2 分钟，也可以随时在侧栏「+ 新建画像」补配。
-            </p>
-            <div style={{ display: 'flex', gap: 10, marginTop: 20, justifyContent: 'center' }}>
-              <button className="btn" onClick={dismissRecommend}>先用通用模式</button>
-              <button className="btn btn-primary" onClick={openWizard}>开始配置</button>
-            </div>
-          </div>
-        </div>
+        <Modal
+          title="欢迎使用 Easel"
+          width={440}
+          onClose={dismissRecommend}
+          footer={(
+            <>
+              <Button onClick={dismissRecommend}>先用通用模式</Button>
+              <Button variant="primary" onClick={openWizard}>开始配置</Button>
+            </>
+          )}
+        >
+          <p className="modal-text">
+            配置你的账号画像，生成的内容会更贴合你的风格、受众和平台调性。大约 2 分钟，之后也可以在侧栏的画像选择里新建。
+          </p>
+        </Modal>
       )}
 
       {/* 画像配置向导 */}

@@ -5,6 +5,8 @@ import BrushEntry from './BrushEntry';
 import type { ChatSession, ChatMessage, StreamState } from '../lib/store';
 import { uploadFiles, adoptOversize } from '../lib/api';
 import type { UploadedFile } from '../lib/api';
+import type { LayerKey } from '../lib/layers';
+import Swatch from './ui/Swatch';
 import { IconArrowUp, IconStop, IconPlus, IconFile } from './icons';
 
 interface ChatPageProps {
@@ -21,12 +23,12 @@ interface ChatPageProps {
   onQuestionAnswered?: (questionId: string) => void;   // 某道问答题提交成功（App 记录答过，重放不再出现）
 }
 
-// 空态推荐（贴合 Easel 社媒创作场景）
-const SUGGESTIONS = [
-  { icon: '🔥', title: '蹭个热点', prompt: '看看现在微博和抖音有什么热搜，挑几个适合我做二创的选题' },
-  { icon: '✍️', title: '写小红书文案', prompt: '帮我写一条小红书种草文案，主题先问我' },
-  { icon: '🎴', title: '做金句卡片', prompt: '把一句走心的话做成一张适合发朋友圈的金句卡片' },
-  { icon: '🎬', title: '口播脚本', prompt: '帮我写一条 60 秒的口播短视频脚本，主题先问我' },
+// 空态起步建议（贴合 Easel 社媒创作场景），色块标示所属流水线层
+const SUGGESTIONS: { layer: LayerKey; title: string; prompt: string }[] = [
+  { layer: 'discover', title: '蹭个热点', prompt: '看看现在微博和抖音有什么热搜，挑几个适合我做二创的选题' },
+  { layer: 'produce', title: '写小红书文案', prompt: '帮我写一条小红书种草文案，主题先问我' },
+  { layer: 'produce', title: '做金句卡片', prompt: '把一句走心的话做成一张适合发朋友圈的金句卡片' },
+  { layer: 'produce', title: '口播脚本', prompt: '帮我写一条 60 秒的口播短视频脚本，主题先问我' },
 ];
 
 function greeting(): string {
@@ -156,7 +158,7 @@ export default function ChatPage({ session, stream, onSend, onStop, onResend, on
           disabled={isStreaming || uploading} title={`添加素材（图片/文档）；超过 ${maxMb}MB 的大文件将自动存为本地素材（不走上传）`}>
           <IconPlus size={15} /> {uploading ? '上传中…' : '素材'}
         </button>
-        <span className="composer-hint">{isStreaming ? '生成中…' : 'Enter 发送 · Shift+Enter 换行'}</span>
+        <span className="composer-hint">{isStreaming ? '生成中…' : 'Enter 发送，Shift+Enter 换行'}</span>
         {isStreaming ? (
           <button className="send-btn" onClick={onStop} title="停止生成"><IconStop size={15} /></button>
         ) : (
@@ -176,20 +178,20 @@ export default function ChatPage({ session, stream, onSend, onStop, onResend, on
             <span>Easel</span>
           </div>
           <h1 className="chat-hero-title">{greeting()}</h1>
-          <p className="chat-hero-sub">从选题到发布，一站式帮你把想法做成能发的内容。</p>
+          <p className="chat-hero-sub">从选题到发布，把想法做成能发的内容。</p>
           {inputBox(true)}
-          <div className="suggestions">
+          <ul className="starters" aria-label="起步建议">
             {SUGGESTIONS.map((s) => (
-              <button key={s.title} className="card card-hover suggestion-card"
-                onClick={() => { if (!isStreaming) onSend(s.prompt); }}>
-                <span className="suggestion-icon">{s.icon}</span>
-                <span className="suggestion-body">
-                  <span className="suggestion-title">{s.title}</span>
-                  <span className="suggestion-text">{s.prompt}</span>
-                </span>
-              </button>
+              <li key={s.title}>
+                <button type="button" className="starter" disabled={isStreaming}
+                  onClick={() => { if (!isStreaming) onSend(s.prompt); }}>
+                  <Swatch layer={s.layer} />
+                  <span className="starter-title">{s.title}</span>
+                  <span className="starter-text">{s.prompt}</span>
+                </button>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
       </div>
     );
@@ -201,6 +203,10 @@ export default function ChatPage({ session, stream, onSend, onStop, onResend, on
 
   return (
     <div className="chat-page">
+      <header className="chat-head">
+        <h2 className="chat-head-title" title={session.title}>{session.title}</h2>
+        <span className="chat-head-persona">画像：{session.persona || '通用模式'}</span>
+      </header>
       <div className="chat-messages">
         <div className="chat-thread">
           {displayMessages.map((msg, i) => {

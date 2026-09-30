@@ -6,6 +6,11 @@ import {
 } from '../lib/api';
 import type { AccountItem, AccountWhoami } from '../lib/api';
 import { dropOutdatedWhoami, getWhoamiCache, setWhoamiCache, verifyStale } from '../lib/whoami';
+import PageHeader from './ui/PageHeader';
+import StatusDot from './ui/StatusDot';
+import Button from './ui/Button';
+import Modal from './ui/Modal';
+import { Input } from './ui/Field';
 
 type QRState = {
   platform: string;
@@ -23,7 +28,7 @@ const STATE_LABEL: Record<string, string> = {
   scanned: '扫码成功',
   sms_required: '需短信验证',
   verifying: '验证中…',
-  success: '登录成功 ✅',
+  success: '登录成功',
   expired: '二维码已过期',
   error: '登录出错',
   unknown: '等待中…',
@@ -280,177 +285,144 @@ export default function AccountsPage() {
     return a.loggedIn;
   };
 
-  const badge = (a: AccountItem) => {
-    if (!a.supported) return <span className="badge">待重写</span>;
-    if (whoami[a.platform] === 'loading') return <span className="badge">校验中…</span>;
-    if (effLoggedIn(a)) return <span className="badge badge-ok">✓ 已登录</span>;
-    return <span className="badge">未登录</span>;
+  const status = (a: AccountItem) => {
+    if (!a.supported) return <StatusDot tone="idle">待重写</StatusDot>;
+    if (whoami[a.platform] === 'loading') return <StatusDot tone="idle">校验中…</StatusDot>;
+    if (effLoggedIn(a)) return <StatusDot tone="ok">已登录</StatusDot>;
+    return <StatusDot tone="idle">未登录</StatusDot>;
   };
 
+  const busyFor = (a: AccountItem) => busy === a.platform || busy === a.platform + ':mp';
+
   return (
-    <div className="accounts-page">
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-        <div>
-          <h1 className="page-title">账号登录 Accounts</h1>
-          <p className="page-subtitle">
-            用手机 App 扫码登录，登录态本地持久化，之后发布免登。<br />
-            ⚠️ 平台可能对机房/代理 IP 判风险导致二维码弹不出，需干净/家宽 IP，或在正常网络登录后拷贝登录态目录。
-          </p>
-        </div>
-        <button className="btn btn-sm" onClick={load}>⟳ 刷新</button>
-      </div>
+    <div className="page-scroll accounts-page">
+      <PageHeader
+        layer="publish"
+        title="账号"
+        description="用手机 App 扫码登录。登录状态保存在本机，之后发布不用再登。"
+        actions={<Button size="sm" onClick={load}>刷新状态</Button>}
+      />
 
-      {err && <div style={{ color: 'var(--red)', fontSize: 13, marginTop: 12 }}>{err}</div>}
-      {terminalMsg && (
-        <div className="card" style={{ padding: 13, fontSize: 13, marginTop: 14 }}>{terminalMsg}</div>
-      )}
+      {err && <p className="accounts-error" role="alert">{err}</p>}
+      {terminalMsg && <div className="accounts-notice">{terminalMsg}</div>}
 
-      <div className="accounts-grid">
+      <div className="accounts-list">
         {accounts.map((a) => {
           const w = whoami[a.platform];
           const info = w && w !== 'loading' ? w : null;
           const logged = effLoggedIn(a);
           return (
-            <div key={a.platform} className="card account-card" style={{ opacity: a.supported ? 1 : 0.6 }}>
-              <div className="account-card-head">
-                <span className="account-card-name">{a.name}</span>
-                {badge(a)}
-              </div>
-
-              {logged && info && (
-                <div className="account-identity">
-                  <Avatar url={info.avatar} name={info.name || a.name} />
-                  <span className="account-nick">{info.name || '（已登录）'}</span>
-                </div>
-              )}
-              {!logged && (
-                <div className="account-card-note">{a.note ? a.note : `后端：${a.name}`}</div>
-              )}
-
-              <div style={{ display: 'flex', gap: 8, marginTop: 'auto' }}>
+            <div key={a.platform} className={`account-row${a.supported ? '' : ' is-unsupported'}`}>
+              <span className="account-platform">{a.name}</span>
+              <span className="account-who">
+                {logged && info ? (
+                  <>
+                    <Avatar url={info.avatar} name={info.name || a.name} />
+                    <span className="account-nick" title={info.name || ''}>{info.name || '已登录'}</span>
+                  </>
+                ) : !logged && <span className="account-note">{a.note || '未登录'}</span>}
+              </span>
+              {status(a)}
+              <span className="account-actions">
                 {logged ? (
                   <>
-                    <button className="btn btn-sm" style={{ flex: 1 }}
-                      disabled={busy === a.platform || busy === a.platform + ':mp' || w === 'loading'}
-                      onClick={() => runWhoami(a.platform)}>
-                      {w === 'loading' ? '校验中…' : '校验账号'}
-                    </button>
-                    <button className="btn btn-sm btn-ghost" style={{ flex: 1 }}
-                      disabled={logoutBusy === a.platform}
-                      onClick={() => handleLogout(a)}>
-                      {logoutBusy === a.platform ? '退出中…' : '退出登录'}
-                    </button>
+                    <Button size="sm" disabled={busyFor(a) || w === 'loading'} onClick={() => runWhoami(a.platform)}>
+                      {w === 'loading' ? '校验中…' : '校验'}
+                    </Button>
+                    <Button size="sm" disabled={logoutBusy === a.platform} onClick={() => handleLogout(a)}>
+                      {logoutBusy === a.platform ? '退出中…' : '退出'}
+                    </Button>
                   </>
                 ) : (
                   // 公众号与其它平台统一：都走扫码登录（公众号扫的是后台会话，用于发布+数据）
-                  <button
-                    className={`btn btn-block ${a.supported ? 'btn-primary' : ''}`}
-                    disabled={!a.supported || busy === a.platform || busy === a.platform + ':mp'}
+                  <Button size="sm" variant={a.supported ? 'primary' : 'secondary'}
+                    disabled={!a.supported || busyFor(a)}
                     onClick={() => (a.backend === 'wechat-oa' ? handleMpLogin(a) : handleLogin(a))}>
-                    {(busy === a.platform || busy === a.platform + ':mp') ? '启动中…' : '登录'}
-                  </button>
+                    {busyFor(a) ? '启动中…' : '扫码登录'}
+                  </Button>
                 )}
-              </div>
+              </span>
             </div>
           );
         })}
       </div>
 
+      <p className="accounts-warn">
+        机房或代理 IP 可能被平台判为风险，二维码会弹不出来。遇到这种情况，换干净的家宽网络，或者在能正常登录的机器上登好，再把登录目录拷过来。
+      </p>
+
       {qr && (
-        <div className="overlay" onClick={closeQr}>
-          <div className="modal" style={{ width: 360, maxWidth: '100%', textAlign: 'center' }}
-            onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 4px' }}>登录 {qr.name}</h3>
-            <div style={{ fontSize: 13, marginBottom: 14,
-              color: qr.state === 'success' ? 'var(--green)'
-                : ['error', 'expired'].includes(qr.state) ? 'var(--red)' : 'var(--text-secondary)' }}>
-              {STATE_LABEL[qr.state] || qr.state}{qr.message ? ` — ${qr.message}` : ''}
+        <Modal title={`登录${qr.name}`} width={380} onClose={closeQr}
+          footer={<Button onClick={closeQr}>{qr.state === 'success' ? '完成' : '关闭'}</Button>}>
+          <p className={`qr-state${qr.state === 'success' ? ' is-ok' : ['error', 'expired'].includes(qr.state) ? ' is-bad' : ''}`}>
+            {STATE_LABEL[qr.state] || qr.state}{qr.message ? `：${qr.message}` : ''}
+          </p>
+          {qr.state === 'sms_required' ? (
+            <div>
+              <p className={/错误|过期|失败|重新|未找到|未完成|不正确|失效/.test(qr.message || '') ? 'qr-error' : 'modal-text'}>
+                {qr.message || '平台风控要求短信验证，验证码已发到你手机，请输入：'}
+              </p>
+              <Input
+                className="sms-input"
+                value={smsCode}
+                onChange={(e) => setSmsCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
+                onKeyDown={(e) => { if (e.key === 'Enter') submitSms(); }}
+                placeholder="短信验证码" inputMode="numeric" autoFocus />
+              {smsErr && <p className="qr-error">{smsErr}</p>}
+              <Button variant="primary" block loading={smsBusy} onClick={submitSms}>提交验证码</Button>
             </div>
-            {qr.state === 'sms_required' ? (
-              <div style={{ padding: '6px 4px 2px' }}>
-                <div style={{ fontSize: 13, marginBottom: 10,
-                  color: /错误|过期|失败|重新|未找到|未完成|不正确|失效/.test(qr.message || '')
-                    ? 'var(--red)' : 'var(--text-secondary)' }}>
-                  {qr.message || '平台风控要求短信验证，验证码已发到你手机，请输入：'}
-                </div>
-                <input
-                  value={smsCode}
-                  onChange={(e) => setSmsCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
-                  onKeyDown={(e) => { if (e.key === 'Enter') submitSms(); }}
-                  placeholder="短信验证码" inputMode="numeric" autoFocus
-                  style={{ width: '100%', boxSizing: 'border-box', textAlign: 'center',
-                    letterSpacing: 6, fontSize: 20, padding: '10px 12px',
-                    border: '1px solid var(--border)', borderRadius: 8 }} />
-                {smsErr && <div style={{ color: 'var(--red)', fontSize: 12, marginTop: 6 }}>{smsErr}</div>}
-                <button className="btn btn-primary btn-block" style={{ marginTop: 12 }}
-                  disabled={smsBusy} onClick={submitSms}>
-                  {smsBusy ? '提交中…' : '提交验证码'}
-                </button>
-              </div>
-            ) : qr.state === 'qr_ready' && qr.qr ? (
+          ) : qr.state === 'qr_ready' && qr.qr ? (
+            <img className="qr-img" src={`${mediaUrl(qr.qr)}?v=${qr.qrTs || qrNonce}`} alt="登录二维码" />
+          ) : qr.state === 'window_login' ? (
+            // 平台拦了无头浏览器，runner 在本机弹了窗口：非终态，继续轮询；窗口里出了码也在这里给一份
+            qr.qr ? (
               <img className="qr-img" src={`${mediaUrl(qr.qr)}?v=${qr.qrTs || qrNonce}`} alt="登录二维码" />
-            ) : qr.state === 'window_login' ? (
-              // 平台拦了无头浏览器，runner 在本机弹了窗口：非终态，继续轮询；窗口里出了码也在这里给一份
-              qr.qr ? (
-                <img className="qr-img" src={`${mediaUrl(qr.qr)}?v=${qr.qrTs || qrNonce}`} alt="登录二维码" />
-              ) : (
-                <div className="loading" style={{ padding: 40 }}><div className="spinner" />
-                  {qr.message || '已弹出浏览器窗口，请在窗口里完成登录，不要关掉它'}</div>
-              )
-            ) : qr.state === 'scanned' ? (
-              <div className="loading" style={{ padding: 40 }}><div className="spinner" />扫码成功，正在跳转验证…（首次可能等十几秒）</div>
-            ) : qr.state === 'verifying' ? (
-              // verifying 有两种：短信验证码提交中 / 登录后正在确认登录态已保存 —— 以 runner 的 message 为准
-              <div className="loading" style={{ padding: 40 }}><div className="spinner" />{qr.message || '验证中…'}</div>
-            ) : qr.state === 'success' ? (
-              <div style={{ fontSize: 48, padding: 40 }}>✅</div>
-            ) : ['error', 'expired'].includes(qr.state) ? (
-              <div style={{ fontSize: 13, color: 'var(--red)', padding: 30 }}>
-                {qr.message || '登录失败'}<br />可关闭后重试（或换干净 IP）。
-              </div>
             ) : (
-              <div className="loading" style={{ padding: 40 }}><div className="spinner" />准备二维码…</div>
-            )}
-            <div style={{ marginTop: 16 }}>
-              <button className="btn" onClick={closeQr}>{qr.state === 'success' ? '完成' : '关闭'}</button>
-            </div>
-          </div>
-        </div>
+              <div className="loading"><div className="spinner" />
+                {qr.message || '已弹出浏览器窗口，请在窗口里完成登录，不要关掉它'}</div>
+            )
+          ) : qr.state === 'scanned' ? (
+            <div className="loading"><div className="spinner" />扫码成功，正在跳转验证…（首次可能要十几秒）</div>
+          ) : qr.state === 'verifying' ? (
+            // verifying 有两种：短信验证码提交中 / 登录后正在确认登录态已保存 —— 以 runner 的 message 为准
+            <div className="loading"><div className="spinner" />{qr.message || '验证中…'}</div>
+          ) : qr.state === 'success' ? (
+            <div className="qr-done">登录成功</div>
+          ) : ['error', 'expired'].includes(qr.state) ? (
+            <p className="qr-error">{qr.message || '登录失败'}。可以关闭后重试，或换干净的网络。</p>
+          ) : (
+            <div className="loading"><div className="spinner" />准备二维码…</div>
+          )}
+        </Modal>
       )}
 
       {cred && (
-        <div className="overlay" onClick={closeCred}>
-          <div className="modal" style={{ width: 420, maxWidth: '100%' }} onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ margin: '0 0 4px' }}>配置 {cred.name}</h3>
-            <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginBottom: 14, lineHeight: 1.6 }}>
-              公众号用官方接口发布，需填开发者凭证（公众平台 → 设置与开发 → 开发接口管理）。<br />
-              ⚠️ 需把本服务器出口 IP 加入公众号「IP 白名单」，否则报 40164。文章发到<b>草稿箱</b>，群发请到 mp 后台确认。
-            </div>
-            {credMsg && <div style={{ fontSize: 12.5, color: 'var(--green)', marginBottom: 10 }}>{credMsg}</div>}
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>AppID</label>
-            <input value={credForm.appId} autoFocus
-              onChange={(e) => setCredForm((f) => ({ ...f, appId: e.target.value.trim() }))}
-              placeholder="wx..." style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px',
-                margin: '4px 0 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14 }} />
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>AppSecret</label>
-            <input value={credForm.appSecret} type="password"
-              onChange={(e) => setCredForm((f) => ({ ...f, appSecret: e.target.value.trim() }))}
-              placeholder="开发者密钥（不会回显）" style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px',
-                margin: '4px 0 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14 }} />
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>默认作者（可选）</label>
-            <input value={credForm.author}
-              onChange={(e) => setCredForm((f) => ({ ...f, author: e.target.value }))}
-              placeholder="文章署名" style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px',
-                margin: '4px 0 4px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14 }} />
-            {credErr && <div style={{ color: 'var(--red)', fontSize: 12.5, marginTop: 8 }}>{credErr}</div>}
-            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-              <button className="btn btn-primary" style={{ flex: 1 }} disabled={credBusy} onClick={submitCred}>
-                {credBusy ? '验证中…' : '保存并验证'}
-              </button>
-              <button className="btn" onClick={closeCred}>关闭</button>
-            </div>
-          </div>
-        </div>
+        <Modal title={`配置${cred.name}`} width={440} onClose={closeCred}
+          footer={(
+            <>
+              <Button onClick={closeCred}>关闭</Button>
+              <Button variant="primary" loading={credBusy} onClick={submitCred}>保存并验证</Button>
+            </>
+          )}>
+          <p className="modal-text">
+            公众号用官方接口发布，需要填开发者凭证（公众平台 → 设置与开发 → 开发接口管理）。
+            还要把本服务器的出口 IP 加进公众号的 IP 白名单，否则会报 40164。文章会发到草稿箱，群发请到公众号后台确认。
+          </p>
+          {credMsg && <p className="cred-ok">{credMsg}</p>}
+          <label className="cred-label">AppID
+            <Input value={credForm.appId} autoFocus placeholder="wx..."
+              onChange={(e) => setCredForm((f) => ({ ...f, appId: e.target.value.trim() }))} />
+          </label>
+          <label className="cred-label">AppSecret
+            <Input type="password" value={credForm.appSecret} placeholder="开发者密钥（不会回显）"
+              onChange={(e) => setCredForm((f) => ({ ...f, appSecret: e.target.value.trim() }))} />
+          </label>
+          <label className="cred-label">默认作者（可选）
+            <Input value={credForm.author} placeholder="文章署名"
+              onChange={(e) => setCredForm((f) => ({ ...f, author: e.target.value }))} />
+          </label>
+          {credErr && <p className="qr-error">{credErr}</p>}
+        </Modal>
       )}
     </div>
   );

@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CAPABILITY_MENU } from '../lib/capabilityMenu';
 import type { CapabilityItem } from '../lib/capabilityMenu';
+import Button from './ui/Button';
+import Tag from './ui/Tag';
+import Tabs from './ui/Tabs';
 
 const DOT: Record<string, string> = { done: 's-done', ready: 's-ready', need: 's-need', incoming: 's-incoming' };
 
@@ -41,19 +44,10 @@ export default function BrushEntry({ onPick }: { onPick: (text: string) => void 
       <button type="button" className="brush-btn" onClick={() => setOpen((v) => !v)}
         aria-label="看看能做什么" title="看看能做什么">
         <svg viewBox="0 0 24 24" aria-hidden="true">
-          <defs>
-            <linearGradient id="brushHandleGrad" x1="12" y1="1.6" x2="12" y2="11.6" gradientUnits="userSpaceOnUse">
-              <stop offset="0" stopColor="#8adfce" /><stop offset="1" stopColor="#45b0b4" />
-            </linearGradient>
-            <linearGradient id="brushTipGrad" x1="12" y1="13.2" x2="12" y2="22.6" gradientUnits="userSpaceOnUse">
-              <stop offset="0" stopColor="#2f6fae" /><stop offset="1" stopColor="#222e83" />
-            </linearGradient>
-          </defs>
           <g transform="rotate(45 12 12)">
-            <rect x="11.15" y="1.6" width="1.7" height="10" rx=".85" fill="url(#brushHandleGrad)" />
-            <rect x="10.6" y="11.5" width="2.8" height="1.75" rx=".6" fill="#b9e3d9" stroke="#7fb3aa" strokeWidth=".3" />
-            <path d="M10.7 13.2 C9.95 16.6 10.2 19.9 11.95 22.6 C13.7 19.9 13.95 16.6 13.2 13.2 Z" fill="url(#brushTipGrad)" />
-            <path d="M11.95 13.6 L11.95 21.2" stroke="#1d2c6f" strokeWidth=".4" strokeLinecap="round" opacity=".38" />
+            <rect className="brush-handle" x="11.15" y="1.6" width="1.7" height="10" rx=".85" />
+            <rect className="brush-ferrule" x="10.6" y="11.5" width="2.8" height="1.75" rx=".6" />
+            <path className="brush-tip-shape" d="M10.7 13.2 C9.95 16.6 10.2 19.9 11.95 22.6 C13.7 19.9 13.95 16.6 13.2 13.2 Z" />
           </g>
         </svg>
         <span className="brush-mark" aria-hidden="true" />
@@ -65,26 +59,26 @@ export default function BrushEntry({ onPick }: { onPick: (text: string) => void 
           <div className="brush-panel-head">
             <div className="brush-panel-headline">
               <div className="brush-panel-title">能做的都在这</div>
-              <div className="brush-panel-sub">选一个 → 自动填进输入框；「管线」件走整片产线</div>
+              <div className="brush-panel-sub">选一个会自动填进输入框；带「管线」标记的走整片产线</div>
             </div>
-            <input ref={searchRef} className="brush-search" placeholder="搜索…" value={q}
+            <input ref={searchRef} className="field brush-search" placeholder="搜索" value={q}
               onChange={(e) => setQ(e.target.value)} />
-            <button type="button" className="brush-close" onClick={() => setOpen(false)} aria-label="关闭">×</button>
+            <Button variant="ghost" size="sm" className="brush-close" onClick={() => setOpen(false)} aria-label="关闭">×</Button>
           </div>
           <div className="brush-tabs">
-            {CAPABILITY_MENU.tabs.map((t, i) => (
-              <button type="button" key={t.id} className={`brush-tab${i === tab ? ' on' : ''}`}
-                onClick={() => setTab(i)}>{t.label}</button>
-            ))}
+            <Tabs size="sm" ariaLabel="能力分类"
+              items={CAPABILITY_MENU.tabs.map((t) => ({ key: t.id, label: t.label }))}
+              value={CAPABILITY_MENU.tabs[tab]?.id ?? ''}
+              onChange={(id) => setTab(Math.max(0, CAPABILITY_MENU.tabs.findIndex((t) => t.id === id)))} />
           </div>
           <div className="brush-body">
             {pipeline && hit(pipeline) && (
               <div className="brush-grp">
-                <div className="brush-grp-name">整片级 · 走独立管线</div>
+                <div className="brush-grp-name">整片级，走独立管线</div>
                 <button type="button" className="brush-item brush-item-pipe" onClick={() => pick(pipeline, true)}>
                   <span className={`brush-dot ${DOT[pipeline.status || 'ready'] || 's-ready'}`} />
                   <span className="brush-il">{pipeline.label}</span>
-                  <span className="brush-chip-pipe">管线</span>
+                  <Tag tone="produce">管线</Tag>
                   <span className="brush-idesc">{pipeline.desc}</span>
                   <span className="brush-iadd">＋</span>
                 </button>
@@ -95,7 +89,7 @@ export default function BrushEntry({ onPick }: { onPick: (text: string) => void 
               if (!items.length) return null;
               return (
                 <div key={g.label} className="brush-grp">
-                  <div className="brush-grp-name">{g.label} · {items.length}</div>
+                  <div className="brush-grp-name">{g.label}（{items.length}）</div>
                   {items.map((it) => (
                     <button type="button" key={it.skill || it.label} className="brush-item" onClick={() => pick(it)}>
                       <span className={`brush-dot ${DOT[it.status || 'ready'] || 's-ready'}`} />
