@@ -5,6 +5,8 @@
   - OpenAI 兼容同步 API（/images/generations、/images/edits、/images/variations）
   - apimart.ai 异步轮询 API（提交任务 → 轮询 /tasks/<id> → 下载）
   - 自动检测模式：base_url 含 "apimart" → async，其他 → sync；也可 --mode 强制指定
+  - 本机 Codex CLI（IMG_PROVIDER=codex-cli 或 --mode codex）：用 ChatGPT 登录出图，
+    不需要 API key，细节与可调项见 codex_image.py
 
 配置来自环境变量或就近的 .env 文件（当前目录向上查找）：
   - IMG_BASE_URL: API 根地址
@@ -20,6 +22,8 @@
   img2img     图生图/图像编辑：--prompt + --image → 新图
   variations  图像变体：--image → 多个变体
   check       离线校验配置状态（不发起任何网络请求）
+
+选择后端：IMG_PROVIDER=codex-cli → Codex CLI；不设或其他值 → 上面的 API 配置。
 """
 
 from __future__ import annotations
@@ -30,6 +34,7 @@ import binascii
 import http.client
 import json
 import os
+import shutil
 import sys
 import time
 import urllib.error
@@ -41,6 +46,8 @@ from typing import Any
 from output_paths import validate_output_path
 
 
+ENV_PROVIDER = "IMG_PROVIDER"
+CODEX_PROVIDER = "codex-cli"
 ENV_BASE_URL = "IMG_BASE_URL"
 ENV_MODEL = "IMG_MODEL"
 ENV_API_KEY = "IMG_API_KEY"
@@ -178,6 +185,50 @@ def detect_mode(base_url: str, explicit_mode: str | None) -> str:
     }:
         return "async"
     return "sync"
+
+
+def use_codex(explicit_mode: str | None) -> bool:
+    """--mode 显式指定优先；否则看 .env 的 IMG_PROVIDER。"""
+    if explicit_mode:
+        return explicit_mode == "codex"
+    return os.environ.get(ENV_PROVIDER, "").strip().lower() == CODEX_PROVIDER
+
+
+def _copy_image(src: Path, target: Path) -> Path:
+    """复制 Codex 产出的图片。目标扩展名和源不同时用 Pillow 转格式；没装 Pillow 就沿用源格式。"""
+    norm = {"jpg": "jpeg"}
+    want = norm.get(target.suffix.lower().lstrip("."), target.suffix.lower().lstrip("."))
+    have = norm.get(src.suffix.lower().lstrip("."), src.suffix.lower().lstrip("."))
+    if want == have:
+        shutil.copy2(src, target)
+        return target
+    try:
+        from PIL import Image
+    except ImportError:
+        target = target.with_suffix(src.suffix.lower())
+        shutil.copy2(src, target)
+        return target
+    with Image.open(src) as im:
+        if want == "jpeg" and im.mode not in ("RGB", "L"):
+            im = im.convert("RGB")
+        im.save(target)
+    return target
+
+
+def run_codex(args: argparse.Namespace, prompt: str, image: str | None = None) -> list[Path]:
+    """Codex CLI 后端：逐张生成，复制到 --output。"""
+    import codex_image
+
+    try:
+        cfg = codex_image.load_config()
+        print(f"[codex] codex={cfg.bin} model={cfg.model} 超时={cfg.timeout}s/张", file=sys.stderr)
+        sources = codex_image.generate(cfg, prompt, args.n, args.size, image=image,
+                                       log=lambda m: print(m, file=sys.stderr))
+    except codex_image.CodexImageError as exc:
+        fail(str(exc))
+        return []
+    targets = _out_paths(args.output, len(sources), args.format)
+    return [_copy_image(src, dst) for src, dst in zip(sources, targets)]
 
 
 def size_to_ratio(size: str) -> str:
@@ -446,6 +497,9 @@ def cmd_text2img(args: argparse.Namespace) -> None:
     prompt = (args.prompt or "").strip()
     if not prompt:
         fail("prompt 不能为空。")
+    if use_codex(args.mode):
+        _print_results(run_codex(args, prompt))
+        return
     base_url, model, api_key, _ = load_and_require()
     mode = detect_mode(base_url, args.mode)
     print(f"[text2img] 模式={mode} base_url={base_url} model={model}", file=sys.stderr)
@@ -475,6 +529,12 @@ def cmd_img2img(args: argparse.Namespace) -> None:
     prompt = (args.prompt or "").strip()
     if not prompt:
         fail("prompt 不能为空。")
+    if use_codex(args.mode):
+        _check_image(args.image)
+        if args.mask:
+            print("[codex] Codex 不支持遮罩，已忽略 --mask（把要改的区域写进 prompt）。", file=sys.stderr)
+        _print_results(run_codex(args, prompt, image=args.image))
+        return
     base_url, model, api_key, _ = load_and_require()
     mode = detect_mode(base_url, args.mode)
     print(f"[img2img] 模式={mode} base_url={base_url} model={model} image={args.image}",
@@ -565,6 +625,11 @@ def _encode_multipart(fields: dict[str, str],
 # ── 子命令：variations ────────────────────────────────────
 
 def cmd_variations(args: argparse.Namespace) -> None:
+    if use_codex(args.mode):
+        _check_image(args.image)
+        prompt = args.prompt or "生成这张图的一个变体：保持主体和整体风格，换构图、角度或细节"
+        _print_results(run_codex(args, prompt, image=args.image))
+        return
     base_url, model, api_key, _ = load_and_require()
     mode = detect_mode(base_url, args.mode)
     print(f"[variations] 模式={mode} base_url={base_url} model={model} image={args.image}",
@@ -619,7 +684,30 @@ def cmd_variations(args: argparse.Namespace) -> None:
 
 # ── 子命令：check（离线，不发请求）──────────────────────────
 
+def check_codex() -> None:
+    import codex_image
+
+    print("=== ai-image 配置检查：Codex CLI（IMG_PROVIDER=codex-cli）===")
+    try:
+        cfg = codex_image.load_config()
+    except codex_image.CodexImageError as exc:
+        print(f"\n[未就绪] {exc}")
+        raise SystemExit(2)
+    print(f"  codex：{cfg.bin}")
+    print(f"  模型：{cfg.model}（IMG_CODEX_MODEL 可改）")
+    print(f"  单张超时：{cfg.timeout}s（IMG_CODEX_TIMEOUT 可改）")
+    ok, detail = codex_image.login_status(cfg)
+    print(f"  登录：{detail}")
+    if not ok:
+        print("\n[未就绪] Codex 未登录。在终端运行 codex login，用 ChatGPT 账号登录。")
+        raise SystemExit(2)
+    print("\n[就绪] 可执行 text2img / img2img / variations（每张约 1 分钟，占 ChatGPT 订阅额度）。")
+
+
 def cmd_check(args: argparse.Namespace) -> None:
+    if use_codex(None):
+        check_codex()
+        return
     base_url, base_from = resolve_config(ENV_BASE_URL)
     model, model_from = resolve_config(ENV_MODEL)
     api_key, key_from = resolve_config(ENV_API_KEY)
@@ -676,8 +764,9 @@ def _add_common_output(sp: argparse.ArgumentParser) -> None:
     sp.add_argument("--n", type=int, default=1, help="生成数量，默认 1。")
     sp.add_argument("--size", default="1024x1024",
                     help="尺寸。同步用像素（1024x1024 等），异步用比例（1:1、16:9 等）。默认 1024x1024。")
-    sp.add_argument("--mode", choices=("sync", "async"),
-                    help="API 模式。默认按 base_url 自动检测（含 apimart → async）。")
+    sp.add_argument("--mode", choices=("sync", "async", "codex"),
+                    help="后端模式。codex=本机 Codex CLI；不填时 IMG_PROVIDER=codex-cli 走 Codex，"
+                         "否则按 base_url 自动检测（含 apimart → async）。")
     sp.add_argument("--resolution", default="2k", choices=VALID_RESOLUTIONS,
                     help="异步模式分辨率档位，默认 2k。")
     sp.add_argument("--format", choices=("png", "jpeg", "webp"), default="png",
@@ -689,7 +778,7 @@ def _add_common_output(sp: argparse.ArgumentParser) -> None:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="通用 AI 文生图 / 图生图 / 图像变体（OpenAI 兼容同步 + apimart 异步，纯标准库）。",
+        description="通用 AI 文生图 / 图生图 / 图像变体（OpenAI 兼容同步 + apimart 异步 + 本机 Codex CLI）。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")

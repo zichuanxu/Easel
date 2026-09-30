@@ -33,6 +33,31 @@ describe('SettingsPanel 配音通道', () => {
   });
 });
 
+const imageRows = [
+  { slot: 'openai', order: 0, name: 'OpenAI 兼容 / apimart / 小红书 MaaS', sub: 'image', type: 'openai', model: '',
+    baseUrl: '', keyMasked: '', role: '主', result: '未配置' },
+  { slot: 'codex-cli', order: 0, name: 'Codex CLI（ChatGPT 登录）', sub: 'image', type: 'codex-cli', model: '',
+    baseUrl: '本机', keyMasked: '免 key', role: '备', result: '已配置', keyless: true, modelHint: 'gpt-6.1-sol（默认）' },
+];
+
+describe('SettingsPanel 生图通道', () => {
+  it('Codex 行免 Key、显示默认模型；设为主后状态显示 Codex 生效', async () => {
+    vi.mocked(api.fetchModelChannels).mockResolvedValueOnce({
+      channels: { chat: { rows: [] }, transcribe: { rows: [] }, image: { rows: imageRows } }, primary: '',
+    } as Awaited<ReturnType<typeof api.fetchModelChannels>>);
+    render(<SettingsPanel onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole('tab', { name: '生图' }));
+    const codexRow = (await screen.findByText('Codex CLI（ChatGPT 登录）')).closest('.prow') as HTMLElement;
+    expect(codexRow.querySelector('input[type="password"]')).toBeNull();
+    expect(codexRow.textContent).toContain('免 key');
+    expect(codexRow.textContent).toContain('gpt-6.1-sol（默认）');
+    const top = () => document.querySelector('.st-panel.active .panel-top')?.textContent || '';
+    expect(top()).toContain('未配置');      // 主仍是没填 Key 的 API
+    fireEvent.click(codexRow.querySelector('.role-btn') as HTMLElement);
+    expect(top()).toContain('Codex CLI（ChatGPT 登录） 生效');
+  });
+});
+
 describe('SettingsPanel', () => {
   it('是对话框，六个模型通道是标签页，Esc 关闭', async () => {
     const onClose = vi.fn();

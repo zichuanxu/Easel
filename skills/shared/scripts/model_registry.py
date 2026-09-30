@@ -24,7 +24,10 @@ def _key(env: str, label: str, *, required: bool = True, secret: bool = True,
 MODEL_GROUPS: dict[str, dict[str, Any]] = {
     "image": {
         "label": "AI 生图",
-        "settings": [],
+        "settings": [
+            _key("IMG_PROVIDER", "默认生图后端", required=False, secret=False,
+                 choices=("openai", "codex-cli")),
+        ],
         "providers": [{
             "id": "openai",
             "name": "OpenAI 兼容 / apimart / 小红书 MaaS",
@@ -36,6 +39,15 @@ MODEL_GROUPS: dict[str, dict[str, Any]] = {
                 _key("IMG_API_KEY_HEADER", "鉴权头名", required=False, secret=False),
                 _key("IMG_API_VERSION", "api-version", required=False, secret=False),
                 _key("IMG_NO_PROXY", "内网直连（填 1）", required=False, secret=False),
+            ],
+        }, {
+            # 免 key：用本机 Codex CLI 的 ChatGPT 登录出图，细节见 codex_image.py。
+            # keyless：没有凭证可查，只有在 settings（IMG_PROVIDER）里选了它才算已配置。
+            "id": "codex-cli",
+            "name": "Codex CLI（ChatGPT 登录）",
+            "keyless": True,
+            "keys": [
+                _key("IMG_CODEX_MODEL", "模型", required=False, secret=False),
             ],
         }],
     },
@@ -244,9 +256,13 @@ def _configured_value(key: dict[str, Any], env: dict[str, str]) -> str:
 def configured_providers(group: str, env: dict[str, str]) -> list[dict[str, Any]]:
     """Return usable providers and non-secret model names without exposing credentials."""
     configured = []
+    selected = {_configured_value(key, env) for key in MODEL_GROUPS[group].get("settings", [])
+                if key.get("choices")}
     for provider in MODEL_GROUPS[group]["providers"]:
         required = [key for key in provider["keys"] if key["required"]]
         if not all(_configured_value(key, env) for key in required):
+            continue
+        if provider.get("keyless") and provider["id"] not in selected:
             continue
         models = {
             key["env"]: _configured_value(key, env)

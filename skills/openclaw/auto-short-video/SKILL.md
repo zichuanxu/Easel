@@ -26,7 +26,7 @@ layer: produce
 1. **写脚本分镜**：用 [video-script](../video-script/SKILL.md) 把主题写成口播文案，拆成 N 句（每句一个分镜），每句配一个画面描述。
 
 2. **生成画面**（每个分镜一张图/一段片）：
-   - 有图像 API key → [ai-image-gen](../ai-image-gen/SKILL.md) 逐句 text2img（按已确认画幅）
+   - 生图可用（`ai_image.py check` 就绪：图像 API key 或本机 Codex CLI）→ [ai-image-gen](../ai-image-gen/SKILL.md) 逐句 text2img（按已确认画幅）；Codex 每张约 1 分钟，句子多时先告知耗时
    - 要动态 → [ai-video-gen](../ai-video-gen/SKILL.md) text2video/image2video
    - 用户自带素材 → 用 [image-editing](../image-editing/SKILL.md) `pad` 到已确认画幅
    - 都没有 → 按已确认画幅选图卡（竖版用 card-xiaohongshu/poster-hero，横版用 card-quote）再 pad，避免画幅错配。
@@ -65,7 +65,7 @@ layer: produce
 
 ## 编排原则
 
-- **零件可缺**：缺图像/视频/TTS API key 的环节自动降级（图卡兜底 / 跳过配音），不阻断整体，并如实告知用户降级了什么。
+- **零件可缺**：生图未就绪、缺视频/TTS API key 的环节自动降级（图卡兜底 / 跳过配音），不阻断整体，并如实告知用户降级了什么。
 - **先出 Plan**：涉及多个付费 API（生图/生视频/生乐）时，先向用户说明将调用哪些、大致耗时/花费，确认后再跑。
 - **中间产物留档**：分镜图、配音、字幕和 storyboard 都写进 `outputs/主题名/assets/`，方便单独替换后重新合成。
 
