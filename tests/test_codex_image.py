@@ -302,17 +302,42 @@ def test_run_timeout_kills_grandchildren(tmp_path):
             f"open({str(pidfile)!r}, 'w').write(str(g.pid)); time.sleep(60)")
     t0 = time.time()
     with pytest.raises(subprocess.TimeoutExpired):
-        ci._run([sys.executable, "-c", code], 2, str(tmp_path))
-    assert time.time() - t0 < 20            # 孙进程攥着管道也不会卡住
+        ci._run([sys.executable, "-c", code], 5, str(tmp_path))
+    assert time.time() - t0 < 25            # 孙进程攥着管道也不会卡住
+    assert pidfile.is_file(), "5 秒内子进程没来得及写出孙进程 pid"
     gpid = int(pidfile.read_text())
-    for _ in range(30):
-        try:
-            os.kill(gpid, 0)
-        except ProcessLookupError:
+    for _ in range(50):
+        if not _alive(gpid):
             break
         time.sleep(0.1)
     else:
         pytest.fail("孙进程还活着：超时没有结束整棵进程树")
+
+
+def _alive(pid: int) -> bool:
+    """进程还在跑（僵尸进程算已结束：容器里 PID 1 不一定及时回收）。"""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    stat = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return bool(stat) and not stat.startswith("Z")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX 进程组；Windows 走 taskkill /T")
+def test_run_kills_tree_on_interrupt_too(tmp_path, monkeypatch):
+    """Ctrl-C / SIGTERM 打断等待时也要收拾 codex：它在独立进程组里，收不到终端的 Ctrl-C。"""
+    killed = []
+    monkeypatch.setattr(ci, "_kill_tree", lambda proc: (killed.append(proc.pid), proc.kill()))
+
+    def interrupted(self, timeout=None):
+        if not killed:
+            raise KeyboardInterrupt
+        return ("", "")
+    monkeypatch.setattr(subprocess.Popen, "communicate", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        ci._run([sys.executable, "-c", "import time; time.sleep(30)"], 60, str(tmp_path))
+    assert len(killed) == 1
 
 
 def test_windows_cmd_shim_gets_metachars_neutralised(tmp_path, monkeypatch):
@@ -327,6 +352,8 @@ def test_windows_cmd_shim_gets_metachars_neutralised(tmp_path, monkeypatch):
     bad.write_bytes(PNG)
     with pytest.raises(ci.CodexImageError, match="改名"):
         ci.generate_one(cfg, "改图", "1:1", image=str(bad))
+    with pytest.raises(ci.CodexImageError, match="IMG_CODEX_MODEL"):
+        ci.generate_one(_cfg(tmp_path, bin=cfg.bin, model="gpt&calc"), "猫", "1:1")
 
 
 def test_windows_prefers_native_exe_over_cmd_shim(tmp_path, monkeypatch):

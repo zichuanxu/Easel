@@ -184,7 +184,11 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 
 
 def _run(cmd: list[str], timeout: int, cwd: str) -> subprocess.CompletedProcess:
-    """起 codex（独立进程组）并等它结束；超时则结束整棵进程树后抛 TimeoutExpired。"""
+    """起 codex（独立进程组）并等它结束。
+
+    超时、Ctrl-C、被 SIGTERM 等任何异常都先结束整棵进程树再往外抛：codex 在独立进程组里，
+    终端的 Ctrl-C 到不了它，不收拾就会在后台继续出图、占额度。
+    """
     group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if _WINDOWS
              else {"start_new_session": True})
     proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -192,11 +196,11 @@ def _run(cmd: list[str], timeout: int, cwd: str) -> subprocess.CompletedProcess:
                             errors="replace", cwd=cwd, **group)
     try:
         out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
+    except BaseException:
         _kill_tree(proc)
         try:
             proc.communicate(timeout=10)
-        except subprocess.TimeoutExpired:
+        except (subprocess.TimeoutExpired, OSError, ValueError):
             pass
         raise
     return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
@@ -270,7 +274,11 @@ def generate_one(cfg: CodexConfig, prompt: str, size: str, image: str | None = N
         if any(c in image_arg for c in _CMD_META):
             raise CodexImageError(
                 f"图片路径含有 {_CMD_META} 中的字符，Windows 上无法安全传给 codex，请先改名再试。")
+        if any(c in cfg.model for c in _CMD_META):
+            raise CodexImageError(f"IMG_CODEX_MODEL 含有 {_CMD_META} 中的字符，请改成正常的模型名。")
     with tempfile.TemporaryDirectory(prefix="easel-codex-img-", ignore_cleanup_errors=True) as work:
+        if _is_batch(cfg.bin) and any(c in work for c in _CMD_META):
+            raise CodexImageError(f"临时目录 {work} 含有特殊字符，Windows 上无法安全传给 codex。")
         cmd = [cfg.bin, "exec", "--ephemeral", "--skip-git-repo-check",
                "--sandbox", "read-only", "--json", "-m", cfg.model, "-C", work]
         if image_arg:
