@@ -90,6 +90,23 @@ describe('AnalyticsPage 时间与定时', () => {
       vi.useRealTimers();
     }
   });
+
+  it('上次抓取失败的平台，定时器不再每分钟自动重抓（只留手动重试）', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    try {
+      localStorage.setItem('easel_analytics', JSON.stringify({ xiaohongshu: sample(40 * 60_000) }));
+      vi.mocked(api.fetchAccountAnalytics).mockReset();
+      vi.mocked(api.fetchAccountAnalytics).mockRejectedValue(new Error('x'));
+      vi.mocked(api.fetchAnalyticsPlatforms).mockResolvedValue([{ platform: 'xiaohongshu', name: '小红书', loggedIn: true }]);
+      render(<AnalyticsPage onNavigate={() => {}} />);
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+      expect(api.fetchAccountAnalytics).toHaveBeenCalledTimes(1);   // 打开页面：过期 → 后台刷新一次，失败
+      await act(async () => { vi.advanceTimersByTime(3 * 60_000); });
+      expect(api.fetchAccountAnalytics).toHaveBeenCalledTimes(1);   // 三个定时周期都没有再起抓取
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('fmtAgo', () => {

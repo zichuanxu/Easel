@@ -57,7 +57,7 @@ export default function AnalyticsPage({ onNavigate }: { onNavigate: (page: Page)
   useEffect(() => {
     const t = setInterval(() => {
       setNow(Date.now());
-      if (anaSel) ensure(anaSel, true);
+      if (anaSel) ensure(anaSel, true, true);
     }, 60_000);
     return () => clearInterval(t);
   }, [anaSel, ensure]);

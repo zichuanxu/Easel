@@ -96,7 +96,10 @@ export function useAnalyticsData() {
     pump();
   }, [patch, pump]);
 
-  const ensure = useCallback((p: string, priority = false) => {
+  // auto：页面定时器发起的检查。上次抓取失败的平台不再自动重抓——否则失效账号或改版平台
+  // 会每分钟起一次 headless 浏览器；留给「重试」按钮、切页签或下次打开页面。
+  const ensure = useCallback((p: string, priority = false, auto = false) => {
+    if (auto && store.current[p]?.failed) return;
     if (inflight.current.has(p)) {
       // 还在排队（没开跑）的，被选中时提到队首
       if (priority && queue.current.includes(p)) {
