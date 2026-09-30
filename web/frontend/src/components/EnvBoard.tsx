@@ -1,5 +1,9 @@
 import type { ComponentType } from 'react';
 import type { EnvTool } from '../lib/api';
+import Button from './ui/Button';
+import StatusDot from './ui/StatusDot';
+import Tag from './ui/Tag';
+import type { DotTone } from './ui/StatusDot';
 import {
   IconHexagon, IconFilm, IconFileCode, IconAudioWaveform, IconDatabase,
   IconPackage, IconMonitor, IconTv, IconGlobe, IconCompass, IconLibrary,
@@ -29,10 +33,10 @@ const ICONS: Record<string, ComponentType<{ size?: number }>> = {
   pw: IconGlobe, cft: IconCompass, pylibs: IconLibrary,
 };
 
-const GROUPS: { id: string; title: string; en: string }[] = [
-  { id: 'rm', title: '视频产线套件', en: 'Remotion' },
-  { id: 'pub', title: '发布链', en: '发布与读回' },
-  { id: 'common', title: '常用库', en: '按需' },
+const GROUPS: { id: string; title: string }[] = [
+  { id: 'rm', title: '视频产线套件' },
+  { id: 'pub', title: '发布链' },
+  { id: 'common', title: '常用库' },
 ];
 
 /** 环境安装页：引擎（install_tool）的真实体检 + 后台安装 + 进度轮询。 */
@@ -54,32 +58,32 @@ export default function EnvBoard({ tools, python, loading, error, jobs, anyRunni
     if (ids.length) void onInstallMany(ids);
   };
 
-  const view = (t: EnvTool): { state: 'ok' | 'missing' | 'busy' | 'fail' | 'nodir'; badge: string; cls: string } => {
+  const view = (t: EnvTool): { state: 'ok' | 'missing' | 'busy' | 'fail' | 'nodir'; badge: string; tone: DotTone } => {
     const job = jobs[t.id];
-    if (job?.state === 'running') return { state: 'busy', badge: '安装中', cls: 'warn' };
-    if (t.state === 'ok') return { state: 'ok', badge: '已装', cls: 'ok' };
+    if (job?.state === 'running') return { state: 'busy', badge: '安装中', tone: 'warn' };
+    if (t.state === 'ok') return { state: 'ok', badge: '已装', tone: 'ok' };
     // 刚装完、面板还在重新体检的过渡窗口：显示「校验中」，别闪回「未装」
-    if (job?.state === 'ok') return { state: 'busy', badge: '校验中', cls: 'warn' };
-    if (job?.state === 'fail') return { state: 'fail', badge: '失败', cls: 'fail' };
-    if (t.state === 'no_dir') return { state: 'nodir', badge: '需目录', cls: 'warn' };
-    if (t.state === 'fail') return { state: 'fail', badge: '异常', cls: 'fail' };
-    return { state: 'missing', badge: '未装', cls: 'off' };
+    if (job?.state === 'ok') return { state: 'busy', badge: '校验中', tone: 'warn' };
+    if (job?.state === 'fail') return { state: 'fail', badge: '失败', tone: 'danger' };
+    if (t.state === 'no_dir') return { state: 'nodir', badge: '需目录', tone: 'warn' };
+    if (t.state === 'fail') return { state: 'fail', badge: '异常', tone: 'danger' };
+    return { state: 'missing', badge: '未装', tone: 'idle' };
   };
 
   return (
     <section className="st-env">
       <div className="panel-top">
-        <span className="pill sum" aria-live="polite">{allDone ? '全就绪' : `就绪 ${okCount} / ${total}`}</span>
+        <span aria-live="polite"><Tag tone={allDone ? 'ok' : 'neutral'}>{allDone ? '全就绪' : `就绪 ${okCount} / ${total}`}</Tag></span>
         <span className="desc">
           装完自动校验{pid ? ` · 目标解释器 ${pid}` : ''} · 给其他机器＝整个目录拷过去
         </span>
         <span className="spacer" />
-        <button className="btn btn-sm" onClick={onRefresh} disabled={loading || anyRunning}>
+        <Button size="sm" onClick={onRefresh} disabled={loading || anyRunning}>
           {loading ? '检测中…' : '重新检测'}
-        </button>
-        <button className="btn btn-sm btn-primary" onClick={runAll} disabled={anyRunning || allDone || !total}>
+        </Button>
+        <Button variant="primary" size="sm" onClick={runAll} disabled={anyRunning || allDone || !total}>
           全部安装
-        </button>
+        </Button>
       </div>
       <div className="env-meter" role="progressbar" aria-label="环境就绪进度">
         <i style={{ transform: `scaleX(${total ? okCount / total : 0})` }} />
@@ -97,11 +101,10 @@ export default function EnvBoard({ tools, python, loading, error, jobs, anyRunni
         return (
           <div className="grp" key={g.id}>
             <div className="grp-hd">
-              <h3>{g.title} <span className="en">{g.en}</span></h3>
-              <span className="grp-stat">{ok} / {list.length} 就绪</span>
-              <button className="btn btn-sm" onClick={() => runGroup(g.id)} disabled={anyRunning || pending === 0}>
+              <h3 className="env-group-title">{g.title}<Tag tone={ok === list.length ? 'ok' : 'neutral'}>{ok}/{list.length} 就绪</Tag></h3>
+              <Button size="sm" onClick={() => runGroup(g.id)} disabled={anyRunning || pending === 0}>
                 整组安装
-              </button>
+              </Button>
             </div>
             <div className="grid">
               {list.map((t) => {
@@ -111,10 +114,9 @@ export default function EnvBoard({ tools, python, loading, error, jobs, anyRunni
                 return (
                   <div className="card" key={t.id} data-tool={t.id} data-state={v.state}>
                     <div className="card-top">
-                      <span className="tile"><Icon size={17} /></span>
-                      <span className={`badge pill ${v.cls}`}><span className="dot" />{v.badge}</span>
+                      <span className="card-name"><Icon size={14} />{t.name}</span>
+                      <StatusDot tone={v.tone}>{v.badge}</StatusDot>
                     </div>
-                    <div className="card-name">{t.name}</div>
                     <div className="card-desc">{t.desc}</div>
                     <div className="card-foot">
                       {v.state === 'busy' ? (
@@ -124,7 +126,7 @@ export default function EnvBoard({ tools, python, loading, error, jobs, anyRunni
                             <div className="bar"><i /></div>
                             <span className="spin" />
                           </div>
-                          <button className="btn btn-sm" disabled>安装中</button>
+                          <Button size="sm" disabled>安装中</Button>
                         </>
                       ) : (
                         <>
@@ -141,17 +143,18 @@ export default function EnvBoard({ tools, python, loading, error, jobs, anyRunni
                                   : ''}
                           </span>
                           {v.state === 'nodir' ? (
-                            <button className="btn btn-sm" disabled title="需要 --dir 工程目录（随独立版内置）">需目录</button>
+                            <Button size="sm" disabled title="需要 --dir 工程目录（随独立版内置）">需目录</Button>
                           ) : v.state === 'fail' ? (
-                            <button className="btn btn-sm btn-fill" onClick={() => void onInstall(t.id)} disabled={anyRunning}>重试</button>
+                            <Button variant="primary" size="sm" onClick={() => void onInstall(t.id)} disabled={anyRunning}>重试</Button>
                           ) : (
-                            <button
-                              className={`btn btn-sm ${v.state === 'ok' ? '' : 'btn-fill'}`}
+                            <Button
+                              variant={v.state === 'ok' ? 'secondary' : 'primary'}
+                              size="sm"
                               onClick={() => void onInstall(t.id)}
                               disabled={anyRunning}
                             >
                               {v.state === 'ok' ? '重装' : '安装'}
-                            </button>
+                            </Button>
                           )}
                         </>
                       )}
