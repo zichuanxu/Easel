@@ -388,7 +388,9 @@ def cmd_info(a) -> int:
 # ── selftest ─────────────────────────────────────────────────────────
 def _selftest() -> int:
     """用 edge-tts 合成一句中文语音，再 transcribe 出 srt，断言非空含时间戳。"""
-    if shutil.which("edge-tts") is None:
+    from tts import find_edge_tts   # 同目录；PATH 没激活 .venv 时也能找到
+    edge = find_edge_tts()
+    if edge is None:
         print("[FAIL] 未找到 edge-tts，无法自检（pip install edge-tts）", file=sys.stderr)
         return 1
     if not _has_ffmpeg():
@@ -398,7 +400,7 @@ def _selftest() -> int:
         mp3 = Path(d) / "asr_test.mp3"
         print("[selftest] edge-tts 合成测试语音……")
         proc = subprocess.run(
-            ["edge-tts", "--voice", "zh-CN-XiaoxiaoNeural",
+            [edge, "--voice", "zh-CN-XiaoxiaoNeural",
              "--text", "这是一段字幕测试", "--write-media", str(mp3)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
