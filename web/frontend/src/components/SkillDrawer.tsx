@@ -7,7 +7,8 @@ import { isLayerKey, layerInfo } from '../lib/layers';
 import Button from './ui/Button';
 import Tag from './ui/Tag';
 import Panel from './ui/Panel';
-import { Input, Select, Textarea } from './ui/Field';
+import { Input, Textarea } from './ui/Field';
+import SelectMenu from './ui/SelectMenu';
 
 interface SkillDrawerProps {
   skillName: string;
@@ -89,11 +90,16 @@ export default function SkillDrawer({ skillName, persona, onClose, onConfigured 
 
   const renderKeyField = (k: { env: string; secret: boolean; choices: string[]; configured: boolean; masked?: string }) => (
     k.choices.length > 0 ? (
-      <Select value={envInputs[k.env] ?? ''}
-        onChange={(e) => setEnvInputs((p) => ({ ...p, [k.env]: e.target.value }))}>
-        <option value="">{k.configured ? `当前：${k.masked}` : `请选择 ${k.env}`}</option>
-        {k.choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
-      </Select>
+      <SelectMenu
+        ariaLabel={k.env}
+        value={envInputs[k.env] ?? ''}
+        placeholder={k.configured ? `当前：${k.masked}` : `请选择 ${k.env}`}
+        options={[
+          { value: '', label: k.configured ? '保持当前' : '不设置' },
+          ...k.choices.map((choice) => ({ value: choice, label: choice })),
+        ]}
+        onChange={(v) => setEnvInputs((p) => ({ ...p, [k.env]: v }))}
+      />
     ) : (
       <Input
         type={k.secret ? 'password' : 'text'}

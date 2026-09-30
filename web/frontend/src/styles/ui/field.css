@@ -11,6 +11,5 @@
 .field:disabled { background: var(--c-sunken); color: var(--c-ink-3); cursor: not-allowed; }
 .field::placeholder { color: var(--c-ink-3); }
 /* :where 零特异性：让 .session-rename-input、.sms-input 等单类覆盖仍能生效 */
-:where(input.field, select.field) { height: var(--h-ctl); padding-top: 0; padding-bottom: 0; }
+:where(input.field) { height: var(--h-ctl); }
 textarea.field { resize: vertical; min-height: 90px; }
-select.field { cursor: pointer; }

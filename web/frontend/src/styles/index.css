@@ -3,6 +3,7 @@
 @import './base.css';
 @import './ui/button.css';
 @import './ui/field.css';
+@import './ui/select.css';
 @import './ui/primitives.css';
 @import './ui/overlay.css';
 @import './layout.css';

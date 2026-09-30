@@ -9,6 +9,7 @@ import {
 } from './icons';
 import { IconGear } from './settingsIcons';
 import Swatch from './ui/Swatch';
+import SelectMenu from './ui/SelectMenu';
 
 export type { Page } from '../lib/layers';
 
@@ -53,21 +54,16 @@ export default function Sidebar({
         <span className="sidebar-wordmark">Easel</span>
       </div>
 
-      <select
-        className="field persona-select"
+      <SelectMenu
+        className="persona-select"
+        ariaLabel="画像"
         value={selectedPersona}
-        onChange={(e) => {
-          if (e.target.value === '__new__') { onNewProfile(); return; }
-          onPersonaChange(e.target.value);
-        }}
+        options={[{ value: '', label: '通用模式' }, ...personas.map((p) => ({ value: p.name, label: p.name }))]}
+        onChange={onPersonaChange}
+        action={{ label: '新建画像', onSelect: onNewProfile }}
         disabled={activeSessionHasMessages}
         title={activeSessionHasMessages ? '当前对话已绑定画像，切换画像将新建对话' : '选择用户画像'}
-        aria-label="画像"
-      >
-        <option value="">通用模式</option>
-        {personas.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
-        <option value="__new__">+ 新建画像…</option>
-      </select>
+      />
 
       <nav className="sidebar-nav" aria-label="主导航" ref={navRef}>
         {NAV_GROUPS.map((g, gi) => (

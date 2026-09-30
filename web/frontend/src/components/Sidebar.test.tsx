@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import Sidebar from './Sidebar';
 
 const base = {
@@ -44,9 +44,45 @@ describe('Sidebar', () => {
       spy.mockClear();
       rerender(<Sidebar {...base} currentPage="profile" onPageChange={() => {}} />);
       expect(spy).toHaveBeenCalledWith({ block: 'nearest' });
-      expect(spy.mock.contexts[0]).toBe(screen.getByRole('button', { name: /画像/ }));
+      expect(spy.mock.contexts[0]).toBe(within(screen.getByRole('navigation', { name: '主导航' })).getByRole('button', { name: /画像/ }));
     } finally {
       Element.prototype.scrollIntoView = orig;
     }
+  });
+
+  describe('画像选择', () => {
+    const personas = [{ name: '小林' }, { name: '阿舟' }] as never;
+    const trigger = () => screen.getByRole('button', { name: '画像', expanded: false });
+
+    it('选画像调用 onPersonaChange，选通用模式传空串', () => {
+      const onPersonaChange = vi.fn();
+      const { rerender } = render(<Sidebar {...base} personas={personas} onPersonaChange={onPersonaChange} currentPage="dashboard" onPageChange={() => {}} />);
+      fireEvent.click(trigger());
+      fireEvent.click(screen.getByRole('option', { name: '阿舟' }));
+      expect(onPersonaChange).toHaveBeenCalledWith('阿舟');
+      rerender(<Sidebar {...base} personas={personas} selectedPersona="阿舟" onPersonaChange={onPersonaChange} currentPage="dashboard" onPageChange={() => {}} />);
+      fireEvent.click(trigger());
+      fireEvent.click(screen.getByRole('option', { name: '通用模式' }));
+      expect(onPersonaChange).toHaveBeenLastCalledWith('');
+    });
+
+    it('新建画像走操作项，调用 onNewProfile，不调用 onPersonaChange', () => {
+      const onNewProfile = vi.fn();
+      const onPersonaChange = vi.fn();
+      render(<Sidebar {...base} personas={personas} onNewProfile={onNewProfile} onPersonaChange={onPersonaChange} currentPage="dashboard" onPageChange={() => {}} />);
+      fireEvent.click(trigger());
+      fireEvent.click(screen.getByRole('button', { name: '新建画像' }));
+      expect(onNewProfile).toHaveBeenCalledTimes(1);
+      expect(onPersonaChange).not.toHaveBeenCalled();
+    });
+
+    it('会话里已有消息时禁用并给出说明', () => {
+      render(<Sidebar {...base} personas={personas} activeSessionHasMessages currentPage="dashboard" onPageChange={() => {}} />);
+      const t = trigger();
+      expect((t as HTMLButtonElement).disabled).toBe(true);
+      expect(t.getAttribute('title')).toBe('当前对话已绑定画像，切换画像将新建对话');
+      fireEvent.click(t);
+      expect(screen.queryByRole('listbox')).toBeNull();
+    });
   });
 });
