@@ -3,6 +3,11 @@ import { fetchSkillDetail, executeSkill, saveEnv } from '../lib/api';
 import type { SkillDetail } from '../lib/api';
 import { renderMarkdown } from '../lib/sanitize';
 import { displayName } from '../lib/skillDisplayNames';
+import { isLayerKey, layerInfo } from '../lib/layers';
+import Button from './ui/Button';
+import Tag from './ui/Tag';
+import Panel from './ui/Panel';
+import { Input, Select, Textarea } from './ui/Field';
 
 interface SkillDrawerProps {
   skillName: string;
@@ -53,7 +58,7 @@ export default function SkillDrawer({ skillName, persona, onClose, onConfigured 
       const seq = ++reqSeq.current;
       const fresh = await fetchSkillDetail(skillName);
       if (seq === reqSeq.current) setDetail(fresh);
-      setSavedMsg('已保存 ✓');
+      setSavedMsg('已保存');
       onConfigured();
       setTimeout(() => setSavedMsg(''), 2500);
     } catch (e) {
@@ -80,68 +85,66 @@ export default function SkillDrawer({ skillName, persona, onClose, onConfigured 
   };
 
   const blocked = detail?.needsApi && !detail.apiConfigured;
+  const layerKey = detail?.layer && isLayerKey(detail.layer) ? detail.layer : null;
+
+  const renderKeyField = (k: { env: string; secret: boolean; choices: string[]; configured: boolean; masked?: string }) => (
+    k.choices.length > 0 ? (
+      <Select value={envInputs[k.env] ?? ''}
+        onChange={(e) => setEnvInputs((p) => ({ ...p, [k.env]: e.target.value }))}>
+        <option value="">{k.configured ? `当前：${k.masked}` : `请选择 ${k.env}`}</option>
+        {k.choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
+      </Select>
+    ) : (
+      <Input
+        type={k.secret ? 'password' : 'text'}
+        placeholder={k.configured ? '留空则保持不变，输入以覆盖' : `请输入 ${k.env}`}
+        value={envInputs[k.env] || ''}
+        onChange={(e) => setEnvInputs((p) => ({ ...p, [k.env]: e.target.value }))}
+      />
+    )
+  );
 
   return (
     <div className="drawer-overlay" onClick={onClose}>
       <div className="drawer" onClick={(e) => e.stopPropagation()}>
         <div className="drawer-header">
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+          <div className="skill-detail-head">
             <div>
-              <div className="skill-detail-title">{displayName(skillName)}</div>
+              <h2 className="skill-detail-title">{displayName(skillName)}</h2>
               <div className="skill-detail-rawname">{skillName}</div>
               <div className="skill-detail-meta">
-                {detail?.layer && <span className="badge badge-accent">{{discover:'发现',plan:'策划',produce:'制作',publish:'发布',attribute:'归因',general:'通用'}[detail.layer] || detail.layer}</span>}
+                {detail?.layer && (layerKey
+                  ? <Tag tone={layerKey}>{layerInfo(layerKey).name}</Tag>
+                  : <Tag>{detail.layer}</Tag>)}
                 {detail?.needsApi && (
                   detail.apiConfigured
-                    ? <span className="badge badge-ok">✓ 已配置</span>
-                    : <span className="badge badge-warn">❗ 需配置 API</span>
+                    ? <Tag tone="ok">已配置</Tag>
+                    : <Tag tone="warn">需配置 API</Tag>
                 )}
               </div>
             </div>
-            <button className="icon-btn" onClick={onClose} title="关闭">×</button>
+            <button type="button" className="icon-btn" onClick={onClose} title="关闭" aria-label="关闭">×</button>
           </div>
         </div>
 
         <div className="drawer-body">
-          {loadErr && <div style={{ color: 'var(--red)', fontSize: 14 }}>{loadErr}</div>}
+          {loadErr && <div className="skill-error">{loadErr}</div>}
 
           {/* API 配置 */}
           {detail?.needsApi && detail.apiSpec && (
-            <div className="panel">
-              <div className="panel-title">🔑 {detail.apiSpec.label} · API 配置
-                <span style={{ fontWeight: 400, color: 'var(--text-secondary)', fontSize: 12 }}>
-                  （任选一个服务商填齐即可用）
-                </span>
-              </div>
+            <Panel title={<>{detail.apiSpec.label} · API 配置<span className="skill-panel-hint">（任选一个服务商填齐即可用）</span></>}>
               {detail.apiSpec.settings.length > 0 && (
-                <div className="provider-block">
-                  <div className="provider-head"><strong style={{ fontSize: 13 }}>默认选择与能力</strong></div>
+                <div className="skill-provider">
+                  <div className="skill-provider-head"><strong>默认选择与能力</strong></div>
                   {detail.apiSpec.settings.map((k) => (
                     <div key={k.env}>
                       <label className="field-label">
                         {k.label} · 可选
-                        {k.configured && <span style={{ color: 'var(--green)', marginLeft: 6 }}>
+                        {k.configured && <span className="skill-configured">
                           已配置{k.masked ? `：${k.masked}` : ''}
                         </span>}
                       </label>
-                      {k.choices.length > 0 ? (
-                        <select
-                          className="field"
-                          value={envInputs[k.env] ?? ''}
-                          onChange={(e) => setEnvInputs((p) => ({ ...p, [k.env]: e.target.value }))}
-                        >
-                          <option value="">{k.configured ? `当前：${k.masked}` : `请选择 ${k.env}`}</option>
-                          {k.choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
-                        </select>
-                      ) : (
-                        <input
-                          className="field"
-                          type={k.secret ? 'password' : 'text'}
-                          placeholder={k.configured ? '留空则保持不变，输入以覆盖' : `请输入 ${k.env}`}
-                          value={envInputs[k.env] || ''}
-                          onChange={(e) => setEnvInputs((p) => ({ ...p, [k.env]: e.target.value }))}
-                        />
-                      )}
+                      {renderKeyField(k)}
                     </div>
                   ))}
                 </div>
@@ -149,85 +152,62 @@ export default function SkillDrawer({ skillName, persona, onClose, onConfigured 
               {detail.apiSpec.providers.map((prov) => {
                 const provOk = prov.keys.filter(k => k.required).every(k => k.configured);
                 return (
-                  <div key={prov.id} className={`provider-block ${provOk ? 'configured' : ''}`}>
-                    <div className="provider-head">
-                      <strong style={{ fontSize: 13 }}>{prov.name}</strong>
-                      {provOk
-                        ? <span className="badge badge-ok">✓ 就绪</span>
-                        : <span className="badge">未配置</span>}
+                  <div key={prov.id} className={`skill-provider${provOk ? ' configured' : ''}`}>
+                    <div className="skill-provider-head">
+                      <strong>{prov.name}</strong>
+                      {provOk ? <Tag tone="ok">就绪</Tag> : <Tag>未配置</Tag>}
                     </div>
                     {prov.keys.map((k) => (
                       <div key={k.env}>
                         <label className="field-label">
                           {k.label}{k.required ? '' : ' · 可选'}
-                          {k.configured && <span style={{ color: 'var(--green)', marginLeft: 6 }}>
+                          {k.configured && <span className="skill-configured">
                             已配置{k.secret && k.masked ? `（${k.masked}）` : k.masked ? `：${k.masked}` : ''}
                           </span>}
                         </label>
-                        {k.choices.length > 0 ? (
-                          <select className="field" value={envInputs[k.env] ?? ''}
-                            onChange={(e) => setEnvInputs((p) => ({ ...p, [k.env]: e.target.value }))}>
-                            <option value="">{k.configured ? `当前：${k.masked}` : `请选择 ${k.env}`}</option>
-                            {k.choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}
-                          </select>
-                        ) : (
-                          <input
-                            className="field"
-                            type={k.secret ? 'password' : 'text'}
-                            placeholder={k.configured ? '留空则保持不变，输入以覆盖' : `请输入 ${k.env}`}
-                            value={envInputs[k.env] || ''}
-                            onChange={(e) => setEnvInputs((p) => ({ ...p, [k.env]: e.target.value }))}
-                          />
-                        )}
+                        {renderKeyField(k)}
                       </div>
                     ))}
                   </div>
                 );
               })}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
-                <button className="btn btn-primary btn-sm" onClick={handleSaveEnv} disabled={saving}>
+              <div className="skill-save-row">
+                <Button variant="primary" size="sm" onClick={handleSaveEnv} loading={saving}>
                   {saving ? '保存中…' : '保存到 .env'}
-                </button>
-                {savedMsg && <span style={{ fontSize: 13, color: savedMsg.includes('✓') ? 'var(--green)' : 'var(--text-secondary)' }}>{savedMsg}</span>}
+                </Button>
+                {savedMsg && <span className={`skill-saved${savedMsg.includes('已保存') ? ' ok' : ''}`}>{savedMsg}</span>}
               </div>
-            </div>
+            </Panel>
           )}
 
           {/* 执行 */}
-          <div className="panel">
-            <div className="panel-title">▶ 运行</div>
+          <Panel title="运行">
             {blocked && (
-              <div style={{ fontSize: 13, color: 'var(--amber)', marginBottom: 10 }}>
-                该 SKILL 需要先配置上面的 API 才能运行。
-              </div>
+              <div className="skill-blocked">该技能需要先配置上面的 API 才能运行。</div>
             )}
-            <textarea
-              className="field"
+            <Textarea
+              className="skill-input"
               placeholder="输入内容，例如主题 / 素材 / 要求…"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              style={{ minHeight: 100 }}
             />
-            <div style={{ marginTop: 10 }}>
-              <button className="btn btn-primary" onClick={handleRun} disabled={running || !input.trim() || blocked}>
-                {running
-                  ? <><span className="spinner" style={{ width: 14, height: 14, margin: 0 }} />执行中…</>
-                  : '执行'}
-              </button>
+            <div className="skill-run-row">
+              <Button variant="primary" onClick={handleRun} loading={running} disabled={!input.trim() || blocked}>
+                {running ? '执行中…' : '执行'}
+              </Button>
             </div>
-            {runErr && <div style={{ color: 'var(--red)', fontSize: 13, marginTop: 10 }}>{runErr}</div>}
+            {runErr && <div className="skill-error">{runErr}</div>}
             {resultHtml && (
               <div className="skill-result" dangerouslySetInnerHTML={{ __html: resultHtml }} />
             )}
-          </div>
+          </Panel>
 
           {/* 描述 */}
-          <div className="panel">
-            <div className="panel-title">📖 说明</div>
+          <Panel title="说明">
             {detail
               ? <div className="skill-body-md" dangerouslySetInnerHTML={{ __html: bodyHtml }} />
               : !loadErr && <div className="loading"><div className="spinner" />加载中…</div>}
-          </div>
+          </Panel>
         </div>
       </div>
     </div>

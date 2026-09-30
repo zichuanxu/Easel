@@ -1,0 +1,70 @@
+.skills-page { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.skills-top { padding: 26px 34px 0; }
+.skills-top .ui-page-header { margin-bottom: var(--sp-4); }
+.skills-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 28px; padding: 0 34px; }
+.skill-index { display: flex; flex-direction: column; gap: 2px; padding-top: 2px; }
+.skill-index-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: none; border-radius: var(--r-control); background: none; font-size: 13.5px; color: var(--c-ink-2); cursor: pointer; text-align: left; }
+.skill-index-item:hover { background: var(--c-hover); color: var(--c-ink); }
+.skill-index-item.active { background: var(--c-surface); color: var(--c-ink); font-weight: 600; box-shadow: 0 1px 0 var(--c-rule); }
+.skill-index-name { flex: 1; }
+.skill-index-count { font-size: var(--fs-12); color: var(--c-ink-3); font-variant-numeric: tabular-nums; }
+.skills-body { min-height: 0; overflow-y: auto; padding-bottom: 40px; }
+.skill-search { max-width: 420px; margin-bottom: var(--sp-2); }
+.skill-section { scroll-margin-top: 8px; }
+.skill-section-head { display: flex; align-items: baseline; gap: 10px; margin: 20px 0 4px; padding-bottom: 8px; border-bottom: 2px solid var(--layer-general); }
+.skill-section[data-layer="discover"] .skill-section-head { border-bottom-color: var(--layer-discover); }
+.skill-section[data-layer="plan"] .skill-section-head { border-bottom-color: var(--layer-plan); }
+.skill-section[data-layer="produce"] .skill-section-head { border-bottom-color: var(--layer-produce); }
+.skill-section[data-layer="publish"] .skill-section-head { border-bottom-color: var(--layer-publish); }
+.skill-section[data-layer="attribute"] .skill-section-head { border-bottom-color: var(--layer-attribute); }
+.skill-section-head h2 { font-size: 17px; }
+.skill-section-head span { font-size: 12.5px; color: var(--c-ink-3); }
+.skill-list { display: grid; grid-template-columns: 1fr 1fr; column-gap: 28px; }
+.skill-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: center; padding: 11px 0; border: none; border-bottom: 1px solid var(--c-rule); background: none; text-align: left; cursor: pointer; min-width: 0; }
+.skill-row-name { font-family: var(--font-serif); font-weight: 600; font-size: 15px; color: var(--c-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.skill-row-desc { grid-column: 1 / -1; font-size: var(--fs-13); line-height: 1.55; color: var(--c-ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.skill-row:hover .skill-row-name { text-decoration: underline; text-underline-offset: 3px; }
+@media (max-width: 1180px) { .skill-list { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .skills-grid { grid-template-columns: 1fr; } .skill-index { flex-direction: row; flex-wrap: wrap; } }
+
+/* 技能详情抽屉 */
+.skill-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.skill-detail-title { font-family: var(--font-serif); font-size: 20px; font-weight: 600; }
+.skill-detail-rawname { font-family: var(--font-mono); font-size: var(--fs-12); color: var(--c-ink-3); margin-top: 3px; }
+.skill-detail-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.skill-error { color: var(--c-danger); font-size: var(--fs-13); margin-top: 10px; }
+.skill-blocked { font-size: var(--fs-13); color: var(--c-warn); margin-bottom: 10px; }
+.skill-panel-hint { font-weight: 400; color: var(--c-ink-3); font-size: var(--fs-12); margin-left: 6px; }
+.skill-configured { color: var(--c-ok); margin-left: 6px; }
+.skill-provider { padding: 12px 14px; border: 1px solid var(--c-rule); border-radius: var(--r-control); margin-bottom: 10px; background: var(--c-surface); }
+.skill-provider.configured { border-color: var(--c-ok); }
+.skill-provider-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; font-size: var(--fs-13); }
+.skill-save-row { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.skill-saved { font-size: var(--fs-13); color: var(--c-ink-2); }
+.skill-saved.ok { color: var(--c-ok); }
+.skill-input { min-height: 100px; }
+.skill-run-row { margin-top: 10px; }
+
+.skill-result { margin-top: 14px; padding: 16px 18px; background: var(--c-sunken); border: 1px solid var(--c-rule); border-radius: var(--r-panel); font-size: var(--fs-14); line-height: 1.65; }
+.skill-result p { margin: 0 0 8px; }
+.skill-result p:last-child { margin-bottom: 0; }
+.skill-result pre { background: var(--c-surface); border-radius: var(--r-control); padding: 14px 16px; margin: 10px 0; overflow-x: auto; font-size: 13px; }
+.skill-result code { background: var(--c-surface); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 0.9em; }
+.skill-result pre code { background: none; padding: 0; }
+.skill-result ul, .skill-result ol { margin: 8px 0; padding-left: 20px; }
+
+.skill-body-md { font-size: 13.5px; line-height: 1.7; color: var(--c-ink); }
+.skill-body-md h1, .skill-body-md h2, .skill-body-md h3 { font-family: var(--font-serif); margin: 18px 0 8px; font-weight: 600; }
+.skill-body-md h1 { font-size: 1.35em; }
+.skill-body-md h2 { font-size: 1.18em; }
+.skill-body-md h3 { font-size: 1.05em; }
+.skill-body-md p { margin: 0 0 9px; }
+.skill-body-md ul, .skill-body-md ol { margin: 8px 0; padding-left: 20px; }
+.skill-body-md li { margin-bottom: 4px; }
+.skill-body-md code { background: var(--c-sunken); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 0.88em; }
+.skill-body-md pre { background: var(--c-sunken); border-radius: var(--r-control); padding: 13px 15px; margin: 10px 0; overflow-x: auto; font-size: 12.5px; }
+.skill-body-md pre code { background: none; padding: 0; }
+.skill-body-md table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 0.95em; }
+.skill-body-md th, .skill-body-md td { border: 1px solid var(--c-rule); padding: 5px 9px; text-align: left; }
+.skill-body-md th { background: var(--c-sunken); }
+.skill-body-md blockquote { border-left: 3px solid var(--c-rule-strong); padding-left: 12px; margin: 8px 0; color: var(--c-ink-2); }
