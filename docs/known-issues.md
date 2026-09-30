@@ -4,6 +4,33 @@
 
 ---
 
+## Claude CLI 路线：隔一会儿再追问，agent 忘了前面的对话
+
+- **影响范围**：用本机 Claude Code 登录跑 agent（`EASEL_AGENT_RUNTIME=claude-cli`）且使用默认的隔离配置目录 `~/.claude-easel` 时；OpenClaw 2026.9.7 实测。
+- **表现**：一轮任务做完，过一会儿在同一个对话里追问，agent 像新会话一样回答，比如复述画像设置、说「这条消息里还没有具体任务」。紧接着追问（上一轮的 Claude Code 进程还在）不受影响。
+- **网关日志**（`/tmp/easel-gateway.log`）：
+
+  ```
+  claude-cli transcript probe v4 miss … expectedPath=~/.claude/projects/<工作区>/<id>.jsonl fileExists=false
+  cli session reset: provider=claude-cli reason=transcript-missing
+  ```
+
+### 根因
+
+续聊前 OpenClaw 会确认上一轮的 Claude Code 会话文件还在，但它把路径写死成 `~/.claude/projects/<工作区>/`，不看传给 claude 的 `CLAUDE_CONFIG_DIR`。Easel 默认把 Claude Code 隔离到 `~/.claude-easel`，会话文件写在 `~/.claude-easel/projects/<工作区>/`，OpenClaw 找不到就重置会话，agent 只看得到当前这一条消息。问题在上游 OpenClaw，不在 Easel 仓库内。
+
+### 规避
+
+`bash setup.sh` 会把 `~/.claude/projects/<工作区>` 软链到 `~/.claude-easel/projects/<工作区>`：只动这一个目录，里面原有的文件先挪进隔离目录，同名冲突就停下、不覆盖。已经装好的机器运行一次：
+
+```bash
+python -m easel.claude_cli_link
+```
+
+`easel doctor` 的「Claude CLI session resume」一项会检查这个软链。OpenClaw 改为按 `CLAUDE_CONFIG_DIR` 找会话文件之后，删掉这个软链即可。
+
+---
+
 ## CLI 终端对话中「问答题」后回复重复显示
 
 - **影响范围**：仅 `easel chat`（终端对话）。**Web 工作台不受影响**。
