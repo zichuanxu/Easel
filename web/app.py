@@ -3327,6 +3327,21 @@ async def api_account_whoami(platform: str):
     return {**data, 'loginTs': _login_marker_ts(platform)}
 
 
+# 每个平台一把浏览器锁：whoami 与创作数据抓取用的是同一个浏览器 profile 目录，
+# 并发起浏览器会互相抢（小红书 _ProfileLock 空等 20 秒，其它平台 persistent context 直接启动失败）。
+# asyncio.Lock 绑定事件循环，所以连同循环一起存；只包住子进程段，命中缓存/不起浏览器的分支不进锁。
+_BROWSER_LOCKS: dict[str, tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
+
+
+def _browser_lock(platform: str) -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    ent = _BROWSER_LOCKS.get(platform)
+    if ent is None or ent[0] is not loop:
+        ent = (loop, asyncio.Lock())
+        _BROWSER_LOCKS[platform] = ent
+    return ent[1]
+
+
 async def _account_whoami(platform: str) -> dict:
     cfg = LOGIN_RUNNERS.get(platform)
     if not cfg:
@@ -3358,8 +3373,21 @@ async def _account_whoami(platform: str) -> dict:
         cmd = [sys.executable, str(SHARED_SCRIPTS / 'web_publisher.py'), 'whoami',
                '--platform', cfg['wp']]
     try:
-        proc = await asyncio.to_thread(subprocess.run, cmd, cwd=str(PROJECT_ROOT), env=_proxy_env(),
-                                       capture_output=True, text=True, timeout=150)
+        if backend == 'biliup':
+            # B站走 cookie 调 API、不起浏览器，不占浏览器锁
+            proc = await asyncio.to_thread(subprocess.run, cmd, cwd=str(PROJECT_ROOT), env=_proxy_env(),
+                                           capture_output=True, text=True, timeout=150)
+        else:
+            # 与创作数据抓取共用同一个浏览器 profile：按平台串行，避免 persistent context 抢占
+            async with _browser_lock(platform):
+                # 排队期间别人可能已经校验完并写了缓存，复查一次，省一次起浏览器
+                with _WHOAMI_LOCK:
+                    hit = _WHOAMI_CACHE.get(platform)
+                if (hit and (time.time() - hit[0]) < WHOAMI_TTL
+                        and hit[2] == _login_marker_mtime_ns(platform)):
+                    return hit[1]
+                proc = await asyncio.to_thread(subprocess.run, cmd, cwd=str(PROJECT_ROOT), env=_proxy_env(),
+                                               capture_output=True, text=True, timeout=150)
     except subprocess.TimeoutExpired:
         raise HTTPException(504, '校验超时（浏览器起不来或网络慢）')
     data = {'loggedIn': False, 'name': '', 'avatar': ''}
@@ -3471,40 +3499,96 @@ async def api_analytics_platforms():
     ]
 
 
-@app.get("/api/analytics/{platform}")
-async def api_analytics(platform: str):
-    """抓取某平台已登录账号的创作数据（粉丝/获赞/作品 + 与上次快照的增长）。起 headless 浏览器，数秒。"""
-    if platform not in ANALYTICS_PLATFORMS:
-        raise HTTPException(404, "该平台暂不支持数据抓取")
+# 创作数据最近一次成功结果落盘目录（与 account_stats.py 的 ANALYTICS_DIR 同一目录）；模块级变量方便测试替换
+ANALYTICS_CACHE_DIR = PROJECT_ROOT / "outputs" / "_analytics"
+# 同平台抓取 single-flight：platform → 正在跑的 Task。后到的请求 await 同一个 Task，共享结果/异常
+_ANALYTICS_INFLIGHT: dict[str, asyncio.Task] = {}
+
+
+def _analytics_latest_path(platform: str) -> Path:
+    return ANALYTICS_CACHE_DIR / f"{platform}-latest.json"
+
+
+def _write_analytics_latest(platform: str, data: dict) -> None:
+    """原子写最近一次成功结果（先写 .tmp 再 os.replace）；失败静默，不影响接口返回。"""
+    try:
+        ANALYTICS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        dst = _analytics_latest_path(platform)
+        tmp = dst.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, dst)
+    except Exception:
+        pass
+
+
+def _analytics_cmd(platform: str) -> list[str]:
     # B站用 cookie 调 API（无浏览器 profile）、公众号走 mp 后台会话（Playwright 拦截数据 XHR，见下），单独分支；其余走 account_stats（Playwright）
     if platform == "bilibili":
-        cmd = [sys.executable, str(SHARED_SCRIPTS / "bili_login.py"), "stats",
-               "--cookie", str(PROJECT_ROOT / "cookies.json")]
-    elif platform == "wechat-oa":
+        return [sys.executable, str(SHARED_SCRIPTS / "bili_login.py"), "stats",
+                "--cookie", str(PROJECT_ROOT / "cookies.json")]
+    if platform == "wechat-oa":
         # 公众号数据走「后台网页端」(mp.weixin.qq.com 管理员会话 + Playwright 拦截数据 XHR)：
         # 开发者 datacube 接口需认证+群发+接口权限，多数号取不到；后台端有登录态即可看到发表记录/数据。
         # 需先扫码登录 mp 后台（weixin_mp_stats.py login）；默认直连，受限网络才需 EASEL_PROXY/https_proxy。
         wx_proxy = os.environ.get("EASEL_PROXY") or os.environ.get("https_proxy") or ""
-        cmd = [sys.executable, str(SHARED_SCRIPTS / "weixin_mp_stats.py"), "stats",
-               "--proxy", wx_proxy, "--count", "20"]
-    else:
-        # 代理策略由 account_stats.py 按平台自定（xhs 直连、其它走 env），后端照常传 _proxy_env
-        cmd = [sys.executable, str(SHARED_SCRIPTS / "account_stats.py"), "fetch", "--platform", platform]
+        return [sys.executable, str(SHARED_SCRIPTS / "weixin_mp_stats.py"), "stats",
+                "--proxy", wx_proxy, "--count", "20"]
+    # 代理策略由 account_stats.py 按平台自定（xhs 直连、其它走 env），后端照常传 _proxy_env
+    return [sys.executable, str(SHARED_SCRIPTS / "account_stats.py"), "fetch", "--platform", platform]
+
+
+async def _run_analytics(platform: str) -> dict:
+    """真正跑一次抓取子进程。成功则落盘 latest；失败抛 HTTPException 且不动已有 latest。"""
+    cmd = _analytics_cmd(platform)
     ana_env = _proxy_env()
+
+    def _run():
+        return asyncio.to_thread(subprocess.run, cmd, cwd=str(PROJECT_ROOT), env=ana_env,
+                                 capture_output=True, text=True, timeout=180)
     try:
-        proc = await asyncio.to_thread(subprocess.run, cmd, cwd=str(PROJECT_ROOT), env=ana_env,
-                                       capture_output=True, text=True, timeout=180)
+        if platform == "bilibili":
+            proc = await _run()    # cookie 调 API 不起浏览器，不占浏览器锁
+        else:
+            async with _browser_lock(platform):   # 与 whoami 共用，串行
+                proc = await _run()
     except subprocess.TimeoutExpired:
         raise HTTPException(504, "抓取超时（浏览器起不来或网络慢）")
     for line in reversed((proc.stdout or "").strip().splitlines()):
         line = line.strip()
         if line.startswith("{"):
             try:
-                return json.loads(line)
+                data = json.loads(line)
             except Exception:
                 continue
+            if isinstance(data, dict):
+                _write_analytics_latest(platform, data)
+            return data
     detail = (proc.stderr or "").strip().splitlines()[-1:] or ["未取到数据"]
     raise HTTPException(502, f"未取到数据（可能未登录或平台改版）：{detail[0][:120]}")
+
+
+@app.get("/api/analytics/{platform}")
+async def api_analytics(platform: str, cached: int = 0):
+    """抓取某平台已登录账号的创作数据（粉丝/获赞/作品 + 与上次快照的增长）。起 headless 浏览器，数秒。
+
+    `?cached=1` 只读落盘的最近一次成功结果（毫秒级，不起子进程）；没有则 404。
+    同平台并发抓取共享同一次子进程（single-flight）。"""
+    if platform not in ANALYTICS_PLATFORMS:
+        raise HTTPException(404, "该平台暂不支持数据抓取")
+    if cached:
+        try:
+            return json.loads(_analytics_latest_path(platform).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise HTTPException(404, "还没有缓存")
+    task = _ANALYTICS_INFLIGHT.get(platform)
+    if task is None:
+        task = asyncio.ensure_future(_run_analytics(platform))
+        _ANALYTICS_INFLIGHT[platform] = task
+        # 结束后摘掉登记：之后的请求重新抓。identity 判断避免误删更新的 task
+        task.add_done_callback(
+            lambda t, p=platform: _ANALYTICS_INFLIGHT.get(p) is t and _ANALYTICS_INFLIGHT.pop(p, None))
+    # shield：某个请求被客户端断开取消时，不连累共享的抓取任务和其他等待者
+    return await asyncio.shield(task)
 
 
 MEDIA_REQUIRED = {"xiaohongshu", "douyin", "kuaishou", "weixin-channels", "bilibili"}
