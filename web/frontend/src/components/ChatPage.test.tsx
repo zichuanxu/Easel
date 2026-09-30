@@ -39,3 +39,33 @@ describe('ChatPage 对话态', () => {
     expect(screen.getByText('画像：在逃空指针')).toBeTruthy();
   });
 });
+
+describe('ChatPage 输入法回车', () => {
+  const setup = () => {
+    const onSend = vi.fn();
+    render(<ChatPage session={empty} onSend={onSend} onStop={() => {}} onResend={() => {}} />);
+    const box = screen.getByRole('textbox');
+    fireEvent.change(box, { target: { value: 'hello' } });
+    return { onSend, box };
+  };
+
+  it('组字中的回车（isComposing）只上屏，不发送', () => {
+    const { onSend, box } = setup();
+    fireEvent.keyDown(box, { key: 'Enter', isComposing: true });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('Safari 上屏回车（keyCode 229）不发送', () => {
+    const { onSend, box } = setup();
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 229 });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('普通回车发送，Shift+Enter 不发送', () => {
+    const { onSend, box } = setup();
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: true });
+    expect(onSend).not.toHaveBeenCalled();
+    fireEvent.keyDown(box, { key: 'Enter', keyCode: 13 });
+    expect(onSend).toHaveBeenCalledWith('hello', []);
+  });
+});

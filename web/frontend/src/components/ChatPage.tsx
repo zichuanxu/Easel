@@ -8,6 +8,7 @@ import type { UploadedFile } from '../lib/api';
 import type { LayerKey } from '../lib/layers';
 import Swatch from './ui/Swatch';
 import { IconArrowUp, IconStop, IconPlus, IconFile } from './icons';
+import { isSubmitEnter } from '../lib/ime';
 
 interface ChatPageProps {
   session: ChatSession;
@@ -116,7 +117,8 @@ export default function ChatPage({ session, stream, onSend, onStop, onResend, on
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // 输入法组字中的回车（中文输入法里敲英文按回车上屏）只上屏，不发送
+    if (isSubmitEnter(e) && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }

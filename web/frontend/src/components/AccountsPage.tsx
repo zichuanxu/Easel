@@ -11,6 +11,7 @@ import StatusDot from './ui/StatusDot';
 import Button from './ui/Button';
 import Modal from './ui/Modal';
 import { Input } from './ui/Field';
+import { isSubmitEnter } from '../lib/ime';
 
 type QRState = {
   platform: string;
@@ -369,7 +370,7 @@ export default function AccountsPage() {
                 className="sms-input"
                 value={smsCode}
                 onChange={(e) => setSmsCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
-                onKeyDown={(e) => { if (e.key === 'Enter') submitSms(); }}
+                onKeyDown={(e) => { if (isSubmitEnter(e)) submitSms(); }}
                 placeholder="短信验证码" inputMode="numeric" autoFocus />
               {smsErr && <p className="qr-error">{smsErr}</p>}
               <Button variant="primary" block loading={smsBusy} onClick={submitSms}>提交验证码</Button>
