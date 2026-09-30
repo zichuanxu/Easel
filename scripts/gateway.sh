@@ -178,7 +178,19 @@ case "${1:-status}" in
         ;;
     restart)
         "$0" stop
-        sleep 2
+        # stop 只是发了 kill：旧进程退出前 healthz 还会应答，紧跟着的 start 就当成「已在运行」直接退出，
+        # 旧 gateway 带着旧 env 留下来 —— 例如 Claude Code 配置目录的隔离悄悄不生效，还报重启成功。
+        # 所以等它真的下线再起；超时就明说没重启成、非 0 退出。gateway.ps1 尚未同步这段。
+        waited=0
+        while gateway_live && [ "$waited" -lt 15 ]; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+        if gateway_live; then
+            echo "[easel] Gateway still answering ${waited}s after stop; NOT restarted, new config is not applied." >&2
+            echo "[easel] Stop it manually (bash scripts/gateway.sh stop), then run: bash scripts/gateway.sh start" >&2
+            exit 1
+        fi
         "$0" start
         ;;
     status)

@@ -199,6 +199,21 @@ ANTHROPIC_API_KEY=your_api_key
 CLAUDE_MODEL=anthropic/claude-sonnet-4-6
 ```
 
+### Use your local Claude Code login (no API key)
+
+If you already use Claude Code, the agent can reuse its login through OpenClaw's `claude-cli` runtime instead of an API key; usage counts against your Claude subscription. Add one line to `.env` and edit the existing `CLAUDE_MODEL` line to the model you want (it must be `anthropic/<model>`):
+
+```dotenv
+# Explicit choice; wins over any API key in .env
+EASEL_AGENT_RUNTIME=claude-cli
+# Edit the existing line rather than adding a second one; the template's anthropic/claude-sonnet-4-6 also works on this route
+CLAUDE_MODEL=anthropic/claude-opus-5
+# Optional: defaults to ~/.claude-easel; "shared" reuses your personal ~/.claude
+# EASEL_CLAUDE_CONFIG_DIR=
+```
+
+The setup wizard only appears while `.env` has no usable key; its option 4 appends `EASEL_AGENT_RUNTIME=claude-cli` and `CLAUDE_MODEL=anthropic/claude-opus-5` (you can change the model). By default the agent gets its own Claude Code config dir, `~/.claude-easel`: sharing your personal `~/.claude` would pull its plugins, hooks and `CLAUDE.md` into the agent's replies. Log that dir in once with `CLAUDE_CONFIG_DIR=~/.claude-easel claude auth login` (an interactive `bash setup.sh` walks you through it). After changing the dir, rerun `bash setup.sh`; it restarts the gateway, and existing conversations need `/reset` or a new session. Only `setup.sh` (Linux/macOS) supports this route for now.
+
 `.env.example` also documents optional video, music, voice, and Anthropic-compatible provider settings. Configure only the capabilities you use. Missing media-provider credentials do not prevent chat, planning, or text creation.
 
 | Capability | Configuration | Additional dependency |

@@ -226,7 +226,7 @@ Windows 安装器会优先通过 `winget` 自动安装缺失的 Python 3.10+、N
 2. 询问是否创建或复用项目虚拟环境 `.venv/`；默认选择 `Y`。如果系统缺少 `venv`，会提示安装对应系统包（例如 Debian/Ubuntu 的 `python3-venv`）。
 3. 检查或安装 OpenClaw，并创建独立的 `easel` profile，不覆盖用户已有的 `~/.openclaw/`。
 4. 安装 Python、Web、媒体和浏览器发布依赖，构建 React Web 工作台并安装 Chromium；这些步骤任一失败都会停止，不会回退成不完整安装。
-5. 在终端中引导配置 Agent 模型：可选择 Anthropic、OpenAI/OpenAI-compatible、其他 Anthropic-compatible 服务，API Key 输入不会回显。
+5. 在终端中引导配置 Agent 模型：可选择 Anthropic、OpenAI/OpenAI-compatible、其他 Anthropic-compatible 服务，或本机 Claude Code 登录（无需 API Key），API Key 输入不会回显。
 6. 同步 skills、校验 OpenClaw 配置并启动 gateway。
 
 如果已经提前配置了有效的 `.env`，安装器会复用配置，不会重复询问；如果使用重定向或 CI 等非交互模式，安装器会跳过提问并明确提示缺少的配置。
@@ -297,6 +297,21 @@ CLAUDE_MODEL=你的模型名
 
 安装器会把这些标准配置同步到 OpenClaw。OpenClaw 支持但 Easel 没有预设环境变量映射的其他 provider，
 可以按 OpenClaw 自身的 provider/auth 配置方式配置；Easel 不会覆盖这些自定义配置。
+
+### 用本机 Claude Code 登录（无需 API Key）
+
+已经在用 Claude Code 时，可以让 agent 直接复用它的登录（OpenClaw 的 `claude-cli` 运行时），不必另配 API Key；用量计入你的 Claude 订阅。在 `.env` 里加一行，并把已有的 `CLAUDE_MODEL` 那一行改成想用的模型（须为 `anthropic/<模型>`）：
+
+```dotenv
+# 显式选择，优先于 .env 里的 API Key
+EASEL_AGENT_RUNTIME=claude-cli
+# 改已有的这一行，不要另加一行；模板默认的 anthropic/claude-sonnet-4-6 在这条路线上也能直接用
+CLAUDE_MODEL=anthropic/claude-opus-5
+# 可选：默认 ~/.claude-easel；填 shared 则共用个人 ~/.claude
+# EASEL_CLAUDE_CONFIG_DIR=
+```
+
+安装向导只在 `.env` 里还没有可用 key 时出现，其中第 4 项会追加 `EASEL_AGENT_RUNTIME=claude-cli` 和 `CLAUDE_MODEL=anthropic/claude-opus-5`（可改）。默认给 agent 一份独立的 Claude Code 配置目录 `~/.claude-easel`：共用个人 `~/.claude` 时，里面的插件、hooks、`CLAUDE.md` 会原样混进 agent 的回复。这份目录要单独登录一次：`CLAUDE_CONFIG_DIR=~/.claude-easel claude auth login`（交互运行 `bash setup.sh` 时会自动引导）。改了配置目录后重跑 `bash setup.sh` 会重启 gateway，已有对话需要 `/reset` 或新开会话。目前只有 `setup.sh`（Linux/macOS）支持这条路线。
 
 `.env.example` 还列出了视频、音乐、语音等可选模型配置。只需要配置实际使用的能力，也可以在 Web
 工作台的“技能库”中填写；没有配置的媒体 Skill 不会影响聊天、策划和文本创作。常见可选项包括：

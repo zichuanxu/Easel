@@ -291,7 +291,7 @@ else
 fi
 
 # ---- 7. 认证配置 ----
-step "7/8" "配置模型服务" "Agent API：Anthropic · OpenAI · 兼容接口"
+step "7/8" "配置模型服务" "Agent API：Anthropic · OpenAI · 兼容接口 · 本机 Claude CLI"
 info "配置认证..."
 if [ -f "$PROJECT_ROOT/.env" ]; then
     ok ".env 已存在"
@@ -368,7 +368,9 @@ print(json.dumps(p))')"
 }
 
 # 若用户已有默认 OpenClaw 配置，复用其模型名称；密钥不会从别的 profile 复制。
-if [ -z "${CLAUDE_MODEL:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -t 0 ]; then
+# Claude CLI 路线不问：它只认 anthropic/<模型>，复用来的多半是别家 provider，下面只会被打回默认。
+if [ -z "${CLAUDE_MODEL:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -t 0 ] \
+   && [ "${EASEL_AGENT_RUNTIME:-}" != "claude-cli" ]; then
     EXISTING_MODEL="$($OPENCLAW_BIN config get agents.defaults.model.primary 2>/dev/null || true)"
     if [ -n "$EXISTING_MODEL" ] && [ "$EXISTING_MODEL" != "null" ]; then
         echo "  检测到已有 OpenClaw 默认模型：$EXISTING_MODEL"
@@ -395,7 +397,10 @@ usable_key() {
 }
 
 MODEL_CONFIGURED=false
-if usable_key "${ANTHROPIC_API_KEY:-}"; then
+if [ "${EASEL_AGENT_RUNTIME:-}" = "claude-cli" ]; then
+    # 显式选了本机 Claude Code 登录，不需要任何 key（登录态在下面写配置时检查）
+    MODEL_CONFIGURED=true
+elif usable_key "${ANTHROPIC_API_KEY:-}"; then
     MODEL_CONFIGURED=true
 elif usable_key "${EASEL_LLM_API_KEY:-}" && [ -n "${EASEL_LLM_BASE_URL:-}" ]; then
     MODEL_CONFIGURED=true
@@ -414,6 +419,7 @@ if [ "$MODEL_CONFIGURED" = false ] && [ -t 0 ]; then
     echo "    1) Anthropic API"
     echo "    2) OpenAI / OpenAI-compatible API"
     echo "    3) 其他 Anthropic-compatible API"
+    echo "    4) 本机 Claude Code 登录（Claude CLI，无需 API Key）"
     echo "    0) 稍后配置"
     PROVIDER_CHOICE="$(ask '请选择模型服务 [1]：')"
     case "${PROVIDER_CHOICE:-1}" in
@@ -447,6 +453,17 @@ if [ "$MODEL_CONFIGURED" = false ] && [ -t 0 ]; then
                 ok "兼容 API 的 Agent 配置已写入 .env"
             fi
             ;;
+        4)
+            # gateway 是直接从 PATH 拉起 claude 的，这里找不到它，写了配置也跑不起来
+            if ! command -v claude >/dev/null 2>&1; then
+                warn "PATH 上找不到 claude：先安装 Claude Code（https://claude.com/claude-code），再重新运行 bash setup.sh"
+            else
+                MODEL_NAME="$(ask '模型名 [anthropic/claude-opus-5]：')"
+                printf '\nEASEL_AGENT_RUNTIME=claude-cli\nCLAUDE_MODEL=%s\n' \
+                    "${MODEL_NAME:-anthropic/claude-opus-5}" >> "$PROJECT_ROOT/.env"
+                ok "Claude CLI 路线已写入 .env（登录态在下一步检查）"
+            fi
+            ;;
         0) ;;
         *) warn "无法识别的选择，稍后可编辑 .env 后重新运行 bash setup.sh" ;;
     esac
@@ -456,6 +473,59 @@ elif [ "$MODEL_CONFIGURED" = false ]; then
 fi
 
 DEFAULT_PRIMARY_MODEL="anthropic/claude-sonnet-4-6"
+# 本机 Claude Code 登录路线（EASEL_AGENT_RUNTIME=claude-cli）。setup.ps1 尚未同步这条路线。
+CLAUDE_CLI_ROUTE=false
+# 改了 env.vars.CLAUDE_CONFIG_DIR 就得 restart：见文末启动 gateway 那一步。
+GATEWAY_RESTART_NEEDED=false
+
+# agents.defaults.models[<provider/model>].agentRuntime：claude-cli 分支挂上，API 分支摘掉残留。
+# 读写都只走 $OC —— 它按 OPENCLAW_STATE_DIR / OPENCLAW_CONFIG_PATH / $include 解析出的才是真配置，
+# 自己去读 $OPENCLAW_JSON 会和它对不上。实测 OpenClaw 2026.9.6：
+# - set --merge 递归合并，其他模型、该条目的其他键（alias/params…）原样保留；值没变时回 "No change"；
+# - get 对字符串值原样输出一行，路径不存在时退出码 1；带 "/" 的模型名用 ["..."] 寻址。
+# 补丁 JSON 交给 python 生成：模型名来自 .env，不拼进 shell 字符串；json.dumps 保持默认的
+# ensure_ascii（纯 ASCII 输出，任何 locale 下都不会编码失败或被 Node 误读）。
+# 用法：oc_model_runtime set|strip <provider/model>；set 写失败时返回非 0，strip 绝不中断安装。
+oc_model_runtime() {
+    local runtime_path="agents.defaults.models[\"$2\"].agentRuntime" current patch
+    current="$($OC config get "$runtime_path.id" 2>/dev/null || true)"
+    if [ "$1" = set ]; then
+        [ "$current" = "claude-cli" ] && return 0      # 已经是了就不写
+        patch="$(MR_MODEL="$2" python3 -c 'import json, os; print(json.dumps({os.environ["MR_MODEL"]: {"agentRuntime": {"id": "claude-cli"}}}))')"
+        $OC config set agents.defaults.models "$patch" --strict-json --merge 2>&1 | sed '/^No change$/d'
+    elif [ "$current" = "claude-cli" ]; then
+        $OC config unset "$runtime_path" 2>&1 | sed '/^No change$/d' \
+            || warn "没能摘掉 ${runtime_path}（不影响本次安装；残留时 agent 仍会走 Claude CLI）"
+    fi
+}
+
+# Claude CLI 是否**明确**未登录（参数：配置目录，空 = 个人 ~/.claude）。判据与 easel doctor 一致：
+# 只有解析出 loggedIn=false 才算；超时、起不来、老版本不认 --json、输出为空之类的都算拿不准，放行。
+# 交给 python 跑是为了 20s 超时（macOS 没有 timeout(1)）。探测环境对齐 gateway：OpenClaw 拉起
+# claude 前会删掉这几个认证变量（完整清单见 doctor.py 的 CLAUDE_CLI_CLEAR_ENV），shell 里导出的
+# key 不能让这里误判成已登录。
+claude_cli_logged_out() {
+    CLI_PROBE_DIR="${1:-}" python3 -c '
+import json, os, subprocess
+drop = {"CLI_PROBE_DIR", "CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"}
+env = {k: v for k, v in os.environ.items() if k not in drop}
+if os.environ.get("CLI_PROBE_DIR"):
+    env["CLAUDE_CONFIG_DIR"] = os.environ["CLI_PROBE_DIR"]
+try:
+    proc = subprocess.run(["claude", "auth", "status", "--json"], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=20, env=env)
+    status = json.loads(proc.stdout)
+except (OSError, subprocess.SubprocessError, ValueError):
+    raise SystemExit(1)
+raise SystemExit(0 if isinstance(status, dict) and status.get("loggedIn") is False else 1)'
+}
+
+# 只认 claude-cli 一个值；拼错（如 claude）会悄悄落回下面的 API 路线，得说一声。
+if [ -n "${EASEL_AGENT_RUNTIME:-}" ] && [ "${EASEL_AGENT_RUNTIME}" != "claude-cli" ]; then
+    warn "EASEL_AGENT_RUNTIME=${EASEL_AGENT_RUNTIME} 不认识（目前只支持 claude-cli），按 .env 里的 API key 配置"
+fi
+
 STANDARD_LLM_CONFIGURED=false
 # 仅当真正写了 anthropic provider 时，才补设它的 provider 级超时（见下方 timeoutSeconds）；
 # 否则会给 OpenAI/MAAS 用户凭空造出一个只有 timeoutSeconds、缺 baseUrl/models 的残缺 anthropic provider。
@@ -474,7 +544,105 @@ fi
 # 而非 -z，否则 .env.example 留下的占位符会一直把这支挡掉。
 # EASEL_LLM 要连 BASE_URL 一起判：只填了 key 没填 URL 时它哪条分支都用不上，
 # 不能让这种半拉配置把可用的 OPENAI 也一并挡死、最后落到「认证未配置」。
-if usable_key "${OPENAI_API_KEY:-}" && ! usable_key "${ANTHROPIC_API_KEY:-}" \
+if [ "${EASEL_AGENT_RUNTIME:-}" = "claude-cli" ]; then
+    # 显式选择，排第一：.env 里同时留着 API key 也以它为准；这条路线失败也不悄悄退回 API。
+    # agent 跑在 OpenClaw 自带的 claude-cli runtime 上，复用本机 Claude Code 的登录，不写任何 provider。
+    # 注意：变量后面紧跟中文时一律写 ${VAR}。bash 3.2（macOS 自带）在 UTF-8 locale 下会把全角字符的
+    # 字节吞进变量名，set -u 当场报 unbound variable、整个安装中断（tests 里有静态检查）。
+    CLAUDE_CLI_DEFAULT_MODEL="anthropic/claude-opus-5"   # = OpenClaw 2026.9.6 的 CLAUDE_CLI_DEFAULT_MODEL_REF
+    CLI_MODEL="${CLAUDE_MODEL:-}"
+    case "$CLI_MODEL" in
+        "") CLI_MODEL="$CLAUDE_CLI_DEFAULT_MODEL" ;;
+        anthropic/?*) ;;
+        claude-cli/?*) CLI_MODEL="anthropic/${CLI_MODEL#claude-cli/}" ;;   # 老写法，OpenClaw 已改用 anthropic/ + agentRuntime
+        */*|claude-) CLI_MODEL="" ;;                                       # 别家 provider：下面打回默认
+        claude-?*) CLI_MODEL="anthropic/${CLI_MODEL}" ;;                   # 裸模型名，补上 provider
+        *) CLI_MODEL="" ;;
+    esac
+    if [ -z "$CLI_MODEL" ]; then
+        warn "CLAUDE_MODEL=${CLAUDE_MODEL:-} 不是 anthropic/<模型>，Claude CLI 路线改用默认 ${CLAUDE_CLI_DEFAULT_MODEL}"
+        CLI_MODEL="$CLAUDE_CLI_DEFAULT_MODEL"
+    fi
+    # 默认给 agent 一份独立的 Claude Code 配置目录：共用个人 ~/.claude 时，里面的插件、hooks、
+    # CLAUDE.md 会原样带进 agent（实际出过事：个人 hook 的输出混进了 agent 的回复）。
+    # OpenClaw 把 env.vars 原样交给 claude、两边都不展开 ~ / $VAR，所以这里自己展开并要求绝对路径。
+    CLI_DIR="${EASEL_CLAUDE_CONFIG_DIR:-}"
+    CLI_DIR_OK=true
+    case "$CLI_DIR" in
+        "") CLI_DIR="$HOME/.claude-easel" ;;
+        shared) CLI_DIR="" ;;                       # 不隔离：直接用个人 ~/.claude 的登录
+        "~/"?*) CLI_DIR="$HOME/${CLI_DIR:2}" ;;
+        /*) ;;
+        *) CLI_DIR_OK=false ;;                      # 相对路径、~user/、单独一个 ~ 都不行
+    esac
+    while [ "${#CLI_DIR}" -gt 1 ] && [ "${CLI_DIR%/}" != "$CLI_DIR" ]; do
+        CLI_DIR="${CLI_DIR%/}"                      # 末尾的 / 不算改目录，免得白白重启 gateway
+    done
+    # 整个家目录当 Claude Code 配置目录，会把 .claude.json 之类直接铺进 ~ 下
+    if [ -n "$CLI_DIR" ] && [ "$CLI_DIR" = "${HOME%/}" ]; then
+        CLI_DIR_OK=false
+    fi
+    if ! command -v claude >/dev/null 2>&1; then
+        AUTH_CONFIGURED=false
+        warn "EASEL_AGENT_RUNTIME=claude-cli，但 PATH 上找不到 claude（gateway 也是从 PATH 找它）"
+        warn "  先安装 Claude Code（https://claude.com/claude-code），再重新运行 bash setup.sh"
+    elif [ "$CLI_DIR_OK" = false ]; then
+        AUTH_CONFIGURED=false
+        warn "EASEL_CLAUDE_CONFIG_DIR=${EASEL_CLAUDE_CONFIG_DIR:-} 不能用：要绝对路径（或 ~/ 开头）且不能是家目录本身"
+        warn "  相对路径会被当成 gateway 工作目录下的目录；改好（或填 shared）后重新运行 bash setup.sh"
+    elif ! oc_model_runtime set "$CLI_MODEL"; then
+        AUTH_CONFIGURED=false
+        warn "没能把 ${CLI_MODEL} 设为 Claude CLI runtime（见上方 openclaw 报错；需要支持 config set --merge 与 agentRuntime 的 OpenClaw，已验证 2026.9.6）"
+    else
+        CLAUDE_CLI_ROUTE=true
+        PREV_CLI_DIR="$($OC config get env.vars.CLAUDE_CONFIG_DIR 2>/dev/null || true)"
+        while [ "${#PREV_CLI_DIR}" -gt 1 ] && [ "${PREV_CLI_DIR%/}" != "$PREV_CLI_DIR" ]; do
+            PREV_CLI_DIR="${PREV_CLI_DIR%/}"
+        done
+        if [ "$CLI_DIR" != "$PREV_CLI_DIR" ]; then
+            if [ -n "$CLI_DIR" ]; then
+                $OC config set env.vars.CLAUDE_CONFIG_DIR "$CLI_DIR" 2>&1 | sed '/^No change$/d'
+            else
+                # 上面 get 读到了值才会走到这里；万一路径已经不在，unset 退出码非 0 也不能掐断安装
+                $OC config unset env.vars.CLAUDE_CONFIG_DIR 2>&1 | sed '/^No change$/d' || true
+            fi
+            # env.vars 只在 gateway 进程启动时注入（openclaw 自己也提示 "Restart the gateway to apply"）；
+            # 已有会话还绑着旧目录下的 Claude 会话，续聊会报 "Claude Code process exited with code 1"，
+            # 直到 /reset（本机实测）。
+            GATEWAY_RESTART_NEEDED=true
+            warn "Claude Code 配置目录改为 ${CLI_DIR:-个人 ~/.claude}，gateway 会重启以生效"
+            warn "  若之前已在用 Claude CLI 路线：旧对话绑定的是原目录的会话，请在对话里 /reset 或新开会话"
+        fi
+        # OpenClaw 让内联的 env.CLAUDE_CONFIG_DIR 盖过 env.vars（同名时后处理）
+        INLINE_CLI_DIR="$($OC config get env.CLAUDE_CONFIG_DIR 2>/dev/null || true)"
+        if [ -n "$INLINE_CLI_DIR" ] && [ "$INLINE_CLI_DIR" != "$CLI_DIR" ]; then
+            warn "openclaw.json 里还有内联的 env.CLAUDE_CONFIG_DIR=${INLINE_CLI_DIR}，它优先于上面的设置"
+            warn "  删掉它：openclaw --profile ${PROFILE:-easel} config unset env.CLAUDE_CONFIG_DIR"
+        fi
+        # OpenClaw 只在 gateway 进程环境**没有**这个变量时才用 env.vars 补上；只有导出的才会被继承
+        SHELL_CLI_DIR="$(printenv CLAUDE_CONFIG_DIR || true)"
+        if [ -n "$SHELL_CLI_DIR" ] && [ "$SHELL_CLI_DIR" != "$CLI_DIR" ]; then
+            warn "当前 shell 导出了 CLAUDE_CONFIG_DIR=${SHELL_CLI_DIR}：从这里起的 gateway 会用它、盖过上面的配置"
+        fi
+        CLI_LOGIN_CMD="claude auth login"
+        if [ -n "$CLI_DIR" ]; then
+            CLI_LOGIN_CMD="CLAUDE_CONFIG_DIR=$(printf '%q' "$CLI_DIR") claude auth login"
+        fi
+        if claude_cli_logged_out "$CLI_DIR"; then
+            if [ -t 0 ]; then
+                info "Claude CLI 尚未登录（${CLI_DIR:-个人 ~/.claude}），开始登录..."
+                env -u CLAUDE_CONFIG_DIR ${CLI_DIR:+"CLAUDE_CONFIG_DIR=$CLI_DIR"} claude auth login || true
+            fi
+            # 没登录不回滚配置：配置本身是对的，登录补上即可；easel doctor 也会继续标出来
+            if claude_cli_logged_out "$CLI_DIR"; then
+                warn "Claude CLI 未登录，agent 暂时用不了：运行 ${CLI_LOGIN_CMD}"
+            fi
+        fi
+        DEFAULT_PRIMARY_MODEL="$CLI_MODEL"
+        CLAUDE_MODEL="$CLI_MODEL"
+        ok "Claude CLI 路线已配置：${CLI_MODEL}（Claude Code 配置目录：${CLI_DIR:-个人 ~/.claude}）"
+    fi
+elif usable_key "${OPENAI_API_KEY:-}" && ! usable_key "${ANTHROPIC_API_KEY:-}" \
    && ! { usable_key "${EASEL_LLM_API_KEY:-}" && [ -n "${EASEL_LLM_BASE_URL:-}" ]; }; then
     OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o}"
     $OC config set models.providers.openai.api "openai-completions" 2>&1 | sed '/^No change$/d'
@@ -594,7 +762,13 @@ fi
 # CLAUDE_MODEL 保留旧变量名以兼容现有环境，值必须是 OpenClaw 的 provider/model。
 # 不要填内部 proxy 映射名（如 claude-4.6-opus-google），否则 OpenClaw 不认识。
 if [ "$AUTH_CONFIGURED" = true ]; then
-    $OC config set agents.defaults.model.primary "${CLAUDE_MODEL:-$DEFAULT_PRIMARY_MODEL}" 2>&1 | sed '/^No change$/d'
+    PRIMARY_MODEL="${CLAUDE_MODEL:-$DEFAULT_PRIMARY_MODEL}"
+    # 从 Claude CLI 换回 API 路线、模型名又没变时，残留的模型级 agentRuntime=claude-cli 会让 agent
+    # 悄悄继续走 Claude CLI（它优先于 provider）。只摘 claude-cli 这一种、只动这一个模型。
+    if [ "$CLAUDE_CLI_ROUTE" = false ]; then
+        oc_model_runtime strip "$PRIMARY_MODEL"
+    fi
+    $OC config set agents.defaults.model.primary "$PRIMARY_MODEL" 2>&1 | sed '/^No change$/d'
 else
     # 上面一个 provider 都没写。这时还去写 primary 只会把 agent 指向一个不存在的
     # provider（CLAUDE_MODEL 直接来自 .env），对话时报 "No route-compatible
@@ -674,7 +848,13 @@ ok "OpenClaw 配置校验通过"
 # ---- 11. 启动 gateway ----
 step "8/8" "启动并验证" "配置校验 · Chromium · Gateway health"
 info "启动 Easel gateway..."
-bash "$PROJECT_ROOT/scripts/gateway.sh" start
+# env.vars 只在 gateway 进程启动时注入，而 gateway.sh start 见到网关活着就直接退出 ——
+# 上面改了 Claude Code 配置目录时不 restart，新目录就永远不生效。
+if [ "$GATEWAY_RESTART_NEEDED" = true ]; then
+    bash "$PROJECT_ROOT/scripts/gateway.sh" restart
+else
+    bash "$PROJECT_ROOT/scripts/gateway.sh" start
+fi
 
 # Playwright is a runtime dependency for browser login/publishing.
 if python3 -c 'import playwright' >/dev/null 2>&1; then

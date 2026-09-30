@@ -21,6 +21,8 @@ import functools
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -74,28 +76,82 @@ def _auth_block() -> str:
     return helper + "\n\n" + body
 
 
-def _run_auth(tmp_path: Path, **env: str) -> tuple[str, dict[str, str]]:
-    """跑认证段，返回 (stdout, 实际写进 openclaw 的配置)。"""
+# 替身 claude：记下每次调用的参数、看到的 CLAUDE_CONFIG_DIR / ANTHROPIC_API_KEY（没设就记 <unset>）。
+# `auth status` 的退出码/输出照本机实测：已登录 0，未登录 1，两种都输出 JSON；
+# 设了 FAKE_CLAUDE_STATUS_OUT（哪怕是空串）就原样吐它、退出码 1，模拟老版本/输出坏掉。
+FAKE_CLAUDE = """#!/bin/sh
+printf '%s|%s|%s\\n' "$*" "${CLAUDE_CONFIG_DIR-<unset>}" "${ANTHROPIC_API_KEY-<unset>}" >> "$FAKE_CLAUDE_LOG"
+if [ "$1 $2" = "auth status" ]; then
+    if [ -n "${FAKE_CLAUDE_STATUS_OUT+x}" ]; then
+        printf '%s' "$FAKE_CLAUDE_STATUS_OUT"
+        exit 1
+    fi
+    printf '{"loggedIn": %s, "authMethod": "claude.ai"}\\n' "${FAKE_CLAUDE_LOGGED_IN:-true}"
+    [ "${FAKE_CLAUDE_LOGGED_IN:-true}" = true ]
+fi
+"""
+
+
+def _run_auth(tmp_path: Path, *, oc_state: dict[str, str] | None = None,
+              claude_on_path: bool = True, **env: str) -> tuple[str, dict[str, str]]:
+    """跑认证段，返回 (stdout, 实际写进 openclaw 的配置)。
+
+    - 与 setup.sh 一样开 `set -euo pipefail`；stdin 接 /dev/null，段里 `[ -t 0 ]` 的交互分支
+      （例如拉起 `claude auth login`）在测试里一律不走，`pytest -s` 时也一样。
+    - 假 claude 永远排在 PATH 最前：本机真 claude 在 ~/.local/bin，哪条用例都不许碰到它。
+      claude_on_path=False 时不放替身，由调用方给一个根本没有 claude 的 PATH。
+    - `$OC config get <path>` 从 oc_state 里答，没有就退出码 1（与 OpenClaw 一致）；
+      `config unset <path>` 记成 `<path> = <unset>`；每次 set 带的参数另记一份，见 _oc_flags。
+    - stdout 末尾多一行 `RESTART|<值>`：段内算出的「gateway 要不要 restart」。
+    """
+    q = shlex.quote
     calls = tmp_path / "oc-calls.log"
+    state = tmp_path / "oc-state"
+    state.write_text("".join(f"{k}={v}\n" for k, v in (oc_state or {}).items()), encoding="utf-8")
     script = textwrap.dedent(f"""
-        set -u
-        PROJECT_ROOT={tmp_path}
-        CFG={calls}
+        set -euo pipefail
+        PROJECT_ROOT={q(str(tmp_path))}
+        CFG={q(str(calls))}
+        OC_STATE={q(str(state))}
         : > "$CFG"
+        : > "$CFG.flags"
+        info() {{ echo "INFO|$*"; }}
         ok()   {{ echo "OK|$*"; }}
         warn() {{ echo "WARN|$*"; }}
         oc_write_anthropic() {{ echo "models.providers.anthropic.baseUrl = $1" >> "$CFG"; }}
         _oc() {{
-            if [ "${{1:-}}" = "config" ] && [ "${{2:-}}" = "set" ]; then
-                echo "$3 = $4" >> "$CFG"
-            fi
+            [ "${{1:-}}" = "config" ] || return 0
+            case "${{2:-}}" in
+                set)
+                    echo "$3 = $4" >> "$CFG"
+                    echo "$3|${{*:5}}" >> "$CFG.flags"
+                    ;;
+                unset)
+                    echo "$3 = <unset>" >> "$CFG"
+                    ;;
+                get)
+                    while IFS= read -r line; do
+                        case "$line" in "$3="*) printf '%s\\n' "${{line#"$3="}}"; return 0 ;; esac
+                    done < "$OC_STATE"
+                    return 1
+                    ;;
+            esac
             return 0
         }}
         OC=_oc
-    """) + "\n" + _auth_block()
+    """) + "\n" + _auth_block() + '\necho "RESTART|${GATEWAY_RESTART_NEEDED:-}"\n'
 
-    proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
-                          timeout=60, env={"PATH": os.environ["PATH"], **env})
+    run_env = {"PATH": os.environ["PATH"], "FAKE_CLAUDE_LOG": str(tmp_path / "claude-calls.log"), **env}
+    if claude_on_path:
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        fake = bin_dir / "claude"
+        fake.write_text(FAKE_CLAUDE, encoding="utf-8")
+        fake.chmod(0o755)
+        run_env["PATH"] = f"{bin_dir}{os.pathsep}{run_env['PATH']}"
+    # errors="replace"：bash 3.2 吞字节报错时 stderr 里有半个 UTF-8 字符，别让解码错误盖住真正的报错
+    proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, errors="replace",
+                          timeout=60, stdin=subprocess.DEVNULL, env=run_env)
     assert proc.returncode == 0, f"认证段执行失败：{proc.stderr}"
     written: dict[str, str] = {}
     if calls.is_file():
@@ -191,6 +247,396 @@ def test_setup_sh_has_no_bare_placeholder_comparisons():
     text = SETUP_SH.read_text(encoding="utf-8")
     body = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
     assert "sk-ant-REPLACE_ME" not in body, "认证判定里仍有硬编码占位符比较"
+
+
+# ── setup.sh：本机 Claude Code 登录路线（EASEL_AGENT_RUNTIME=claude-cli）──────────
+#
+# 目标终态与本机手配的一致：模型级 agentRuntime=claude-cli、primary=anthropic/<模型>、
+# env.vars.CLAUDE_CONFIG_DIR=<绝对路径>、不写 models.providers.anthropic。
+# 读写全走 $OC（替身从 oc_state 答 get）；「找不到 claude」的用例单独造一个只有基础工具的 PATH。
+
+# 这批用例要 python3 + 符号链接造 PATH；setup.sh 本来也只是 Linux/macOS 的安装路径。
+needs_posix = pytest.mark.skipif(os.name == "nt", reason="setup.sh 只在 Linux/macOS 上跑，Windows 走 setup.ps1")
+
+MODEL_PATCH = {"anthropic/claude-opus-5": {"agentRuntime": {"id": "claude-cli"}}}
+
+
+def _cli_env(tmp_path: Path, **extra: str) -> dict[str, str]:
+    return {"HOME": str(tmp_path / "home"), "EASEL_AGENT_RUNTIME": "claude-cli", **extra}
+
+
+def _claude_calls(tmp_path: Path) -> list[tuple[str, ...]]:
+    log = tmp_path / "claude-calls.log"
+    if not log.is_file():
+        return []
+    return [tuple(line.split("|", 2)) for line in log.read_text(encoding="utf-8").splitlines()]
+
+
+def _oc_flags(tmp_path: Path) -> dict[str, list[str]]:
+    """每次 `$OC config set <path> ...` 在 value 之后带的参数（--strict-json / --merge …）。"""
+    flags: dict[str, list[str]] = {}
+    for line in (tmp_path / "oc-calls.log.flags").read_text(encoding="utf-8").splitlines():
+        path, _, rest = line.partition("|")
+        flags[path] = rest.split()
+    return flags
+
+
+def _models(written: dict[str, str]) -> dict:
+    return json.loads(written["agents.defaults.models"])
+
+
+def _restart(out: str) -> str:
+    return next(line for line in out.splitlines() if line.startswith("RESTART|")).split("|", 1)[1]
+
+
+def _warns(out: str) -> list[str]:
+    return [line for line in out.splitlines() if line.startswith("WARN|")]
+
+
+@needs_bash
+@needs_posix
+def test_claude_cli_route_writes_expected_config(tmp_path):
+    out, written = _run_auth(tmp_path, **_cli_env(tmp_path))
+    home = str(tmp_path / "home")
+    assert {**written, "agents.defaults.models": _models(written)} == {
+        "agents.defaults.models": MODEL_PATCH,
+        "env.vars.CLAUDE_CONFIG_DIR": f"{home}/.claude-easel",
+        "agents.defaults.model.primary": "anthropic/claude-opus-5",
+    }
+    # 只给补丁、让 OpenClaw 递归合并：丢了 --merge 就是整表替换，丢了 --strict-json 就按字符串存
+    assert _oc_flags(tmp_path)["agents.defaults.models"] == ["--strict-json", "--merge"]
+    assert any(line.startswith("OK|Claude CLI 路线已配置") for line in out.splitlines())
+    assert not _warns(out) or all("配置目录改为" in w or "/reset" in w for w in _warns(out))
+    # 登录态是按 gateway 会用的那个目录查的
+    assert _claude_calls(tmp_path) == [("auth status --json", f"{home}/.claude-easel", "<unset>")]
+    assert _restart(out) == "true"      # 第一次写入配置目录 → 要 restart
+
+
+@needs_bash
+@needs_posix
+def test_claude_cli_route_beats_api_key(tmp_path):
+    """显式选择优先：.env 里同时留着 ANTHROPIC_API_KEY 也不写 provider、探测时也不带它。"""
+    _, written = _run_auth(tmp_path, **_cli_env(
+        tmp_path, ANTHROPIC_API_KEY="sk-ant-real", CLAUDE_MODEL="anthropic/claude-sonnet-4-6"))
+    assert "models.providers.anthropic.baseUrl" not in written
+    assert written["agents.defaults.model.primary"] == "anthropic/claude-sonnet-4-6"
+    assert _models(written) == {"anthropic/claude-sonnet-4-6": {"agentRuntime": {"id": "claude-cli"}}}
+    assert all(api_key == "<unset>" for _, _, api_key in _claude_calls(tmp_path)), \
+        "shell 里的 ANTHROPIC_API_KEY 带进了登录探测，会误判成已登录"
+
+
+@needs_bash
+@needs_posix
+def test_claude_cli_route_is_idempotent(tmp_path):
+    """已经配好的机器再跑一遍：除了（值不变的）primary 什么都不写，也不 restart。"""
+    home = str(tmp_path / "home")
+    out, written = _run_auth(tmp_path, oc_state={
+        "env.vars.CLAUDE_CONFIG_DIR": f"{home}/.claude-easel",
+        'agents.defaults.models["anthropic/claude-opus-5"].agentRuntime.id': "claude-cli",
+    }, **_cli_env(tmp_path))
+    assert written == {"agents.defaults.model.primary": "anthropic/claude-opus-5"}
+    assert _restart(out) == "false"
+    assert not _warns(out)
+
+
+@pytest.mark.parametrize("model,expected", [
+    ("claude-cli/claude-opus-4-7", "anthropic/claude-opus-4-7"),   # 老写法换成 anthropic/
+    ("claude-opus-4-7", "anthropic/claude-opus-4-7"),              # 裸模型名补上 provider
+    ("", "anthropic/claude-opus-5"),                               # 没填：OpenClaw 自己的默认
+])
+@needs_bash
+@needs_posix
+def test_claude_cli_route_model_normalization(tmp_path, model, expected):
+    out, written = _run_auth(tmp_path, **_cli_env(tmp_path, CLAUDE_MODEL=model))
+    assert written["agents.defaults.model.primary"] == expected
+    assert list(_models(written)) == [expected]
+    assert not any("CLAUDE_MODEL" in w for w in _warns(out))
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-4o", "anthropic/", "claude-cli/", "gpt-4o"])
+@needs_bash
+@needs_posix
+def test_claude_cli_route_foreign_model_falls_back_with_warning(tmp_path, model):
+    out, written = _run_auth(tmp_path, **_cli_env(tmp_path, CLAUDE_MODEL=model))
+    assert written["agents.defaults.model.primary"] == "anthropic/claude-opus-5"
+    assert any(w.startswith(f"WARN|CLAUDE_MODEL={model} ") for w in _warns(out))
+
+
+@pytest.mark.parametrize("value,expected", [
+    (None, "{home}/.claude-easel"),         # 没设
+    ("", "{home}/.claude-easel"),           # 设了空值
+    ("~/x", "{home}/x"),                    # 带引号写进 .env / 从环境传进来时 ~ 不会被 shell 展开
+    ("{tmp}/abs-dir", "{tmp}/abs-dir"),
+    ("{tmp}/abs-dir//", "{tmp}/abs-dir"),   # 末尾的 / 不算数
+], ids=["unset", "empty", "tilde", "absolute", "trailing-slash"])
+@needs_bash
+@needs_posix
+def test_claude_cli_route_config_dir(tmp_path, value, expected):
+    fmt = {"home": str(tmp_path / "home"), "tmp": str(tmp_path)}
+    extra = {} if value is None else {"EASEL_CLAUDE_CONFIG_DIR": value.format(**fmt)}
+    _, written = _run_auth(tmp_path, **_cli_env(tmp_path, **extra))
+    assert written["env.vars.CLAUDE_CONFIG_DIR"] == expected.format(**fmt)
+    assert _claude_calls(tmp_path)[0][1] == expected.format(**fmt)
+
+
+@pytest.mark.parametrize("value", ["relative/dir", "~other/x", "~", "~/", "{home}", "{home}/"])
+@needs_bash
+@needs_posix
+def test_claude_cli_route_rejects_bad_config_dir(tmp_path, value):
+    """相对路径会落到 gateway 工作目录下（OpenClaw 原样传、claude 也不展开）；家目录本身也不行。
+    不配这条路线，primary 也不动。"""
+    value = value.format(home=str(tmp_path / "home"))
+    out, written = _run_auth(tmp_path, **_cli_env(tmp_path, EASEL_CLAUDE_CONFIG_DIR=value))
+    assert written == {}
+    assert any("不能用" in w for w in _warns(out))
+    assert _claude_calls(tmp_path) == []
+
+
+@needs_bash
+@needs_posix
+def test_claude_cli_route_shared_uses_personal_login(tmp_path):
+    """shared：不写 env.vars，探测时也不带 CLAUDE_CONFIG_DIR —— 连 shell 里导出的那个都要摘掉。"""
+    out, written = _run_auth(tmp_path, **_cli_env(
+        tmp_path, EASEL_CLAUDE_CONFIG_DIR="shared", CLAUDE_CONFIG_DIR="/from/shell"))
+    assert "env.vars.CLAUDE_CONFIG_DIR" not in written
+    assert written["agents.defaults.model.primary"] == "anthropic/claude-opus-5"
+    assert _claude_calls(tmp_path)[0][1] == "<unset>"
+    assert _restart(out) == "false"
+    # gateway 从这个 shell 起会继承导出的 CLAUDE_CONFIG_DIR、盖过配置，得提醒
+    assert any("CLAUDE_CONFIG_DIR=/from/shell" in w for w in _warns(out))
+
+
+@needs_bash
+@needs_posix
+def test_claude_cli_route_shared_unsets_previous_dir(tmp_path):
+    out, written = _run_auth(tmp_path, oc_state={"env.vars.CLAUDE_CONFIG_DIR": "/old/claude-easel"},
+                             **_cli_env(tmp_path, EASEL_CLAUDE_CONFIG_DIR="shared"))
+    assert written["env.vars.CLAUDE_CONFIG_DIR"] == "<unset>"
+    assert _restart(out) == "true"
+
+
+@pytest.mark.parametrize("previous,changed", [
+    ("{home}/.claude-easel", False),
+    ("{home}/.claude-easel/", False),       # 手写多了个 / 也是同一个目录
+    ("/old/claude-easel", True),
+    (None, True),
+], ids=["same", "same-trailing-slash", "different", "absent"])
+@needs_bash
+@needs_posix
+def test_claude_cli_route_restart_only_when_dir_changes(tmp_path, previous, changed):
+    """env.vars 只在 gateway 启动时注入：目录变了才要 restart，并提醒旧会话要 /reset。"""
+    home = str(tmp_path / "home")
+    state = {} if previous is None else {"env.vars.CLAUDE_CONFIG_DIR": previous.format(home=home)}
+    out, written = _run_auth(tmp_path, oc_state=state, **_cli_env(tmp_path))
+    assert _restart(out) == ("true" if changed else "false")
+    assert ("env.vars.CLAUDE_CONFIG_DIR" in written) is changed
+    assert any("/reset" in w for w in _warns(out)) is changed
+
+
+@needs_bash
+@needs_posix
+def test_claude_cli_route_warns_about_inline_env_override(tmp_path):
+    """内联的 env.CLAUDE_CONFIG_DIR 在 OpenClaw 里盖过 env.vars —— setup 写的会不生效。"""
+    out, _ = _run_auth(tmp_path, oc_state={"env.CLAUDE_CONFIG_DIR": "/inline/dir"}, **_cli_env(tmp_path))
+    assert any("env.CLAUDE_CONFIG_DIR=/inline/dir" in w for w in _warns(out))
+
+
+@needs_bash
+@needs_posix
+def test_claude_cli_route_without_claude_binary(tmp_path):
+    """找不到 claude：什么都不写（primary 也不动），也不悄悄退回同时配着的 API key。"""
+    sysbin = tmp_path / "sysbin"
+    sysbin.mkdir()
+    for tool in ("bash", "python3", "sed", "tr", "env", "cat", "printenv"):
+        found = shutil.which(tool)
+        assert found, f"测试机上缺 {tool}"
+        (sysbin / tool).symlink_to(found)
+    assert shutil.which("claude", path=str(sysbin)) is None
+    out, written = _run_auth(tmp_path, claude_on_path=False,
+                             **_cli_env(tmp_path, PATH=str(sysbin), ANTHROPIC_API_KEY="sk-ant-real"))
+    assert written == {}
+    assert any("找不到 claude" in w for w in _warns(out))
+    assert any("https://claude.com/claude-code" in w for w in _warns(out))
+
+
+@needs_bash
+@needs_posix
+def test_claude_cli_route_logged_out_non_interactive(tmp_path):
+    """没登录不回滚配置（配置本身是对的），给出能直接粘贴的登录命令；非交互时不去拉起登录。
+    家目录故意带空格：提示里的命令要照样能粘贴。"""
+    home = tmp_path / "home dir"
+    out, written = _run_auth(tmp_path, **_cli_env(tmp_path, HOME=str(home), FAKE_CLAUDE_LOGGED_IN="false"))
+    claude_dir = f"{home}/.claude-easel"
+    assert written["agents.defaults.model.primary"] == "anthropic/claude-opus-5"
+    assert written["env.vars.CLAUDE_CONFIG_DIR"] == claude_dir
+    login = [w for w in _warns(out) if "claude auth login" in w]
+    assert login, "没有给出登录命令"
+    command = login[0].split("运行 ", 1)[1]
+    assert shlex.split(command) == [f"CLAUDE_CONFIG_DIR={claude_dir}", "claude", "auth", "login"]
+    assert all(not args.startswith("auth login") for args, _, _ in _claude_calls(tmp_path))
+
+
+@pytest.mark.parametrize("status_out", ["", "error: unknown option '--json'", "{not json"],
+                         ids=["empty", "old-cli", "garbage"])
+@needs_bash
+@needs_posix
+def test_claude_cli_route_unclear_login_status_passes(tmp_path, status_out):
+    """与 easel doctor 同一判据：只有明确的 loggedIn=false 才算没登录，其余一律放行。"""
+    out, written = _run_auth(tmp_path, **_cli_env(tmp_path, FAKE_CLAUDE_STATUS_OUT=status_out))
+    assert written["agents.defaults.model.primary"] == "anthropic/claude-opus-5"
+    assert not any("未登录" in w for w in _warns(out))
+
+
+def _utf8_locale() -> str | None:
+    try:
+        listed = subprocess.run(["locale", "-a"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    available = {line.strip() for line in listed.splitlines()}
+    return next((loc for loc in ("en_US.UTF-8", "C.UTF-8", "en_US.utf8", "C.utf8") if loc in available), None)
+
+
+@needs_bash
+@needs_posix
+def test_claude_cli_route_under_utf8_locale(tmp_path):
+    """真机现场：LANG=en_US.UTF-8 + macOS 自带 bash 3.2，`$VAR（` 会把全角字符吞进变量名，
+    set -u 直接中断安装。harness 默认只带 PATH（C locale）看不出来，这里按用户的 locale 再跑一遍。"""
+    loc = _utf8_locale()
+    if loc is None:
+        pytest.skip("本机没有 UTF-8 locale")
+    out, written = _run_auth(tmp_path, **_cli_env(tmp_path, LANG=loc, LC_ALL=loc))
+    assert written["agents.defaults.model.primary"] == "anthropic/claude-opus-5"
+    assert any(line.startswith("OK|Claude CLI 路线已配置") for line in out.splitlines())
+
+
+@needs_bash
+@needs_posix
+def test_unknown_agent_runtime_warns_and_uses_api_route(tmp_path):
+    """EASEL_AGENT_RUNTIME 拼错会悄悄落回 API 路线，得说一声。"""
+    out, written = _run_auth(tmp_path, **_cli_env(tmp_path, EASEL_AGENT_RUNTIME="claude",
+                                                  ANTHROPIC_API_KEY="sk-ant-real"))
+    assert any(w.startswith("WARN|EASEL_AGENT_RUNTIME=claude ") for w in _warns(out))
+    assert written["models.providers.anthropic.baseUrl"] == "https://api.anthropic.com"
+    assert _claude_calls(tmp_path) == []
+
+
+STALE_RUNTIME = 'agents.defaults.models["anthropic/claude-opus-5"].agentRuntime'
+
+
+@needs_bash
+@needs_posix
+def test_api_route_strips_stale_claude_cli_runtime(tmp_path):
+    """从 Claude CLI 换回 API key、模型名没变：残留的 runtime 会让 agent 悄悄继续走 Claude CLI。
+
+    只摘 primary 那个模型的 agentRuntime（unset 这一条路径），其他键、其他模型都不碰。
+    """
+    env = _cli_env(tmp_path, ANTHROPIC_API_KEY="sk-ant-real", CLAUDE_MODEL="anthropic/claude-opus-5")
+    del env["EASEL_AGENT_RUNTIME"]
+    out, written = _run_auth(tmp_path, oc_state={f"{STALE_RUNTIME}.id": "claude-cli"}, **env)
+    assert written[STALE_RUNTIME] == "<unset>"
+    assert "agents.defaults.models" not in written
+    assert written["models.providers.anthropic.baseUrl"] == "https://api.anthropic.com"
+    assert _claude_calls(tmp_path) == []
+    assert _restart(out) == "false"
+
+
+@pytest.mark.parametrize("state", [
+    {f"{STALE_RUNTIME}.id": "pi"},      # 别的 runtime 不归我们管
+    {},                                  # 没有 runtime
+], ids=["other-runtime", "no-runtime"])
+@needs_bash
+@needs_posix
+def test_api_route_leaves_other_runtimes_alone(tmp_path, state):
+    env = _cli_env(tmp_path, ANTHROPIC_API_KEY="sk-ant-real", CLAUDE_MODEL="anthropic/claude-opus-5")
+    del env["EASEL_AGENT_RUNTIME"]
+    _, written = _run_auth(tmp_path, oc_state=state, **env)
+    assert not any(k.startswith("agents.defaults.models") for k in written), written
+
+
+# ── setup.sh：收尾的 gateway 启动 + 向导菜单 ────────────────────────────────
+
+
+@pytest.mark.parametrize("flag,expected", [("true", "restart"), ("false", "start")])
+@needs_bash
+@needs_posix
+def test_setup_sh_restarts_gateway_only_when_needed(tmp_path, flag, expected):
+    """gateway.sh start 见到网关活着就直接退出 —— 配置目录改了却只 start，新目录永远不生效。"""
+    lines = SETUP_SH.read_text(encoding="utf-8").splitlines()
+    step = _slice(lines, 'if [ "$GATEWAY_RESTART_NEEDED" = true ]; then', "fi", keep_end=True)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "gateway.sh").write_text('printf "%s\\n" "$*" >> "$GATEWAY_LOG"\n',
+                                                    encoding="utf-8")
+    log = tmp_path / "gateway-calls.log"
+    script = (f"set -euo pipefail\nPROJECT_ROOT={shlex.quote(str(tmp_path))}\n"
+              f"GATEWAY_RESTART_NEEDED={flag}\n{step}\n")
+    proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+                          stdin=subprocess.DEVNULL,
+                          env={"PATH": os.environ["PATH"], "GATEWAY_LOG": str(log)})
+    assert proc.returncode == 0, proc.stderr
+    assert log.read_text(encoding="utf-8").split() == [expected]
+
+
+@pytest.mark.parametrize("live_polls,exit_code,calls", [
+    (3, 0, ["stop", "start"]),      # 旧进程几秒后下线 → 等到了再 start
+    (999, 1, ["stop"]),             # 一直不下线 → 明说没重启成、非 0 退出，不去 start
+], ids=["slow-shutdown", "never-stops"])
+@needs_bash
+@needs_posix
+def test_gateway_restart_waits_for_old_gateway(tmp_path, live_polls, exit_code, calls):
+    """stop 后旧进程还在应答 healthz 时，start 会当成「已在运行」直接退出，旧 env 留下来。
+    只切 gateway.sh 的 restart 分支来跑：sleep、gateway_live 换成替身，$0 指向记录参数的假脚本。"""
+    lines = (PROJECT_ROOT / "scripts" / "gateway.sh").read_text(encoding="utf-8").splitlines()
+    branch = _slice(lines, "    restart)", "        ;;", keep_end=True)
+    fake_self = tmp_path / "gateway-self"
+    fake_self.write_text('#!/bin/sh\necho "$1" >> "$GW_LOG"\n', encoding="utf-8")
+    fake_self.chmod(0o755)
+    polls = tmp_path / "polls"
+    script = textwrap.dedent(f"""
+        set -euo pipefail
+        sleep() {{ :; }}
+        gateway_live() {{
+            n=$(cat {shlex.quote(str(polls))} 2>/dev/null || echo 0)
+            echo $((n + 1)) > {shlex.quote(str(polls))}
+            [ "$n" -lt {live_polls} ]
+        }}
+    """) + "case restart in\n" + branch + "\nesac\n"
+    log = tmp_path / "gw.log"
+    proc = subprocess.run(["bash", "-c", script, str(fake_self)], capture_output=True, text=True,
+                          errors="replace", timeout=30, stdin=subprocess.DEVNULL,
+                          env={"PATH": os.environ["PATH"], "GW_LOG": str(log)})
+    assert proc.returncode == exit_code, proc.stderr
+    assert log.read_text(encoding="utf-8").split() == calls
+    if exit_code:
+        assert "NOT restarted" in proc.stderr
+
+
+def test_setup_sh_wizard_keeps_options_and_adds_claude_cli():
+    """向导 1–3 项和默认值原样不动，新增第 4 项。"""
+    text = SETUP_SH.read_text(encoding="utf-8")
+    menu = [line.strip() for line in text.splitlines() if re.match(r'\s*echo "    \d\) ', line)]
+    assert menu == [
+        'echo "    1) Anthropic API"',
+        'echo "    2) OpenAI / OpenAI-compatible API"',
+        'echo "    3) 其他 Anthropic-compatible API"',
+        'echo "    4) 本机 Claude Code 登录（Claude CLI，无需 API Key）"',
+        'echo "    0) 稍后配置"',
+    ]
+    assert 'case "${PROVIDER_CHOICE:-1}" in' in text
+    option4 = text.split('        4)\n', 1)[1].split(';;', 1)[0]
+    assert "EASEL_AGENT_RUNTIME=claude-cli" in option4 and "command -v claude" in option4
+
+
+@pytest.mark.parametrize("path", [SETUP_SH, PROJECT_ROOT / "scripts" / "gateway.sh",
+                                  PROJECT_ROOT / "openclaw" / "sync.sh"], ids=lambda p: p.name)
+def test_shell_vars_braced_before_non_ascii(path):
+    """`$VAR（` 在 macOS 自带 bash 3.2 + UTF-8 locale 下会把全角字符的字节吞进变量名，
+    set -u 当场 unbound variable、整个安装中断（真机 LANG=en_US.UTF-8 实测）。紧跟非 ASCII
+    字符的变量一律写成 ${VAR}。注释行不执行，不管。"""
+    pattern = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7F]")
+    offenders = [(n, line.strip()) for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+                 if not line.lstrip().startswith("#") and pattern.search(line)]
+    assert not offenders, "这些行的变量后面紧跟非 ASCII 字符，要写成 ${VAR}：\n" + \
+        "\n".join(f"  {n}: {line}" for n, line in offenders)
 
 
 # ── doctor：.env 填了 ≠ openclaw 真写了 ────────────────────────────────
