@@ -54,6 +54,16 @@ describe('ChatSessionList', () => {
     expect(p.onRename).toHaveBeenCalledWith('a', '新标题');
   });
 
+  it('重命名：输入法组字中的回车不提交', () => {
+    const p = setup();
+    fireEvent.click(screen.getAllByTitle('重命名')[0]);
+    const input = screen.getByDisplayValue('国庆出片文案');
+    fireEvent.change(input, { target: { value: '新标题' } });
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 });
+    expect(p.onRename).not.toHaveBeenCalled();
+  });
+
   it('会话主体是真按钮：名称为标题，点击/回车走 onSelect；操作按钮并列且可按角色查到', () => {
     const p = setup();
     const body = screen.getByRole('button', { name: '国庆出片文案' });

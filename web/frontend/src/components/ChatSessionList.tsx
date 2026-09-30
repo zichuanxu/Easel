@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ChatSession } from '../lib/store';
+import { isSubmitEnter } from '../lib/ime';
 import { IconNewChat, IconEdit, IconArchive, IconUnarchive, IconTrash, IconChevron } from './icons';
 
 interface ChatSessionListProps {
@@ -40,7 +41,7 @@ export default function ChatSessionList({
             onChange={(e) => setRenameValue(e.target.value)}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') commitRename();
+              if (isSubmitEnter(e)) commitRename();
               else if (e.key === 'Escape') setRenamingId(null);
             }}
             onBlur={commitRename}

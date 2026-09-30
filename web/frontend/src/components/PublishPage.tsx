@@ -15,6 +15,7 @@ import Panel from './ui/Panel';
 import Modal from './ui/Modal';
 import EmptyState from './ui/EmptyState';
 import { Input, Textarea } from './ui/Field';
+import { isSubmitEnter } from '../lib/ime';
 
 interface PublishPageProps {
   persona: string;
@@ -476,7 +477,7 @@ export default function PublishPage({ persona }: PublishPageProps) {
             <Input className="publish-sms-input" inputMode="numeric" autoFocus
               placeholder="请输入手机收到的验证码" value={pubSmsCode}
               onChange={(e) => setPubSmsCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
-              onKeyDown={(e) => { if (e.key === 'Enter') submitPubSms(); }} />
+              onKeyDown={(e) => { if (isSubmitEnter(e)) submitPubSms(); }} />
           )}
         </Modal>
       )}
