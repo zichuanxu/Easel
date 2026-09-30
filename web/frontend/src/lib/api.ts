@@ -370,12 +370,15 @@ export interface AccountItem {
   backend: string;      // xhs | web | biliup | unsupported
   supported: boolean;
   loggedIn: boolean;
+  /** 登录标记指纹（outputs/_login/<平台>.json 的 mtime 秒，无标记为 null）。只用来比相等：
+   *  跟 whoami 缓存里记的不一样 = 之后有人登录/退出过（CLI 直跑 login 等），缓存作废。 */
+  loginTs?: number | null;
   note: string;
 }
 
 export interface LoginStart {
   mode: 'qr' | 'terminal' | 'credentials';   // credentials = 凭证式（公众号 AppID/AppSecret）
-  state?: string;       // starting | qr_ready | success | expired | error | unknown
+  state?: string;       // starting | qr_ready | window_login | verifying | success | expired | error | unknown
   message?: string;
   qr?: string;          // outputs 下相对路径，用 mediaUrl() 取图
   configured?: boolean; // 凭证式：是否已配置
@@ -432,6 +435,7 @@ export interface AccountWhoami {
   loggedIn: boolean;
   name: string;
   avatar: string;   // 头像 URL（http）或空
+  loginTs?: number | null;   // 校验那一刻的登录标记指纹，见 AccountItem.loginTs
 }
 
 /** 真校验某平台登录态 + 拉昵称/头像（后端起 headless 浏览器，数秒）。 */

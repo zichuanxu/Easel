@@ -219,7 +219,8 @@ LOGIN_PROCESSES: dict[str, subprocess.Popen] = {}
 
 # whoami 真校验（起 headless 浏览器，数秒）的进程内缓存：避免账号页 + 工作台重复起浏览器。
 WHOAMI_TTL = 600  # 秒
-_WHOAMI_CACHE: dict[str, tuple[float, dict]] = {}
+# 值：(缓存时刻, 结果, 当时的登录标记指纹 _login_marker_mtime_ns)
+_WHOAMI_CACHE: dict[str, tuple[float, dict, int | None]] = {}
 _WHOAMI_LOCK = threading.Lock()
 
 LOGIN_RUNNERS: dict[str, dict] = {
@@ -2969,6 +2970,25 @@ def _write_login_marker(platform: str, state: str, message: str = '') -> None:
             pass
 
 
+def _login_marker_mtime_ns(platform: str) -> int | None:
+    """登录标记 outputs/_login/<平台>.json 的 mtime（纳秒），不存在为 None。
+
+    用作「标记有没有被改过」的指纹：记下某一刻看到的值，之后不相等就是被改过——只比相等、
+    不比先后，与写文件那台机器 / 进程的时钟无关。注意这个文件同时是登录 runner 的状态文件：
+    除了登录成功，starting / window_login / error / expired、whoami 的回写或删除也都会改它；
+    据此作废缓存只会多校验一次（保守、无害），不会漏掉「有人刚登录过」。"""
+    try:
+        return (LOGIN_DIR / f'{platform}.json').stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def _login_marker_ts(platform: str) -> float | None:
+    """同一枚指纹换成秒，给前端（/api/accounts、whoami 的 loginTs），前端也只比相等。"""
+    ns = _login_marker_mtime_ns(platform)
+    return None if ns is None else ns / 1e9
+
+
 def _account_logged_in(platform: str, cfg: dict) -> bool:
     """尽力判断某平台是否已登录。
     浏览器平台的登录态只有启动浏览器才真能知道（profile 里总有 Cookies 文件，存在≠已登录，
@@ -2996,8 +3016,15 @@ def _account_logged_in(platform: str, cfg: dict) -> bool:
     return False
 
 
+LOGIN_TERMINAL_STATES = ('success', 'error', 'expired')
+
+
 def _login_status(platform: str) -> dict:
     """读登录状态文件 + 二维码是否就绪。"""
+    # 先查 runner 退没退、再读状态文件：runner 总是先写终态再退出，按这个顺序读到
+    # 「非终态 + 已退出」就一定是它没写终态就没了，而不是刚好错过它最后那一笔 success。
+    proc = LOGIN_PROCESSES.get(platform)
+    code = proc.poll() if proc is not None else None
     st = LOGIN_DIR / f'{platform}.json'
     data = {'state': 'unknown', 'message': ''}
     if st.is_file():
@@ -3006,13 +3033,15 @@ def _login_status(platform: str) -> dict:
             data = {'state': d.get('state', 'unknown'), 'message': d.get('message', '')}
         except Exception:
             pass
-    # A runner that exits before writing its status must become an actionable error,
-    # never the ambiguous ``unknown`` state shown as an endless spinner in the UI.
-    proc = LOGIN_PROCESSES.get(platform)
-    if data['state'] in ('unknown', 'starting') and proc is not None:
-        code = proc.poll()
-        if code is not None:
-            data = {'state': 'error', 'message': f'登录程序异常退出（退出码 {code}），请查看 outputs/_login/{platform}.log'}
+    # runner 已退出却停在非终态（没起来、崩溃、窗口被关、被杀……）必须变成可操作的 error，
+    # 否则前端弹窗会对着 unknown / starting / window_login / verifying 一直转圈。
+    if code is not None and data['state'] not in LOGIN_TERMINAL_STATES:
+        if data['state'] in ('unknown', 'starting'):
+            msg = f'登录程序异常退出（退出码 {code}），请查看 outputs/_login/{platform}.log'
+        else:
+            msg = (f'登录程序中途退出了（退出码 {code}），登录没有完成。请关闭弹窗重试；'
+                   f'详情见 outputs/_login/{platform}.log')
+        data = {'state': 'error', 'message': msg}
     qr = LOGIN_DIR / f'{platform}.png'
     if qr.is_file():
         data['qr'] = f'_login/{platform}.png'
@@ -3032,9 +3061,33 @@ async def api_accounts():
         {'platform': pf, 'name': cfg['name'], 'backend': cfg['backend'],
          'supported': cfg['backend'] != 'unsupported',
          'loggedIn': _account_logged_in(pf, cfg),
+         # 登录标记指纹：前端 whoami 缓存记着校验那一刻的值，不相等 = 之后有人登录/退出过
+         # （CLI 直跑 login 等），缓存作废重新校验——否则缓存的「未登录」要顶满 10 分钟 TTL。
+         'loginTs': _login_marker_ts(pf),
          'note': cfg.get('note', '')}
         for pf, cfg in LOGIN_RUNNERS.items()
     ]
+
+
+def _xhs_headed_fallback_available(platform: str | None = None, env: dict | None = None,
+                                   os_name: str | None = None) -> bool:
+    """小红书登录能不能「无头被拦就改开有头窗口」：本机得有桌面能弹窗口。
+
+    实测小红书只拦「未登录 + 无头」（300012），有头窗口不拦 —— 所以本机有桌面时给 runner 加
+    --headed-fallback，被拦就弹窗口让用户扫；没桌面（服务器 / 无 DISPLAY 的 Linux）加了也弹不出来。
+    EASEL_XHS_HEADED_FALLBACK=0/1 强制关/开（例如 Web 是远程访问、窗口会弹在别人看不到的屏幕上）。
+    参数只为测试注入，默认取真实环境。"""
+    env = os.environ if env is None else env
+    override = (env.get("EASEL_XHS_HEADED_FALLBACK") or "").strip().lower()
+    if override in ("1", "true", "yes", "on"):
+        return True
+    if override in ("0", "false", "no", "off"):
+        return False
+    platform = sys.platform if platform is None else platform
+    os_name = os.name if os_name is None else os_name
+    if platform == "darwin" or os_name == "nt":
+        return True
+    return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
 
 
 @app.post("/api/login/{platform}")
@@ -3050,6 +3103,11 @@ async def api_login_start(platform: str):
         # 公众号不走扫码：前端应改用凭证表单提交到 /api/accounts/{platform}/credentials。
         return {'mode': 'credentials', 'configured': _wechat_has_credentials(),
                 'message': '微信公众号请填写 AppID / AppSecret'}
+    # 重复点击：上一个 runner 还活着（窗口可能还开着、二维码还有效）就接着用它——不能删它的
+    # 状态/二维码，更不能再起第二个浏览器去抢同一份登录目录（同 api_mp_login_start）。
+    running = LOGIN_PROCESSES.get(platform)
+    if running is not None and running.poll() is None:
+        return {'mode': 'qr', **_login_status(platform)}
     LOGIN_DIR.mkdir(parents=True, exist_ok=True)
     qr = LOGIN_DIR / f'{platform}.png'
     status = LOGIN_DIR / f'{platform}.json'
@@ -3061,6 +3119,8 @@ async def api_login_start(platform: str):
     if backend == 'xhs':
         cmd = [sys.executable, str(SHARED_SCRIPTS / 'xhs_publish.py'), 'login', '--no-proxy',
                '--qr-out', str(qr), '--status-file', str(status), '--timeout', str(LOGIN_TIMEOUT)]
+        if _xhs_headed_fallback_available():
+            cmd.append('--headed-fallback')
     elif backend == 'biliup':
         # B站：TV 端扫码登录 API 生成二维码 + 写 biliup cookie（biliup login 需真终端，前端用不了）
         cmd = [sys.executable, str(SHARED_SCRIPTS / 'bili_login.py'), 'login',
@@ -3091,7 +3151,8 @@ async def api_login_start(platform: str):
     for _ in range(50):
         await asyncio.sleep(0.5)
         s = _login_status(platform)
-        if s['qr'] or s['state'] in ('qr_ready', 'success', 'error', 'expired'):
+        # window_login：runner 改开了本机浏览器窗口，要马上让前端把提示亮出来
+        if s['qr'] or s['state'] in ('qr_ready', 'window_login', 'success', 'error', 'expired'):
             return {'mode': 'qr', **s}
     s = _login_status(platform)
     return {'mode': 'qr', **s}
@@ -3260,7 +3321,13 @@ async def api_mp_login_status(platform: str):
 @app.get("/api/accounts/{platform}/whoami")
 async def api_account_whoami(platform: str):
     """真校验登录态 + 读昵称/头像（起 headless 浏览器，数秒）。前端开页后台调用以自愈假阳性。
-    带 TTL 进程内缓存（避免账号页+工作台重复起浏览器）；确认已登录则回写标记，令快速路径自愈。"""
+    带 TTL 进程内缓存（避免账号页+工作台重复起浏览器）；确认已登录则回写标记，令快速路径自愈。
+    结果附带 loginTs（登录标记指纹，见 /api/accounts）：前端缓存记住它，标记再变就知道缓存过时了。"""
+    data = await _account_whoami(platform)
+    return {**data, 'loginTs': _login_marker_ts(platform)}
+
+
+async def _account_whoami(platform: str) -> dict:
     cfg = LOGIN_RUNNERS.get(platform)
     if not cfg:
         raise HTTPException(404, '未知平台')
@@ -3272,10 +3339,13 @@ async def api_account_whoami(platform: str):
         acc = _wechat_web_account()
         return {'loggedIn': _account_logged_in(platform, cfg),
                 'name': acc.get('name', '') or '微信公众号', 'avatar': ''}
-    # 命中未过期缓存直接返回
+    # 命中未过期缓存直接返回。但登录标记跟缓存时记下的指纹不一样 = 之后有人登录/退出过（CLI 直跑
+    # login、别的进程……），缓存里的「未登录」可能已经过时，重新真校验 —— 否则卡片要顶着「未登录」
+    # 等满 TTL。只比相等不比先后，不受时钟影响。
     with _WHOAMI_LOCK:
         hit = _WHOAMI_CACHE.get(platform)
-    if hit and (time.time() - hit[0]) < WHOAMI_TTL:
+    if (hit and (time.time() - hit[0]) < WHOAMI_TTL
+            and hit[2] == _login_marker_mtime_ns(platform)):
         return hit[1]
     if backend == 'biliup':
         cmd = [sys.executable, str(SHARED_SCRIPTS / 'bili_login.py'), 'whoami',
@@ -3309,8 +3379,6 @@ async def api_account_whoami(platform: str):
         # 校验失败/无有效输出 → **不缓存、不删标记**，返回「上次已知」登录态（读标记）。
         # 避免一次校验抖动就把已登录卡片翻成「未登录」并缓存 10 分钟；下次校验(缓存未写)会自动重试恢复。
         return {'loggedIn': _account_logged_in(platform, cfg), 'name': '', 'avatar': ''}
-    with _WHOAMI_LOCK:
-        _WHOAMI_CACHE[platform] = (time.time(), data)
     # 回写标记：确认已登录 → 快速路径（/api/accounts、/api/analytics/platforms）此后也正确；
     # biliup 走 cookies.json 判定，不用标记文件。
     if backend != 'biliup':
@@ -3321,6 +3389,10 @@ async def api_account_whoami(platform: str):
                 (LOGIN_DIR / f'{platform}.json').unlink()
             except OSError:
                 pass
+    # 先落标记、再记指纹：记的是自己回写之后的指纹，否则上面的「指纹变了 → 缓存作废」
+    # 会把每次校验结果都当成过时的，缓存形同虚设。
+    with _WHOAMI_LOCK:
+        _WHOAMI_CACHE[platform] = (time.time(), data, _login_marker_mtime_ns(platform))
     return data
 
 

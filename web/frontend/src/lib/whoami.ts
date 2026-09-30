@@ -25,6 +25,24 @@ function isFresh(e: WhoamiEntry | undefined, ttlMs: number): boolean {
   return !!e && typeof e.ts === 'number' && (Date.now() - e.ts) < ttlMs;
 }
 
+/**
+ * 按 /api/accounts 给的登录标记指纹（loginTs）丢掉已过时的缓存条目，返回被丢的平台。
+ * 条目里记着校验那一刻的 loginTs；标记之后被改过（CLI 直跑 login、别处登录/退出……）
+ * 缓存结论就可能不对了——尤其缓存的「未登录」会让刚登录的账号一直显示未登录，直到 TTL 过期。
+ * 只比相等、不比先后：浏览器与服务器的时钟不一定一致。丢掉后该平台缓存缺失，verifyStale 会重新真校验。
+ */
+export function dropOutdatedWhoami(loginTs: Record<string, number | null | undefined>): string[] {
+  const c = getWhoamiCache();
+  const dropped = Object.keys(c).filter(
+    (p) => p in loginTs && (c[p]?.loginTs ?? null) !== (loginTs[p] ?? null),
+  );
+  if (dropped.length) {
+    for (const p of dropped) delete c[p];
+    try { localStorage.setItem(KEY, JSON.stringify(c)); } catch { /* 配额 / 隐私模式：忽略 */ }
+  }
+  return dropped;
+}
+
 interface VerifyOpts {
   ttlMs?: number;
   force?: boolean;

@@ -5,12 +5,12 @@ import {
   saveCredentials, getCredentials, startMpLogin, mpLoginStatus,
 } from '../lib/api';
 import type { AccountItem, AccountWhoami } from '../lib/api';
-import { getWhoamiCache, setWhoamiCache, verifyStale } from '../lib/whoami';
+import { dropOutdatedWhoami, getWhoamiCache, setWhoamiCache, verifyStale } from '../lib/whoami';
 
 type QRState = {
   platform: string;
   name: string;
-  state: string;       // starting | qr_ready | success | expired | error | unknown
+  state: string;       // starting | qr_ready | window_login | verifying | success | expired | error | unknown
   message: string;
   qr: string;          // outputs 相对路径
   qrTs?: number;       // 二维码文件 mtime，作 img 缓存键：码刷新一次就变，避免看到过期旧码
@@ -19,6 +19,7 @@ type QRState = {
 const STATE_LABEL: Record<string, string> = {
   starting: '启动中…',
   qr_ready: '请扫码',
+  window_login: '窗口登录中',   // 具体怎么做由 runner 的 message 说（避免标题和消息说两遍同一句）
   scanned: '扫码成功',
   sms_required: '需短信验证',
   verifying: '验证中…',
@@ -85,6 +86,16 @@ export default function AccountsPage() {
       .then((list) => {
         if (!aliveRef.current) return;
         setAccounts(list);
+        // 登录标记变过（如 CLI 直跑 login）→ 缓存的 whoami 结论作废：卡片先回落到后端 last-known
+        // （effLoggedIn 用 a.loggedIn），下面 verifyStale 把它们当缓存缺失重新真校验。
+        const dropped = dropOutdatedWhoami(Object.fromEntries(list.map((a) => [a.platform, a.loginTs ?? null])));
+        if (dropped.length) {
+          setWhoami((w) => {
+            const n = { ...w };
+            for (const p of dropped) if (n[p] !== 'loading') delete n[p];
+            return n;
+          });
+        }
         const targets = list
           .filter((a) => a.supported && a.backend !== 'biliup')
           .map((a) => a.platform);
@@ -378,10 +389,19 @@ export default function AccountsPage() {
               </div>
             ) : qr.state === 'qr_ready' && qr.qr ? (
               <img className="qr-img" src={`${mediaUrl(qr.qr)}?v=${qr.qrTs || qrNonce}`} alt="登录二维码" />
+            ) : qr.state === 'window_login' ? (
+              // 平台拦了无头浏览器，runner 在本机弹了窗口：非终态，继续轮询；窗口里出了码也在这里给一份
+              qr.qr ? (
+                <img className="qr-img" src={`${mediaUrl(qr.qr)}?v=${qr.qrTs || qrNonce}`} alt="登录二维码" />
+              ) : (
+                <div className="loading" style={{ padding: 40 }}><div className="spinner" />
+                  {qr.message || '已弹出浏览器窗口，请在窗口里完成登录，不要关掉它'}</div>
+              )
             ) : qr.state === 'scanned' ? (
               <div className="loading" style={{ padding: 40 }}><div className="spinner" />扫码成功，正在跳转验证…（首次可能等十几秒）</div>
             ) : qr.state === 'verifying' ? (
-              <div className="loading" style={{ padding: 40 }}><div className="spinner" />正在验证验证码，登录中…</div>
+              // verifying 有两种：短信验证码提交中 / 登录后正在确认登录态已保存 —— 以 runner 的 message 为准
+              <div className="loading" style={{ padding: 40 }}><div className="spinner" />{qr.message || '验证中…'}</div>
             ) : qr.state === 'success' ? (
               <div style={{ fontSize: 48, padding: 40 }}>✅</div>
             ) : ['error', 'expired'].includes(qr.state) ? (

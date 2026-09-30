@@ -19,11 +19,25 @@ python skills/shared/scripts/xhs_publish.py login
 #   --qr-out <path>   自定义二维码输出路径
 #   --timeout <秒>    等待扫码超时（默认 180）
 #   --headed          本地有桌面时用窗口内扫
+#   --headed-fallback 无头被风控拦（300012）时自动改开有头窗口扫（本机有桌面时用；Web 账号页在 macOS/Windows/有 DISPLAY 的 Linux 上自动加）
 # 登录态存 ~/.easel-browser-profiles/XiaohongshuProfile
+# 扫码后先等登录 cookie 落盘、再用同一份登录态无头重开创作平台发布页，看到发布页真渲染出来才打印「登录成功」；
+# 没保存上会明说「登录看似成功但登录态没能保存，请重试」并返回非 0；
+# 登录窗口中途被关 / 浏览器异常也会写 error 状态、明说原因并返回非 0（不会停在半路）。
+# CLI 直跑（不带 --status-file、默认登录目录）成功后也会写 outputs/_login/xiaohongshu.json，Web 账号页随之显示已登录。
+```
+
+本机有桌面、网络被判风险时，直接开窗口登录（有头浏览器通常不被拦）：
+
+```bash
+python skills/shared/scripts/xhs_publish.py login --headed --no-proxy
+python skills/shared/scripts/xhs_publish.py login --headed-fallback --no-proxy   # 先试无头出码，被拦再弹窗口
 ```
 
 > ⚠️ **风险 IP 拦截**：小红书会把机房/公司代理出口判为风险 IP（报「安全限制 300012 · IP存在风险」），
-> 此时二维码根本不弹。解决：① `--proxy socks5://<干净/家宽IP代理>`；
+> 此时二维码根本不弹。实测它只拦「未登录 + 无头浏览器」：本机有桌面时用 `--headed`（或
+> `--headed-fallback`）在窗口里登录即可，登录后无头发布/校验照常可用。没桌面时：
+> ① `--proxy socks5://<干净/家宽IP代理>`；
 > ② 在正常网络的机器上 `login` 拿到登录态，再把 `~/.easel-browser-profiles/XiaohongshuProfile`
 > 整个目录拷到本机复用（登录态可移植）。本机/代理出口 IP 常被平台判风险，需换干净 IP。
 
