@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import type { KeyboardEvent, ReactNode } from 'react';
 
 export interface TabItem<K extends string> { key: K; label: ReactNode; }
@@ -11,11 +12,14 @@ interface TabsProps<K extends string> {
 }
 
 export default function Tabs<K extends string>({ items, value, onChange, size = 'md', ariaLabel }: TabsProps<K>) {
+  const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const onKey = (e: KeyboardEvent<HTMLButtonElement>, i: number) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
     e.preventDefault();
     const step = e.key === 'ArrowRight' ? 1 : -1;
-    onChange(items[(i + step + items.length) % items.length].key);
+    const target = (i + step + items.length) % items.length;
+    onChange(items[target].key);
+    refs.current[target]?.focus();
   };
   return (
     <div className={`ui-tabs${size === 'sm' ? ' ui-tabs-sm' : ''}`} role="tablist" aria-label={ariaLabel}>
@@ -24,6 +28,7 @@ export default function Tabs<K extends string>({ items, value, onChange, size = 
         return (
           <button
             key={t.key}
+            ref={(el) => { refs.current[i] = el; }}
             type="button"
             role="tab"
             aria-selected={active}

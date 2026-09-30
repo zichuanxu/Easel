@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import { useState } from 'react';
 import Tabs from './Tabs';
 
 const ITEMS = [
@@ -24,5 +25,20 @@ describe('Tabs', () => {
     expect(onChange).toHaveBeenCalledWith('chat');
     fireEvent.keyDown(screen.getByRole('tab', { name: '视频' }), { key: 'ArrowLeft' });
     expect(onChange).toHaveBeenCalledWith('image');
+  });
+
+  it('受控使用时方向键连续切换，焦点跟随', () => {
+    function Harness() {
+      const [v, setV] = useState<'chat' | 'image' | 'video'>('chat');
+      return <Tabs items={[...ITEMS]} value={v} onChange={setV} />;
+    }
+    render(<Harness />);
+    const first = screen.getByRole('tab', { name: '对话与脚本' });
+    first.focus();
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+    const third = screen.getByRole('tab', { name: '视频' });
+    expect(third.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(third);
   });
 });
