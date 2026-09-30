@@ -19,6 +19,5 @@
 .ana-note-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .ana-note-title { font-size: var(--fs-13); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ana-note-stat { font-size: var(--fs-12); color: var(--c-ink-3); }
-.ana-note-go { color: var(--c-ink-3); }
 .analytics-page .loading { display: flex; align-items: center; gap: var(--sp-3); padding: 28px 0; font-size: var(--fs-13); color: var(--c-ink-2); }
 @media (max-width: 1100px) { .analytics-body { grid-template-columns: 1fr; } }

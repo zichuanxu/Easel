@@ -31,7 +31,7 @@
 .settings-modal .foot-note { margin-top: 12px; color: var(--c-ink-3); font-size: var(--fs-12); }
 .settings-modal .spin { width: 11px; height: 11px; flex: none; border: 2px solid var(--c-rule-strong); border-top-color: var(--c-ink); border-radius: 50%; animation: spin 0.8s linear infinite; }
 
-.settings-modal .save-note { margin: 0 0 10px; padding: 7px 11px; border-radius: var(--r-control); font-size: var(--fs-12); background: var(--c-ok-soft); color: var(--c-ok); }
+.settings-modal .save-note { margin: 0 0 10px; padding: 7px 11px; border-radius: var(--r-control); font-size: var(--fs-12); background: var(--c-ok-soft); color: var(--c-ok-text); }
 .settings-modal .save-note.err { background: var(--c-danger-soft); color: var(--c-danger); }
 .settings-modal .env-error { margin: 0 0 12px; padding: 9px 12px; border-radius: var(--r-control); background: var(--c-danger-soft); color: var(--c-danger); font-size: var(--fs-12); }
 

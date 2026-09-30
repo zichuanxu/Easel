@@ -36,13 +36,13 @@
 .skill-error { color: var(--c-danger); font-size: var(--fs-13); margin-top: 10px; }
 .skill-blocked { font-size: var(--fs-13); color: var(--c-warn); margin-bottom: 10px; }
 .skill-panel-hint { font-weight: 400; color: var(--c-ink-3); font-size: var(--fs-12); margin-left: 6px; }
-.skill-configured { color: var(--c-ok); margin-left: 6px; }
+.skill-configured { color: var(--c-ok-text); margin-left: 6px; }
 .skill-provider { padding: 12px 14px; border: 1px solid var(--c-rule); border-radius: var(--r-control); margin-bottom: 10px; background: var(--c-surface); }
 .skill-provider.configured { border-color: var(--c-ok); }
 .skill-provider-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; font-size: var(--fs-13); }
 .skill-save-row { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
 .skill-saved { font-size: var(--fs-13); color: var(--c-ink-2); }
-.skill-saved.ok { color: var(--c-ok); }
+.skill-saved.ok { color: var(--c-ok-text); }
 .skill-input { min-height: 100px; }
 .skill-run-row { margin-top: 10px; }
 

@@ -20,7 +20,7 @@ function fmtNum(n: number | null): string {
 function growthInfo(n: number | null): { text: string; color: string } | null {
   if (n == null || n === 0) return null;
   return n > 0
-    ? { text: `▲+${fmtNum(n)}`, color: 'var(--c-ok)' }
+    ? { text: `▲+${fmtNum(n)}`, color: 'var(--c-ok-text)' }
     : { text: `▼${fmtNum(Math.abs(n))}`, color: 'var(--c-danger)' };
 }
 
@@ -132,7 +132,7 @@ export default function AnalyticsPage({ onNavigate }: { onNavigate: (page: Page)
                             <div key={m.label} className="ana-metric">
                               <div className="ana-metric-val">{m.value}</div>
                               <div className="ana-metric-label">{m.label}</div>
-                              {has && <div className="ana-metric-vs" style={{ color: up ? 'var(--c-ok)' : 'var(--c-danger)' }}>环比{vs}</div>}
+                              {has && <div className="ana-metric-vs" style={{ color: up ? 'var(--c-ok-text)' : 'var(--c-danger)' }}>环比{vs}</div>}
                             </div>
                           );
                         })}
@@ -156,7 +156,6 @@ export default function AnalyticsPage({ onNavigate }: { onNavigate: (page: Page)
                               <span className="ana-note-title">{n.title || '(无标题)'}</span>
                               {n.stat && <span className="ana-note-stat">{n.stat}</span>}
                             </span>
-                            <span className="ana-note-go">↗</span>
                           </a>
                         ))}
                       </div>

@@ -16,7 +16,7 @@
   font-size: var(--fs-12); line-height: 1.6; white-space: nowrap;
   color: var(--c-ink-2); background: var(--c-sunken);
 }
-.ui-tag[data-tone="ok"] { color: var(--c-ok); background: var(--c-ok-soft); }
+.ui-tag[data-tone="ok"] { color: var(--c-ok-text); background: var(--c-ok-soft); }
 .ui-tag[data-tone="warn"] { color: var(--c-warn); background: var(--c-warn-soft); }
 .ui-tag[data-tone="danger"] { color: var(--c-danger); background: var(--c-danger-soft); }
 .ui-tag[data-tone="discover"] { color: var(--layer-discover-text); background: var(--layer-discover-soft); }
@@ -66,29 +66,6 @@
 }
 .chip:hover { border-color: var(--c-ink-3); color: var(--c-ink); }
 .chip.active { background: var(--c-ink); border-color: var(--c-ink); color: var(--c-on-ink); }
-.badge {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 1px 7px; border-radius: var(--r-control); border: none;
-  font-size: var(--fs-12); font-weight: 500; line-height: 1.6; white-space: nowrap;
-  color: var(--c-ink-2); background: var(--c-sunken);
-}
-.badge-accent { color: var(--c-ink); background: var(--c-hover); }
-.badge-warn { color: var(--c-warn); background: var(--c-warn-soft); }
-.badge-ok { color: var(--c-ok); background: var(--c-ok-soft); }
-.section-title {
-  display: flex; align-items: baseline; gap: var(--sp-2);
-  margin: var(--sp-6) 0 var(--sp-3);
-  font-family: var(--font-serif); font-weight: 600; font-size: var(--fs-16);
-  color: var(--c-ink); text-transform: none; letter-spacing: 0;
-}
-.section-title::after { content: ''; flex: 1; height: 1px; background: var(--c-rule); align-self: center; }
-.empty-state {
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  height: 100%; gap: var(--sp-3); padding: 40px; text-align: center; color: var(--c-ink-2);
-}
-.empty-state .empty-icon { font-size: 40px; opacity: 0.3; }
-.empty-state h3 { color: var(--c-ink); font-size: var(--fs-16); }
-.empty-state p { font-size: var(--fs-13); max-width: 40ch; }
 .spinner {
   width: 16px; height: 16px; border-radius: 50%;
   border: 2px solid var(--c-rule-strong); border-top-color: var(--c-ink);

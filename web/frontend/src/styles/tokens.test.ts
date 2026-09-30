@@ -10,7 +10,8 @@ const REQUIRED: Record<string, string> = {
   '--c-rule-strong': '#D2D6D0',
   '--c-ink': '#1F2328',
   '--c-ink-2': '#4B5159',
-  '--c-ink-3': '#868C94',
+  '--c-ink-3': '#676D75',
+  '--c-ok-text': '#2F7358',
   '--c-on-ink': '#FFFFFF',
   '--c-danger': '#B4312A',
   '--layer-discover': '#2F4E9C',
@@ -42,5 +43,37 @@ describe('设计变量契约', () => {
     expect(css).toMatch(/--font-serif:[^;]*'Songti SC'[^;]*serif;/);
     expect(css).toMatch(/--font-brand:[^;]*'Didot'[^;]*serif;/);
     expect(css).toMatch(/--font-sans:[^;]*'PingFang SC'[^;]*sans-serif;/);
+  });
+
+  describe('文字对比度（WCAG，正文/辅助文字 ≥ 4.5:1）', () => {
+    const val = (name: string): string => {
+      const m = css.match(new RegExp(`${name}:\\s*(#[0-9a-fA-F]{6});`));
+      if (!m) throw new Error(`tokens.css 里找不到 ${name}`);
+      return m[1];
+    };
+    const lin = (c: number) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+    const lum = (hex: string) => {
+      const n = parseInt(hex.slice(1), 16);
+      return 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
+    };
+    const ratio = (a: string, b: string) => {
+      const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    const layerText = [...css.matchAll(/(--layer-[a-z]+-text):/g)].map((m) => m[1]);
+    const FG = ['--c-ink', '--c-ink-2', '--c-ink-3', '--c-ok-text', '--c-warn', '--c-danger', ...layerText];
+    const BG = ['--c-surface', '--c-canvas', '--c-sunken', '--c-side', '--c-tint'];
+
+    it('覆盖全部六个 --layer-*-text', () => { expect(layerText.length).toBe(6); });
+
+    for (const fg of FG) {
+      for (const bg of BG) {
+        it(`${fg} 在 ${bg} 上 ≥ 4.5`, () => {
+          const r = ratio(val(fg), val(bg));
+          console.info(`contrast ${fg} on ${bg} = ${r.toFixed(2)}`);
+          expect(r).toBeGreaterThanOrEqual(4.5);
+        });
+      }
+    }
   });
 });

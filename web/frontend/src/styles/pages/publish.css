@@ -31,7 +31,7 @@
 .pv-hint { font-size: var(--fs-12); color: var(--c-ink-3); }
 .pv-pubstate { margin: var(--sp-2) 14px 2px; font-size: var(--fs-12); padding: 6px 10px; border-radius: var(--r-control); display: flex; align-items: center; gap: 6px; white-space: pre-wrap; word-break: break-word; }
 .pv-pubstate.publishing { background: var(--layer-publish-soft); color: var(--layer-publish-text); }
-.pv-pubstate.ok { background: var(--c-ok-soft); color: var(--c-ok); }
+.pv-pubstate.ok { background: var(--c-ok-soft); color: var(--c-ok-text); }
 .pv-pubstate.fail { background: var(--c-danger-soft); color: var(--c-danger); max-height: 120px; overflow-y: auto; overflow-x: hidden; }
 
 /* 媒体附件选择 */
