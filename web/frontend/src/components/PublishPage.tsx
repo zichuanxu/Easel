@@ -6,6 +6,7 @@ import {
 import type { AccountItem, OutputFile } from '../lib/api';
 import { loadPublishDraft, savePublishDraft } from '../lib/store';
 import { renderMarkdown } from '../lib/sanitize';
+import { precheckVerdict } from '../lib/precheckVerdict';
 import { IconPublish, IconCopy, IconCheck, IconCalendar, IconSkills, IconEdit, IconStop, IconTrash } from './icons';
 import PageHeader from './ui/PageHeader';
 import Button from './ui/Button';
@@ -44,14 +45,6 @@ function parseSections(text: string): Record<string, string> {
   const map: Record<string, string> = {};
   for (let i = 1; i < parts.length; i += 2) map[parts[i].trim()] = (parts[i + 1] || '').trim();
   return map;
-}
-
-/** 预检结论：取预检文本里最后出现的「建议修改 / 可发」作为标签（只影响展示）。 */
-function precheckVerdict(text: string): { tone: 'ok' | 'warn'; label: string } | null {
-  const warn = text.lastIndexOf('建议修改');
-  const ok = text.lastIndexOf('可发');
-  if (warn < 0 && ok < 0) return null;
-  return warn > ok ? { tone: 'warn', label: '建议修改' } : { tone: 'ok', label: '可发' };
 }
 
 type PubState = { status: 'publishing' | 'ok' | 'fail'; msg: string };
@@ -307,7 +300,7 @@ export default function PublishPage({ persona }: PublishPageProps) {
 
   const canPublish = platforms.some((k) => PUBLISHABLE.has(k));
 
-  const verdict = checkResult ? precheckVerdict(checkResult) : null;
+  const verdict = precheckVerdict(checkResult);
 
   return (
     <div className="publish-page">
@@ -399,7 +392,7 @@ export default function PublishPage({ persona }: PublishPageProps) {
         {adapting && <div className="adapt-hint"><span className="live-pulse" />AI 正在逐字改写各平台版本…可随时停止。</div>}
         <p className="publish-saved-note">草稿已自动保存，切换页面/刷新回来内容都在。一键发布仅对「已登录 + 媒体齐全」的平台生效。</p>
         {checkResult && (
-          <Panel className="publish-check" title={<>发布前预检{verdict && <Tag tone={verdict.tone}>{verdict.label}</Tag>}</>}>
+          <Panel className="publish-check" title={<>发布前预检{verdict && <Tag tone={verdict}>{verdict === 'ok' ? '可发' : '建议修改'}</Tag>}</>}>
             <div className="skill-body-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(checkResult) }} />
           </Panel>
         )}
