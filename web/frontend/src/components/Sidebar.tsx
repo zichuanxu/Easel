@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import type { ComponentType } from 'react';
 import type { PersonaItem } from '../lib/api';
 import { NAV_GROUPS, layerInfo } from '../lib/layers';
@@ -40,6 +41,11 @@ export default function Sidebar({
 }: SidebarProps) {
   const statusText = gatewayStatus === 'connected' ? '网关已连接'
     : gatewayStatus === 'disconnected' ? '网关离线' : '连接中…';
+  // 选中项不在可视区时（矮窗口下导航可滚动）才滚进来，避免每次切页都跳
+  const navRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    navRef.current?.querySelector<HTMLElement>('.nav-item.active')?.scrollIntoView?.({ block: 'nearest' });
+  }, [currentPage]);
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -63,7 +69,7 @@ export default function Sidebar({
         <option value="__new__">+ 新建画像…</option>
       </select>
 
-      <nav className="sidebar-nav" aria-label="主导航">
+      <nav className="sidebar-nav" aria-label="主导航" ref={navRef}>
         {NAV_GROUPS.map((g, gi) => (
           <div key={gi} className="nav-group">
             {g.layer && (

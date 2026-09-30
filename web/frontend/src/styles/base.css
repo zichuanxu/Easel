@@ -25,8 +25,13 @@ code, pre, kbd, samp { font-family: var(--font-mono); }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--c-rule-strong); border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: var(--c-rule-strong); border-radius: 2px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--c-ink-3); }
+
+/* Chromium 一旦设了 scrollbar-width / scrollbar-color 就会忽略上面的 webkit 样式，标准属性只给不支持它的浏览器 */
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: var(--c-rule-strong) transparent; }
+}
 
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes spin { to { transform: rotate(360deg); } }

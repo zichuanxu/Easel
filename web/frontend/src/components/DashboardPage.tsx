@@ -65,7 +65,9 @@ export default function DashboardPage({ persona, gatewayStatus, onNavigate, onUs
         <div>
           <h1 className="dash-greet">{greet}</h1>
           <p className="dash-date">
-            {dateLine}。{persona ? `当前画像：${persona}。` : '通用模式，选一个画像生成的内容会更贴合你。'}
+            <span className="dash-date-text">
+              {dateLine}。{persona ? `当前画像：${persona}。` : '通用模式，选一个画像生成的内容会更贴合你。'}
+            </span>
             {gatewayStatus !== 'connected' && <Tag tone="danger">网关未连接，对话暂不可用</Tag>}
           </p>
         </div>
@@ -89,6 +91,7 @@ export default function DashboardPage({ persona, gatewayStatus, onNavigate, onUs
 
       <div className="dash-cols">
         <Panel title="今日热点" action={{ label: '热点雷达', onClick: () => onNavigate('trends') }}>
+          <div className="dash-list dash-list-hot">
           {trends.length === 0 && (
             <EmptyState text={trendsFailed
               ? '热点暂时拉不到。检查网络，或在设置里配置代理后刷新。'
@@ -106,39 +109,46 @@ export default function DashboardPage({ persona, gatewayStatus, onNavigate, onUs
               ))}
             </div>
           ))}
+          </div>
         </Panel>
 
         <div className="dash-stack">
           <Panel title="选题 · 待做" action={{ label: '选题库', onClick: () => onNavigate('ideas') }}>
-            {pendingIdeas.length === 0
-              ? <EmptyState text="还没有待做的选题。在热点雷达里收藏几个，会出现在这里。" />
-              : pendingIdeas.slice(0, 5).map((it) => (
-                <button key={it.id} type="button" className="dash-row" title="点击做成内容" onClick={() => onUseTopic(it.title)}>
-                  <span className="dash-row-title">{it.title}</span>
-                  {it.source && <Tag>{it.source}</Tag>}
-                </button>
-              ))}
+            <div className="dash-list">
+              {pendingIdeas.length === 0
+                ? <EmptyState text="还没有待做的选题。在热点雷达里收藏几个，会出现在这里。" />
+                : pendingIdeas.slice(0, 5).map((it) => (
+                  <button key={it.id} type="button" className="dash-row" title="点击做成内容" onClick={() => onUseTopic(it.title)}>
+                    <span className="dash-row-title">{it.title}</span>
+                    {it.source && <Tag>{it.source}</Tag>}
+                  </button>
+                ))}
+            </div>
           </Panel>
           <Panel title="近期排期" action={{ label: '内容日历', onClick: () => onNavigate('calendar') }}>
-            {upcoming.length === 0
-              ? <EmptyState text="还没有排期。从选题库挑一条排进日历。" action={{ label: '去排期', onClick: () => onNavigate('calendar') }} />
-              : upcoming.map((s) => (
-                <button key={s.id} type="button" className="dash-row" onClick={() => onNavigate('calendar')}>
-                  <span className="dash-row-date">{s.date.slice(5)}</span>
-                  <span className="dash-row-title">{s.platform ? `[${s.platform}] ` : ''}{s.title}</span>
-                  <Tag>{STATUS_LABEL[s.status] || s.status}</Tag>
-                </button>
-              ))}
+            <div className="dash-list">
+              {upcoming.length === 0
+                ? <EmptyState text="还没有排期。从选题库挑一条排进日历。" action={{ label: '去排期', onClick: () => onNavigate('calendar') }} />
+                : upcoming.map((s) => (
+                  <button key={s.id} type="button" className="dash-row" onClick={() => onNavigate('calendar')}>
+                    <span className="dash-row-date">{s.date.slice(5)}</span>
+                    <span className="dash-row-title">{s.platform ? `[${s.platform}] ` : ''}{s.title}</span>
+                    <Tag>{STATUS_LABEL[s.status] || s.status}</Tag>
+                  </button>
+                ))}
+            </div>
           </Panel>
           <Panel title="最近产物" action={{ label: '内容库', onClick: () => onNavigate('outputs') }}>
-            {recent.length === 0
-              ? <EmptyState text="还没有产物。在对话里让 Easel 写一篇，成品会出现在这里。" />
-              : recent.map((g) => (
-                <button key={g.name} type="button" className="dash-row" onClick={() => onNavigate('outputs')}>
-                  <span className="dash-row-title">{g.meta?.title || g.name}</span>
-                  <Tag>{g.meta?.platform || (g.type === 'dir' ? `${g.fileCount ?? 0} 个文件` : '单文件')}</Tag>
-                </button>
-              ))}
+            <div className="dash-list">
+              {recent.length === 0
+                ? <EmptyState text="还没有产物。在对话里让 Easel 写一篇，成品会出现在这里。" />
+                : recent.map((g) => (
+                  <button key={g.name} type="button" className="dash-row" onClick={() => onNavigate('outputs')}>
+                    <span className="dash-row-title">{g.meta?.title || g.name}</span>
+                    <Tag>{g.meta?.platform || (g.type === 'dir' ? `${g.fileCount ?? 0} 个文件` : '单文件')}</Tag>
+                  </button>
+                ))}
+            </div>
           </Panel>
         </div>
       </div>

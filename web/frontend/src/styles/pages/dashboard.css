@@ -1,7 +1,10 @@
 .dash-page { padding: 30px 36px 40px; }
 .dash-head { display: flex; align-items: flex-end; gap: var(--sp-4); }
 .dash-greet { font-family: var(--font-serif); font-weight: 600; font-size: 28px; letter-spacing: 0.5px; }
-.dash-date { margin-top: var(--sp-1); font-size: var(--fs-13); color: var(--c-ink-3); display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.dash-head > div:first-child { min-width: 0; }
+.dash-date { margin-top: var(--sp-1); font-size: var(--fs-13); color: var(--c-ink-3); display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.dash-date-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-date .ui-tag { flex: none; }
 .dash-actions { margin-left: auto; display: flex; gap: var(--sp-2); }
 
 .pipe { margin-top: var(--sp-6); display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: var(--r-panel); overflow: hidden; }
@@ -26,6 +29,10 @@
 
 .dash-cols { display: grid; grid-template-columns: 3fr 2fr; gap: var(--sp-4); margin-top: var(--sp-4); align-items: start; }
 .dash-stack { display: grid; gap: var(--sp-4); }
+/* 列表区按满行数预留高度：数据到达前后（空、部分、满）面板高度不变，下面的内容不跳 */
+.dash-list { display: flex; flex-direction: column; min-height: 191px; }
+.dash-list > .ui-empty { flex: 1; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; }
+.dash-list-hot { min-height: 437px; }
 .hot-group + .hot-group { margin-top: var(--sp-3); }
 .hot-plat { font-size: var(--fs-12); color: var(--c-ink-3); margin-bottom: 2px; }
 .hot-row, .dash-row {

@@ -83,6 +83,10 @@
   --t-fast: 0.12s var(--ease);
   --t: 0.2s var(--ease);
 
+  /* ---- 控件高度 ---- */
+  --h-ctl: 34px;
+  --h-ctl-sm: 28px;
+
   /* ---- 布局 ---- */
   --sidebar-width: 232px;
   --sidebar-rail: 64px;

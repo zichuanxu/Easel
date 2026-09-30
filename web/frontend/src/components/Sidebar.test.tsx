@@ -34,4 +34,19 @@ describe('Sidebar', () => {
     render(<Sidebar {...base} activeChatTitle="国庆出片文案" currentPage="dashboard" onPageChange={() => {}} />);
     expect(screen.getByText('国庆出片文案')).toBeTruthy();
   });
+
+  it('选中项变化时用 scrollIntoView({ block: nearest }) 滚进可视区', () => {
+    const spy = vi.fn();
+    const orig = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = spy;
+    try {
+      const { rerender } = render(<Sidebar {...base} currentPage="dashboard" onPageChange={() => {}} />);
+      spy.mockClear();
+      rerender(<Sidebar {...base} currentPage="profile" onPageChange={() => {}} />);
+      expect(spy).toHaveBeenCalledWith({ block: 'nearest' });
+      expect(spy.mock.contexts[0]).toBe(screen.getByRole('button', { name: /画像/ }));
+    } finally {
+      Element.prototype.scrollIntoView = orig;
+    }
+  });
 });

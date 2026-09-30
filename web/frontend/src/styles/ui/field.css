@@ -1,5 +1,5 @@
 .field {
-  width: 100%; min-height: 36px; padding: 7px 12px;
+  width: 100%; padding: 7px 12px;
   background: var(--c-surface); color: var(--c-ink);
   border: 1px solid var(--c-rule-strong); border-radius: var(--r-control);
   font-size: var(--fs-14); line-height: 1.5;
@@ -10,5 +10,6 @@
 .field:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 1px; }
 .field:disabled { background: var(--c-sunken); color: var(--c-ink-3); cursor: not-allowed; }
 .field::placeholder { color: var(--c-ink-3); }
+input.field, select.field { height: var(--h-ctl); padding-top: 0; padding-bottom: 0; }
 textarea.field { resize: vertical; min-height: 90px; }
 select.field { cursor: pointer; }

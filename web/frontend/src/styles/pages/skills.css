@@ -8,7 +8,7 @@
 .skill-index-item.active { background: var(--c-surface); color: var(--c-ink); font-weight: 600; box-shadow: 0 1px 0 var(--c-rule); }
 .skill-index-name { flex: 1; }
 .skill-index-count { font-size: var(--fs-12); color: var(--c-ink-3); font-variant-numeric: tabular-nums; }
-.skills-body { min-height: 0; overflow-y: auto; padding-bottom: 40px; }
+.skills-body { min-height: 0; margin: 0 -4px; padding: 2px 4px 40px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; }
 .skill-search { max-width: 420px; margin-bottom: var(--sp-2); }
 .skill-section { scroll-margin-top: 8px; }
 .skill-section-head { display: flex; align-items: baseline; gap: 10px; margin: 20px 0 4px; padding-bottom: 8px; border-bottom: 2px solid var(--layer-general); }
@@ -23,6 +23,7 @@
 .skill-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: center; padding: 11px 0; border: none; border-bottom: 1px solid var(--c-rule); background: none; text-align: left; cursor: pointer; min-width: 0; }
 .skill-row-name { font-family: var(--font-serif); font-weight: 600; font-size: 15px; color: var(--c-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .skill-row-desc { grid-column: 1 / -1; font-size: var(--fs-13); line-height: 1.55; color: var(--c-ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.skill-row:focus-visible, .skill-index-item:focus-visible { outline-offset: -2px; border-radius: var(--r-control); }
 .skill-row:hover .skill-row-name { text-decoration: underline; text-underline-offset: 3px; }
 @media (max-width: 1180px) { .skill-list { grid-template-columns: 1fr; } }
 @media (max-width: 900px) { .skills-grid { grid-template-columns: 1fr; } .skill-index { flex-direction: row; flex-wrap: wrap; } }
@@ -48,8 +49,8 @@
 .skill-result { margin-top: 14px; padding: 16px 18px; background: var(--c-sunken); border: 1px solid var(--c-rule); border-radius: var(--r-panel); font-size: var(--fs-14); line-height: 1.65; }
 .skill-result p { margin: 0 0 8px; }
 .skill-result p:last-child { margin-bottom: 0; }
-.skill-result pre { background: var(--c-surface); border-radius: var(--r-control); padding: 14px 16px; margin: 10px 0; overflow-x: auto; font-size: 13px; }
-.skill-result code { background: var(--c-surface); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 0.9em; }
+.skill-result pre { background: var(--c-surface); border-radius: var(--r-control); padding: 14px 16px; margin: 10px 0; overflow-x: auto; overflow-y: hidden; font-size: 13px; }
+.skill-result code { background: var(--c-surface); padding: 2px 6px; border-radius: var(--r-control); font-family: var(--font-mono); font-size: 0.9em; }
 .skill-result pre code { background: none; padding: 0; }
 .skill-result ul, .skill-result ol { margin: 8px 0; padding-left: 20px; }
 
@@ -61,10 +62,10 @@
 .skill-body-md p { margin: 0 0 9px; }
 .skill-body-md ul, .skill-body-md ol { margin: 8px 0; padding-left: 20px; }
 .skill-body-md li { margin-bottom: 4px; }
-.skill-body-md code { background: var(--c-sunken); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 0.88em; }
-.skill-body-md pre { background: var(--c-sunken); border-radius: var(--r-control); padding: 13px 15px; margin: 10px 0; overflow-x: auto; font-size: 12.5px; }
+.skill-body-md code { background: var(--c-sunken); padding: 2px 6px; border-radius: var(--r-control); font-family: var(--font-mono); font-size: 0.88em; }
+.skill-body-md pre { background: var(--c-sunken); border-radius: var(--r-control); padding: 13px 15px; margin: 10px 0; overflow-x: auto; overflow-y: hidden; font-size: 12.5px; }
 .skill-body-md pre code { background: none; padding: 0; }
 .skill-body-md table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 0.95em; }
 .skill-body-md th, .skill-body-md td { border: 1px solid var(--c-rule); padding: 5px 9px; text-align: left; }
-.skill-body-md th { background: var(--c-sunken); }
+.skill-body-md th { background: var(--c-sunken); white-space: nowrap; }
 .skill-body-md blockquote { border-left: 3px solid var(--c-rule-strong); padding-left: 12px; margin: 8px 0; color: var(--c-ink-2); }

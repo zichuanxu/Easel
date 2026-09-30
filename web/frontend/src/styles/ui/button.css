@@ -1,6 +1,6 @@
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  height: 34px; padding: 0 14px;
+  height: var(--h-ctl); padding: 0 14px;
   font: 500 var(--fs-13)/1 var(--font-sans);
   color: var(--c-ink); background: var(--c-surface);
   border: 1px solid var(--c-rule-strong); border-radius: var(--r-control);
@@ -11,7 +11,7 @@
 .btn:hover:not(:disabled) { background: var(--c-sunken); border-color: var(--c-ink-3); }
 .btn:active:not(:disabled) { transform: translateY(1px); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn-sm { height: 28px; padding: 0 10px; font-size: var(--fs-12); }
+.btn-sm { height: var(--h-ctl-sm); padding: 0 10px; font-size: var(--fs-12); }
 .btn-block { display: flex; width: 100%; }
 .btn-primary { background: var(--c-ink); border-color: var(--c-ink); color: var(--c-on-ink); }
 .btn-primary:hover:not(:disabled) { background: var(--c-ink-hover); border-color: var(--c-ink-hover); }
