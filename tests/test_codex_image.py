@@ -31,14 +31,14 @@ def _cfg(tmp_path: Path, **kw) -> ci.CodexConfig:
 
 
 class FakeRun:
-    """替身 subprocess.run：记录命令；按 thread_id 往 CODEX_HOME 落一张图（或不落）。"""
+    """替身 codex_image._run：记录命令；按 thread_id 往 CODEX_HOME 落一张图（或不落）。"""
 
     def __init__(self, home: Path, *, write_image=True, events=None, returncode=0, stderr=""):
         self.home, self.write_image, self.events = home, write_image, events
         self.returncode, self.stderr, self.calls = returncode, stderr, []
 
-    def __call__(self, cmd, **kw):
-        self.calls.append((cmd, kw))
+    def __call__(self, cmd, timeout, cwd):
+        self.calls.append((cmd, {"timeout": timeout, "cwd": cwd}))
         tid = f"thread-{len(self.calls)}"
         if self.write_image:
             d = self.home / "generated_images" / tid
@@ -116,7 +116,7 @@ def test_prompt_is_one_line_and_carries_orientation():
 def test_generate_one_finds_image_by_thread_id_even_without_path_in_reply(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     fake = FakeRun(cfg.home)
-    monkeypatch.setattr(ci.subprocess, "run", fake)
+    monkeypatch.setattr(ci, "_run", fake)
     out = ci.generate_one(cfg, "一只猫", "1024x1536")
     assert out.read_bytes() == PNG and out.parent.name == "thread-1"
     cmd, kw = fake.calls[0]
@@ -125,7 +125,7 @@ def test_generate_one_finds_image_by_thread_id_even_without_path_in_reply(tmp_pa
         assert flag in cmd
     assert cmd[cmd.index("--sandbox") + 1] == "read-only"
     assert cmd[cmd.index("-m") + 1] == "gpt-6.1-sol"
-    assert kw["stdin"] is subprocess.DEVNULL and kw["timeout"] == 30
+    assert kw["timeout"] == 30
     assert not any(c.startswith("--image") for c in cmd)
 
 
@@ -134,7 +134,7 @@ def test_edit_passes_image_with_equals_form(tmp_path, monkeypatch):
     src = tmp_path / "in.png"
     src.write_bytes(PNG)
     fake = FakeRun(cfg.home)
-    monkeypatch.setattr(ci.subprocess, "run", fake)
+    monkeypatch.setattr(ci, "_run", fake)
     ci.generate_one(cfg, "改成夜景", "1:1", image=str(src))
     cmd = fake.calls[0][0]
     img_args = [c for c in cmd if c.startswith("--image")]
@@ -145,7 +145,7 @@ def test_edit_passes_image_with_equals_form(tmp_path, monkeypatch):
 def test_generate_n_runs_once_per_image(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     fake = FakeRun(cfg.home)
-    monkeypatch.setattr(ci.subprocess, "run", fake)
+    monkeypatch.setattr(ci, "_run", fake)
     outs = ci.generate(cfg, "猫", 3, "1:1")
     assert len(fake.calls) == 3 and len({o.parent.name for o in outs}) == 3
 
@@ -156,15 +156,15 @@ def test_no_image_reports_codex_error_and_reply(tmp_path, monkeypatch):
         {"type": "thread.started", "thread_id": "t"},
         {"type": "turn.failed", "error": {"message": "usage limit reached"}},
     ])
-    monkeypatch.setattr(ci.subprocess, "run", fake)
+    monkeypatch.setattr(ci, "_run", fake)
     with pytest.raises(ci.CodexImageError, match="usage limit reached"):
         ci.generate_one(cfg, "猫", "1:1")
 
 
 def test_timeout_is_a_readable_error(tmp_path, monkeypatch):
-    def slow(cmd, **kw):
-        raise subprocess.TimeoutExpired(cmd, kw["timeout"])
-    monkeypatch.setattr(ci.subprocess, "run", slow)
+    def slow(cmd, timeout, cwd):
+        raise subprocess.TimeoutExpired(cmd, timeout)
+    monkeypatch.setattr(ci, "_run", slow)
     with pytest.raises(ci.CodexImageError, match="IMG_CODEX_TIMEOUT"):
         ci.generate_one(_cfg(tmp_path), "猫", "1:1")
 
@@ -175,7 +175,7 @@ def test_old_images_in_thread_dir_are_not_reused(tmp_path, monkeypatch):
     old.parent.mkdir(parents=True)
     old.write_bytes(PNG)
     os.utime(old, (1, 1))
-    monkeypatch.setattr(ci.subprocess, "run", FakeRun(cfg.home, write_image=False))
+    monkeypatch.setattr(ci, "_run", FakeRun(cfg.home, write_image=False))
     with pytest.raises(ci.CodexImageError):
         ci.generate_one(cfg, "猫", "1:1")
 
@@ -283,3 +283,101 @@ def test_save_image_channel_writes_img_provider(tmp_path, monkeypatch):
     assert "IMG_PROVIDER=codex-cli" in text and "IMG_CODEX_MODEL=gpt-6-sol" in text
     rows = {x["slot"]: x for x in r.json()["channels"]["image"]["rows"]}
     assert rows["codex-cli"]["role"] == "主"
+
+
+# ── 进程与平台细节 ─────────────────────────────────────────
+
+def test_run_returns_output_with_stdin_closed(tmp_path):
+    code = "import sys; print('in=' + repr(sys.stdin.read()))"
+    r = ci._run([sys.executable, "-c", code], 30, str(tmp_path))
+    assert r.returncode == 0 and "in=''" in r.stdout
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX 进程组；Windows 走 taskkill /T")
+def test_run_timeout_kills_grandchildren(tmp_path):
+    import time
+    pidfile = tmp_path / "grandchild.pid"
+    code = ("import subprocess, sys, time; "
+            "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+            f"open({str(pidfile)!r}, 'w').write(str(g.pid)); time.sleep(60)")
+    t0 = time.time()
+    with pytest.raises(subprocess.TimeoutExpired):
+        ci._run([sys.executable, "-c", code], 2, str(tmp_path))
+    assert time.time() - t0 < 20            # 孙进程攥着管道也不会卡住
+    gpid = int(pidfile.read_text())
+    for _ in range(30):
+        try:
+            os.kill(gpid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("孙进程还活着：超时没有结束整棵进程树")
+
+
+def test_windows_cmd_shim_gets_metachars_neutralised(tmp_path, monkeypatch):
+    monkeypatch.setattr(ci, "_WINDOWS", True)
+    cfg = _cfg(tmp_path, bin=r"C:\npm\codex.cmd")
+    fake = FakeRun(cfg.home)
+    monkeypatch.setattr(ci, "_run", fake)
+    ci.generate_one(cfg, 'cat" & calc & "%PATH%', "1:1")
+    prompt = fake.calls[0][0][-1]
+    assert not any(c in prompt for c in '"&%') and "＆ calc" in prompt
+    bad = tmp_path / "a&b.png"
+    bad.write_bytes(PNG)
+    with pytest.raises(ci.CodexImageError, match="改名"):
+        ci.generate_one(cfg, "改图", "1:1", image=str(bad))
+
+
+def test_windows_prefers_native_exe_over_cmd_shim(tmp_path, monkeypatch):
+    monkeypatch.setattr(ci, "_WINDOWS", True)
+    shim = tmp_path / "codex.cmd"
+    shim.write_text("@echo off", encoding="utf-8")
+    exe = tmp_path / "node_modules" / "@openai" / "codex" / "vendor" / "x86_64-pc-windows-msvc" / "codex" / "codex.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"MZ")
+    assert ci._prefer_exe(str(shim)) == str(exe)
+    assert ci._prefer_exe(str(tmp_path / "codex.exe")) == str(tmp_path / "codex.exe")
+
+
+def test_falls_back_to_path_mentioned_in_reply(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    img = tmp_path / "elsewhere" / "out.png"
+    img.parent.mkdir()
+    img.write_bytes(PNG)
+    fake = FakeRun(cfg.home, write_image=False, events=[
+        {"type": "thread.started", "thread_id": "t1"},
+        {"type": "item.completed", "item": {"type": "agent_message", "text": f"已保存到 {img}。"}},
+    ])
+    monkeypatch.setattr(ci, "_run", fake)
+    assert ci.generate_one(cfg, "猫", "1:1") == img
+
+
+def test_login_status_reads_exit_code(tmp_path, monkeypatch):
+    def fake(cmd, **kw):
+        ok = cmd[-2:] == ["login", "status"]
+        return subprocess.CompletedProcess(cmd, 0 if ok else 1, stdout="Logged in using ChatGPT\n", stderr="")
+    monkeypatch.setattr(ci.subprocess, "run", fake)
+    assert ci.login_status(_cfg(tmp_path)) == (True, "Logged in using ChatGPT")
+    monkeypatch.setattr(ci.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, stdout="Not logged in", stderr=""))
+    assert ci.login_status(_cfg(tmp_path)) == (False, "Not logged in")
+
+
+def test_copy_image_converts_format_when_extension_differs(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    src = tmp_path / "src.png"
+    Image.new("RGBA", (4, 4), (255, 0, 0, 128)).save(src)
+    same = ai_image._copy_image(src, tmp_path / "a.png")
+    assert same.read_bytes() == src.read_bytes()
+    jpg = ai_image._copy_image(src, tmp_path / "b.jpg")
+    assert jpg.suffix == ".jpg"
+    with Image.open(jpg) as im:
+        assert im.format == "JPEG"
+
+
+def test_skill_drawer_ready_flag_follows_selection():
+    spec = {p["id"]: p for p in web._api_spec_status("ai-image-gen", {})["providers"]}
+    assert spec["codex-cli"]["ready"] is False
+    spec = {p["id"]: p for p in web._api_spec_status("ai-image-gen", {"IMG_PROVIDER": "codex-cli"})["providers"]}
+    assert spec["codex-cli"]["ready"] is True

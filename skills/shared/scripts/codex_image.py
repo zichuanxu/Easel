@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -33,6 +34,12 @@ DEFAULT_TIMEOUT = 300          # 实测单张 60–75 秒，留足余量
 LOGIN_CHECK_TIMEOUT = 20
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
 INSTALL_HINT = "安装：npm i -g @openai/codex；登录：codex login（用 ChatGPT 账号）"
+
+_WINDOWS = os.name == "nt"
+# Windows 上 npm 装的 codex 是 .cmd 包装，参数要经 cmd.exe 再解析一遍：这些字符会被当成命令语法
+_CMD_META = '"%^&|<>!'
+_CMD_META_FULLWIDTH = str.maketrans({'"': "”", "%": "％", "^": "＾", "&": "＆",
+                                     "|": "｜", "<": "＜", ">": "＞", "!": "！"})
 
 
 class CodexImageError(RuntimeError):
@@ -64,6 +71,19 @@ def _candidate_dirs() -> list[Path]:
     return dirs
 
 
+def _is_batch(path: str) -> bool:
+    return _WINDOWS and Path(path).suffix.lower() in (".cmd", ".bat")
+
+
+def _prefer_exe(found: str) -> str:
+    """Windows 上找到的是 npm 的 .cmd 包装时，尽量换成同一安装里的原生 codex.exe（不经 cmd.exe）。"""
+    if not _is_batch(found):
+        return found
+    for exe in sorted(Path(found).parent.glob("node_modules/@openai/codex*/**/codex.exe")):
+        return str(exe)
+    return found
+
+
 def find_codex(explicit: str | None = None) -> str | None:
     """IMG_CODEX_BIN（显式指定就只认它）→ PATH → 常见安装目录。找不到返回 None。"""
     if explicit:
@@ -71,11 +91,11 @@ def find_codex(explicit: str | None = None) -> str | None:
         return str(p) if p.is_file() else None
     found = shutil.which("codex")
     if found:
-        return found
+        return _prefer_exe(found)
     for d in _candidate_dirs():
         found = shutil.which("codex", path=str(d))
         if found:
-            return found
+            return _prefer_exe(found)
     return None
 
 
@@ -147,6 +167,41 @@ def build_prompt(prompt: str, size: str, edit: bool) -> str:
             "只生成这一张，不要读写任何文件，不要运行命令。")
 
 
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """连同 codex 拉起的子进程一起结束：只杀直接子进程会留下还在出图（占额度）的孤儿。"""
+    try:
+        if _WINDOWS:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=15)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _run(cmd: list[str], timeout: int, cwd: str) -> subprocess.CompletedProcess:
+    """起 codex（独立进程组）并等它结束；超时则结束整棵进程树后抛 TimeoutExpired。"""
+    group = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if _WINDOWS
+             else {"start_new_session": True})
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                            errors="replace", cwd=cwd, **group)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:
+            proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
 def _events(stdout: str) -> list[dict]:
     out = []
     for line in (stdout or "").splitlines():
@@ -207,16 +262,23 @@ def _paths_in_messages(messages: list[str], since: float) -> list[Path]:
 def generate_one(cfg: CodexConfig, prompt: str, size: str, image: str | None = None) -> Path:
     """跑一轮 codex exec，返回生成的图片（位于 Codex 数据目录，调用方负责复制走）。"""
     since = time.time() - 1
-    with tempfile.TemporaryDirectory(prefix="easel-codex-img-") as work:
+    text = build_prompt(prompt, size, edit=bool(image))
+    image_arg = str(Path(image).expanduser().resolve()) if image else ""
+    if _is_batch(cfg.bin):
+        # 经 cmd.exe 解析：引号、%、& 等会被当成命令语法，拼出额外命令 —— 提示词里换成全角
+        text = text.translate(_CMD_META_FULLWIDTH)
+        if any(c in image_arg for c in _CMD_META):
+            raise CodexImageError(
+                f"图片路径含有 {_CMD_META} 中的字符，Windows 上无法安全传给 codex，请先改名再试。")
+    with tempfile.TemporaryDirectory(prefix="easel-codex-img-", ignore_cleanup_errors=True) as work:
         cmd = [cfg.bin, "exec", "--ephemeral", "--skip-git-repo-check",
                "--sandbox", "read-only", "--json", "-m", cfg.model, "-C", work]
-        if image:
+        if image_arg:
             # 必须用 --image=<路径>：-i 会一口气吞掉后面的多个参数，把 prompt 也当成图片
-            cmd.append(f"--image={Path(image).expanduser().resolve()}")
-        cmd.append(build_prompt(prompt, size, edit=bool(image)))
+            cmd.append(f"--image={image_arg}")
+        cmd.append(text)
         try:
-            proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace", timeout=cfg.timeout, cwd=work)
+            proc = _run(cmd, cfg.timeout, work)
         except subprocess.TimeoutExpired:
             raise CodexImageError(
                 f"Codex 生图超时（>{cfg.timeout}s）。可在 .env 调大 IMG_CODEX_TIMEOUT 后重试。") from None

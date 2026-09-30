@@ -716,19 +716,21 @@ def _key_configured(key: dict, env: dict[str, str]) -> bool:
     return any(_is_set(env.get(a)) for a in key.get('aliases', []))
 
 
+def _provider_ready(spec: dict, prov: dict, env: dict[str, str]) -> bool:
+    'provider 是否可用：免 key 的本机后端（Codex CLI）要在 settings 里被选中；其余看必填 key 是否齐全。'
+    if prov.get('keyless'):
+        return any(str(env.get(k['env'], '')).strip() == prov['id']
+                   for k in spec.get('settings', []) if k.get('choices'))
+    return all(_key_configured(k, env) for k in prov['keys'] if k['required'])
+
+
 def _skill_api_configured(skill: str, env: dict[str, str] | None = None) -> bool:
-    'SKILL 是否已具备可用配置：任一 provider 的全部 required key 齐全。'
+    'SKILL 是否已具备可用配置：任一 provider 可用。'
     spec = SKILL_API_REQUIREMENTS.get(skill)
     if not spec:
         return True
     env = _read_env() if env is None else env
-    selected = {str(env.get(k['env'], '')).strip() for k in spec.get('settings', []) if k.get('choices')}
-    for prov in spec['providers']:
-        if prov.get('keyless') and prov['id'] not in selected:
-            continue   # 免 key 的本机后端（Codex CLI）：选了才算，不能凭「没有必填项」就算已配置
-        if all(_key_configured(k, env) for k in prov['keys'] if k['required']):
-            return True
-    return False
+    return any(_provider_ready(spec, prov, env) for prov in spec['providers'])
 
 
 # .env 的值是裸写 `KEY=value` 的，而 setup.sh:310/450 会 `source .env`。bash 在赋值右侧
@@ -855,7 +857,8 @@ def _api_spec_status(skill: str, env: dict[str, str]) -> dict:
     providers = []
     for prov in spec['providers']:
         keys = [key_status(k) for k in prov['keys']]
-        providers.append({'id': prov['id'], 'name': prov['name'], 'keys': keys})
+        providers.append({'id': prov['id'], 'name': prov['name'], 'keys': keys,
+                          'ready': _provider_ready(spec, prov, env)})
     return {
         'label': spec['label'],
         'settings': [key_status(k) for k in spec.get('settings', [])],
@@ -1416,9 +1419,12 @@ def _model_channels() -> dict:
                     _extra = {"keyless": True, "baseUrl": "本机"}
                     _masked = "免 key"
                     if _p["id"] == "codex-cli":
-                        import codex_image as _ci
-                        _ok, _why = _ci.quick_status({**os.environ, **env})
-                        _extra["modelHint"] = f"{_ci.DEFAULT_MODEL}（默认）"
+                        try:
+                            import codex_image as _ci
+                            _ok, _why = _ci.quick_status({**os.environ, **env})
+                            _extra["modelHint"] = f"{_ci.DEFAULT_MODEL}（默认）"
+                        except Exception as _exc:  # noqa: BLE001 — 只影响这一行，不能连带吞掉其他通道
+                            _ok, _why = False, f"状态检查失败：{_exc}"[:80]
                         if not _ok:
                             _extra["resultText"] = _why
                 _rows.append({

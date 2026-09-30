@@ -44,7 +44,7 @@ text2img / img2img / variations 都改由本机 `codex exec` 出图，不需要�
 
 - 可选：`IMG_CODEX_MODEL`（默认 `gpt-6.1-sol`）、`IMG_CODEX_TIMEOUT`（单张超时秒数，默认 300）、`IMG_CODEX_BIN`（codex 路径，默认自动查找）。
 - 每张约 1 分钟，占用户的 ChatGPT 订阅额度；`--n` 张逐张生成。**多张先告诉用户预计耗时。**
-- `--size` 只决定横 / 竖 / 方（实际出 1024×1536、1536×1024 或 1024×1024）；要精确尺寸再交给 `image-editing`。
+- `--size` 只决定横 / 竖 / 方，实际像素由 Codex 决定（如 1024×1536、1672×941）；要精确尺寸再交给 `image-editing`。
 - 不支持 `--mask`：把要改的区域写进 prompt。临时指定后端用 `--mode codex` 或 `--mode sync|async`。
 
 ## 执行步骤
