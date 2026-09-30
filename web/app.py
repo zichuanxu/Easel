@@ -3560,7 +3560,8 @@ async def _run_analytics(platform: str) -> dict:
                 data = json.loads(line)
             except Exception:
                 continue
-            if isinstance(data, dict):
+            # 只缓存「已登录且无 error」的成功结果：未登录/出错的结果照常返回，但不能覆盖之前的好缓存
+            if isinstance(data, dict) and data.get("loggedIn") and not data.get("error"):
                 _write_analytics_latest(platform, data)
             return data
     detail = (proc.stderr or "").strip().splitlines()[-1:] or ["未取到数据"]
@@ -3584,6 +3585,8 @@ async def api_analytics(platform: str, cached: int = 0):
     if task is None:
         task = asyncio.ensure_future(_run_analytics(platform))
         _ANALYTICS_INFLIGHT[platform] = task
+        # 取走异常：所有等待者都被取消时，避免 "Task exception was never retrieved"
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())
         # 结束后摘掉登记：之后的请求重新抓。identity 判断避免误删更新的 task
         task.add_done_callback(
             lambda t, p=platform: _ANALYTICS_INFLIGHT.get(p) is t and _ANALYTICS_INFLIGHT.pop(p, None))

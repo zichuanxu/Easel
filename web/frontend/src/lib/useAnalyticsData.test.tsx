@@ -145,4 +145,14 @@ describe('useAnalyticsData', () => {
     expect(err).not.toHaveBeenCalled();
     err.mockRestore();
   });
+
+  it('fetched_at 不是数字（如日期字符串）：按过期处理，后台刷新', async () => {
+    const bad = { ...mk('douyin', 0, 3), fetched_at: '2026-09-30 12:00:00' as unknown as number };
+    seed({ douyin: bad });
+    fetchA.mockReturnValue(new Promise(() => {}));
+    const { result } = renderHook(() => useAnalyticsData());
+    act(() => result.current.ensure('douyin', true));
+    expect(fetchA).toHaveBeenCalledTimes(1);
+    expect(result.current.entry('douyin').data?.followers).toBe(3);
+  });
 });

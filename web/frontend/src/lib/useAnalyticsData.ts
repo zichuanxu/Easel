@@ -19,7 +19,8 @@ export interface AnalyticsEntry {
 const EMPTY: AnalyticsEntry = { updating: false, failed: false };
 
 function isFresh(d: AccountAnalytics | undefined, now = Date.now()): boolean {
-  return !!d && typeof d.fetched_at === 'number' && now - d.fetched_at * 1000 <= ANALYTICS_TTL_MS;
+  // fetched_at 不是有限数字（如公众号出错时的日期字符串）一律按过期处理
+  return !!d && Number.isFinite(d.fetched_at) && now - d.fetched_at * 1000 <= ANALYTICS_TTL_MS;
 }
 
 /** 只接受对象值：旧版本会把 'loading' / 'error' 字符串一起写进来，直接丢掉。 */

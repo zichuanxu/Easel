@@ -1,5 +1,6 @@
 /** 更新时间的相对写法：刚刚 / N 分钟前 / N 小时前 / M 月 D 日 HH:mm。ms 是毫秒时间戳。 */
 export function fmtAgo(ms: number, now: number): string {
+  if (!Number.isFinite(ms) || !Number.isFinite(now)) return '';
   const min = Math.floor((now - ms) / 60000);
   if (min < 1) return '刚刚';
   if (min < 60) return `${min} 分钟前`;

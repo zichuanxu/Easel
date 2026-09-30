@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 
 vi.mock('../lib/api', () => ({
   fetchAnalyticsPlatforms: vi.fn(),
@@ -60,7 +60,42 @@ describe('AnalyticsPage', () => {
   });
 });
 
+describe('AnalyticsPage 时间与定时', () => {
+  it('fetched_at 是日期字符串：不出现 NaN，失败条用「之前的数据」', async () => {
+    localStorage.setItem('easel_analytics', JSON.stringify({ xiaohongshu: { ...sample(0), fetched_at: '2026-09-30 12:00:00' } }));
+    vi.mocked(api.fetchAnalyticsPlatforms).mockResolvedValue([{ platform: 'xiaohongshu', name: '小红书', loggedIn: true }]);
+    vi.mocked(api.fetchAccountAnalytics).mockRejectedValueOnce(new Error('x'));
+    const { container } = render(<AnalyticsPage onNavigate={() => {}} />);
+    expect(await screen.findByText('更新失败，显示的是之前的数据。')).toBeTruthy();
+    expect(container.textContent).not.toContain('NaN');
+  });
+
+  it('每 60 秒重新计算相对时间，并对当前平台 ensure（过期则后台刷新）', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    try {
+      localStorage.setItem('easel_analytics', JSON.stringify({ xiaohongshu: sample(29 * 60_000) }));
+      vi.mocked(api.fetchAccountAnalytics).mockClear();
+      vi.mocked(api.fetchAnalyticsPlatforms).mockResolvedValue([{ platform: 'xiaohongshu', name: '小红书', loggedIn: true }]);
+      const { container, unmount } = render(<AnalyticsPage onNavigate={() => {}} />);
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+      expect(container.textContent).toContain('更新于 29 分钟前');
+      expect(api.fetchAccountAnalytics).not.toHaveBeenCalled();
+      await act(async () => { vi.advanceTimersByTime(2 * 60_000); });
+      expect(container.textContent).toContain('更新于 31 分钟前');
+      expect(api.fetchAccountAnalytics).toHaveBeenCalledTimes(1);
+      const clear = vi.spyOn(globalThis, 'clearInterval');
+      unmount();
+      expect(clear).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('fmtAgo', () => {
+  it('非有限输入返回空串', () => {
+    expect(fmtAgo(NaN, Date.now())).toBe('');
+  });
   const now = new Date(2026, 8, 30, 12, 0).getTime();
   it('四种区间', () => {
     expect(fmtAgo(now - 30_000, now)).toBe('刚刚');

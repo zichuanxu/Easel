@@ -24,7 +24,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "skills" / "shared" / "scripts"))
 
 import app as web  # noqa: E402
 
-SAMPLE = {"platform": "douyin", "fetched_at": 1_700_000_000, "followers": 12}
+SAMPLE = {"platform": "douyin", "loggedIn": True, "fetched_at": 1_700_000_000, "followers": 12}
 
 
 class FakeRun:
@@ -137,3 +137,52 @@ def test_whoami_and_analytics_serialized(env, monkeypatch):
     asyncio.run(go())
     assert fake.calls == 2
     assert fake.max_running == 1
+
+
+@pytest.mark.parametrize("bad", [{"loggedIn": False, "followers": None}, {"loggedIn": True, "error": "x"}])
+def test_not_logged_in_or_error_does_not_overwrite_latest(env, monkeypatch, bad):
+    d = env / "_analytics"
+    d.mkdir()
+    old = d / "douyin-latest.json"
+    old.write_text(json.dumps(SAMPLE), encoding="utf-8")
+    _patch(monkeypatch, FakeRun(stdout=json.dumps(bad)))
+    assert asyncio.run(web.api_analytics("douyin")) == bad   # 返回值照旧
+    assert json.loads(old.read_text(encoding="utf-8")) == SAMPLE
+
+
+def test_concurrent_waiters_share_error_and_inflight_cleared(env, monkeypatch):
+    class Boom(FakeRun):
+        def __call__(self, cmd, **kw):
+            super().__call__(cmd, **kw)
+            raise RuntimeError("spawn failed")
+
+    fake = Boom(delay=0.1)
+    _patch(monkeypatch, fake)
+
+    async def go():
+        rs = await asyncio.gather(web.api_analytics("douyin"), web.api_analytics("douyin"), return_exceptions=True)
+        await asyncio.sleep(0)
+        return rs, dict(web._ANALYTICS_INFLIGHT)
+
+    rs, inflight = asyncio.run(go())
+    assert fake.calls == 1
+    assert all(isinstance(r, RuntimeError) and str(r) == "spawn failed" for r in rs)
+    assert inflight == {}
+    # 失败后下一次请求重新跑
+    _patch(monkeypatch, FakeRun())
+    assert asyncio.run(web.api_analytics("douyin")) == SAMPLE
+
+
+def test_timeout_504_and_inflight_cleared(env, monkeypatch):
+    def boom(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, 180)
+    _patch(monkeypatch, boom)
+
+    async def go():
+        rs = await asyncio.gather(web.api_analytics("douyin"), web.api_analytics("douyin"), return_exceptions=True)
+        await asyncio.sleep(0)
+        return rs, dict(web._ANALYTICS_INFLIGHT)
+
+    rs, inflight = asyncio.run(go())
+    assert all(isinstance(r, HTTPException) and r.status_code == 504 for r in rs)
+    assert inflight == {}

@@ -52,9 +52,19 @@ export default function AnalyticsPage({ onNavigate }: { onNavigate: (page: Page)
     ensure(platform, true);
   };
 
+  // 页面长开：每分钟刷新「N 分钟前」，并对当前平台再 ensure 一次（过期就后台刷新）
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => {
+      setNow(Date.now());
+      if (anaSel) ensure(anaSel, true);
+    }, 60_000);
+    return () => clearInterval(t);
+  }, [anaSel, ensure]);
+
   const { data: d, updating, failed } = entry(anaSel);
-  const fetchedMs = d ? d.fetched_at * 1000 : 0;
-  const ago = d ? fmtAgo(fetchedMs, Date.now()) : '';
+  const fetchedMs = d ? Number(d.fetched_at) * 1000 : NaN;
+  const ago = d && Number.isFinite(fetchedMs) ? fmtAgo(fetchedMs, now) : '';
 
   return (
     <div className="page-scroll analytics-page">
@@ -64,7 +74,7 @@ export default function AnalyticsPage({ onNavigate }: { onNavigate: (page: Page)
         description={(
           <>
             各平台已登录账号的粉丝、获赞、关注，增长趋势和最新作品。
-            {anaSel && d && <span className="ana-updated">更新于 {ago}{updating ? '，正在更新' : ''}</span>}
+            {anaSel && d && ago && <span className="ana-updated">更新于 {ago}{updating ? '，正在更新' : ''}</span>}
           </>
         )}
         actions={anaSel
@@ -88,7 +98,7 @@ export default function AnalyticsPage({ onNavigate }: { onNavigate: (page: Page)
           />
           {d && failed && (
             <div className="ana-fail" role="status">
-              <span>更新失败，显示的是 {ago}的数据。</span>
+              <span>{ago ? `更新失败，显示的是 ${ago}的数据。` : '更新失败，显示的是之前的数据。'}</span>
               <Button size="sm" onClick={() => refresh(anaSel)}>重试</Button>
             </div>
           )}
