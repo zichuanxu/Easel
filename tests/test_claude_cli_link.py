@@ -31,6 +31,18 @@ def test_project_key_matches_openclaw_sanitizer(tmp_path):
     assert key == "".join(c if c.isascii() and c.isalnum() else "-" for c in os.path.realpath(ws))
 
 
+def test_astral_characters_count_as_two_utf16_units():
+    # JS: "/a/🙂b".replace(/[^a-zA-Z0-9]/g, "-") === "-a---b"（emoji 占两个 UTF-16 码元）
+    assert link.project_key("/a/🙂b").endswith("-a---b")
+    assert link.project_key("/测试").endswith("---")
+
+
+def test_home_env_takes_precedence(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    probe, _ = link.link_paths("/x/.claude-easel", "/ws")
+    assert probe == tmp_path / ".claude" / "projects" / "-ws"
+
+
 def test_long_workspace_key_gets_openclaw_hash():
     # 期望值来自 OpenClaw 的 JS 实现：hash = hash * 31 + charCodeAt >>> 0，toString(36)
     assert link._hash36("/Users/a/" + "x" * 250) == "ons97o"

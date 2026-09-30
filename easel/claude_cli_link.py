@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import shutil
 import sys
 import unicodedata
@@ -55,9 +54,12 @@ def canonical_workspace(workspace: str | os.PathLike) -> str:
 
 
 def project_key(workspace: str | os.PathLike) -> str:
-    """与 OpenClaw sanitizeClaudeCliProjectKey 一致：非字母数字换成 -，超长截断加哈希。"""
+    """与 OpenClaw sanitizeClaudeCliProjectKey 一致：非字母数字换成 -，超长截断加哈希。
+
+    JS 的正则替换和 length 都按 UTF-16 码元算：emoji 这类 BMP 以外的字符要换成两个 -。
+    """
     ws = canonical_workspace(workspace)
-    key = re.sub(r"[^a-zA-Z0-9]", "-", ws)
+    key = "".join(chr(u) if u < 128 and chr(u).isalnum() else "-" for u in _utf16_units(ws))
     if len(key) <= _MAX_KEY_LEN:
         return key
     return f"{key[:_MAX_KEY_LEN]}-{_hash36(ws)}"
@@ -113,6 +115,13 @@ def ensure_link(config_dir: str | None, workspace: str | os.PathLike,
     if skip:
         return True, skip
     link, target = link_paths(config_dir, workspace, home_dir)
+    try:
+        return _ensure(link, target)
+    except OSError as exc:
+        return False, f"建软链失败（{exc}）；{link} 和 {target} 里的文件都没删，处理后重试"
+
+
+def _ensure(link: Path, target: Path) -> tuple[bool, str]:
     target.mkdir(parents=True, exist_ok=True)
     if link.is_symlink():
         if os.path.realpath(link) == os.path.realpath(target):
