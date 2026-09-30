@@ -181,6 +181,18 @@ def _extract_token(url):
     return m.group(1) if m else ""
 
 
+def _wait_token(page, max_ms=4000, step=200):
+    """打开 mp 首页后等它跳到带 token 的后台地址：拿到就走，未登录则等满 max_ms 返回空串。
+    替代原先固定等 1.8 秒——已登录时跳转通常几百毫秒就完成。"""
+    waited = 0
+    while True:
+        token = _extract_token(page.url)
+        if token or waited >= max_ms:
+            return token
+        page.wait_for_timeout(step)
+        waited += step
+
+
 def _capture_qr(page, qr_out):
     """等二维码 img 真正渲染(complete && naturalWidth>0)后再截图。"""
     Path(qr_out).parent.mkdir(parents=True, exist_ok=True)
@@ -307,28 +319,34 @@ def cmd_stats(a):
         page.on("response", on_resp)
         try:
             page.goto(MP_HOME, wait_until="commit", timeout=60000)
-            page.wait_for_timeout(1800)
-            token = _extract_token(page.url)
+            token = _wait_token(page)
             if not token:
                 result["error"] = "未登录或会话失效，请重新 login 扫码"
                 print(json.dumps(result, ensure_ascii=False))
                 return 1
             result["loggedIn"] = True
-            # 打开发表记录页，让 Vue 自然发出带正确参数的数据 XHR（我们拦截它，避免自己拼易变参数/fingerprint）
-            page.goto(f"https://mp.weixin.qq.com/cgi-bin/appmsgpublish?sub=list&begin=0&count={a.count}"
-                      f"&token={token}&lang=zh_CN", wait_until="commit", timeout=60000)
-            for _ in range(10):
+            # 发表记录接口（appmsgpublish）由后台首页自己发出，token 出现后约 0.5 秒到（实测；
+            # 发表记录页本身 6 秒内不再发）。先在首页等它，最多 4 秒，每 250ms 看一次。
+            for _ in range(16):
                 if cap["publish"]:
                     break
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(250)
+            if not cap["publish"]:
+                # 兜底：打开发表记录页，让 Vue 自然发出带正确参数的数据 XHR（我们拦截它，避免自己拼易变参数/fingerprint）
+                page.goto(f"https://mp.weixin.qq.com/cgi-bin/appmsgpublish?sub=list&begin=0&count={a.count}"
+                          f"&token={token}&lang=zh_CN", wait_until="commit", timeout=60000)
+                for _ in range(40):   # 最多 10 秒，接口一回来就走
+                    if cap["publish"]:
+                        break
+                    page.wait_for_timeout(250)
             # 打开数据分析页，触发阅读/分享趋势 + 单篇文章数据 + 用户数据 XHR
             try:
                 page.goto(f"https://mp.weixin.qq.com/misc/appmsganalysis?action=report&type=daily_v2"
                           f"&token={token}&lang=zh_CN", wait_until="commit", timeout=60000)
-                for _ in range(8):
+                for _ in range(32):   # 最多 8 秒，每 250ms 看一次
                     if cap["tendency"] and cap["article_list"]:
                         break
-                    page.wait_for_timeout(1000)
+                    page.wait_for_timeout(250)
             except Exception:
                 pass
             if a.dump_dir:
