@@ -49,7 +49,7 @@
 /* 短信验证弹窗 */
 .publish-sms-msg { font-size: var(--fs-13); color: var(--c-ink-2); margin-bottom: var(--sp-3); }
 .publish-sms-msg.is-error { color: var(--c-danger); }
-.publish-sms-input { text-align: center; letter-spacing: 6px; font-size: var(--fs-20); padding: 10px 12px; }
+.publish-sms-input { height: auto; text-align: center; letter-spacing: 6px; font-size: var(--fs-20); padding: 10px 12px; }
 
 @media (max-width: 900px) {
   .publish-page { flex-direction: column; overflow-y: auto; }

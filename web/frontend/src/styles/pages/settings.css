@@ -1,7 +1,7 @@
 /* 设置面板、环境安装、画像向导。只用 tokens 里的变量。 */
 
 /* ── 设置外壳 ── */
-.settings-modal { position: relative; display: flex; flex-direction: column; height: min(760px, calc(100vh - 40px)); padding: 0; overflow: hidden; }
+.settings-modal { position: relative; display: flex; flex-direction: column; height: min(760px, calc(100vh - 40px)); padding: 0; overflow: hidden; scrollbar-gutter: auto; }
 .settings-modal .modal-title { padding: 20px 290px 12px 24px; margin: 0; border-bottom: 1px solid var(--c-rule); }
 .settings-modal .modal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .settings-title { display: flex; align-items: baseline; gap: 12px; }

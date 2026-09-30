@@ -65,7 +65,7 @@ export default function DashboardPage({ persona, gatewayStatus, onNavigate, onUs
         <div>
           <h1 className="dash-greet">{greet}</h1>
           <p className="dash-date">
-            <span className="dash-date-text">
+            <span className="dash-date-text" title={`${dateLine}。${persona ? `当前画像：${persona}。` : '通用模式，选一个画像生成的内容会更贴合你。'}`}>
               {dateLine}。{persona ? `当前画像：${persona}。` : '通用模式，选一个画像生成的内容会更贴合你。'}
             </span>
             {gatewayStatus !== 'connected' && <Tag tone="danger">网关未连接，对话暂不可用</Tag>}

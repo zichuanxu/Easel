@@ -7,7 +7,7 @@
 .modal {
   background: var(--c-surface); border: 1px solid var(--c-rule);
   border-radius: var(--r-overlay); box-shadow: var(--shadow-overlay);
-  padding: var(--sp-6); max-height: calc(100vh - 40px); overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable;
+  padding: var(--sp-6); max-height: calc(100vh - 40px); overflow-y: auto; overflow-x: hidden; /* 不留槽：多数弹窗不滚动，留槽会让分隔线停在右缘前 8px */
   animation: popIn 0.18s var(--ease);
 }
 .modal:focus { outline: none; }
