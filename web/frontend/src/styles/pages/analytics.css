@@ -19,5 +19,17 @@
 .ana-note-main { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .ana-note-title { font-size: var(--fs-13); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ana-note-stat { font-size: var(--fs-12); color: var(--c-ink-3); }
-.analytics-page .loading { display: flex; align-items: center; gap: var(--sp-3); padding: 28px 0; font-size: var(--fs-13); color: var(--c-ink-2); }
+.ana-updated { margin-left: var(--sp-3); color: var(--c-ink-3); font-variant-numeric: tabular-nums; }
+.ana-skel-note { font-size: var(--fs-12); color: var(--c-ink-3); margin-bottom: var(--sp-3); }
+.ana-fail { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-4); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--c-rule); border-radius: var(--r-control); background: var(--c-sunken); font-size: var(--fs-13); color: var(--c-ink-2); }
+.ana-skel { height: 44px; margin-bottom: var(--sp-3); border-radius: var(--r-control); background: var(--c-sunken); animation: ana-breathe 1.6s ease-in-out infinite; }
+.ana-skel-lg { height: 96px; }
+.ana-skel-short { width: 60%; margin-bottom: 0; }
+@keyframes ana-breathe { 50% { opacity: 0.55; } }
 @media (max-width: 1100px) { .analytics-body { grid-template-columns: 1fr; } }
+/* 概览面板里的 5 个时段页签：收紧内边距和间距，保证窄栏下不截断（只作用于这一组，不改全局 Tabs） */
+.ana-col-main .ui-tabs-sm { gap: 0; overflow-x: visible; }
+.ana-col-main .ui-tabs-sm .ui-tab { padding: 5px 6px; }
+.ana-col-main .ui-tabs-sm .ui-tab.is-active::after { left: 6px; right: 6px; }
+/* 「刷新数据」与「正在更新…」等宽，切换时不跳动 */
+.analytics-page .ui-page-header-actions .btn { min-width: 88px; justify-content: center; }

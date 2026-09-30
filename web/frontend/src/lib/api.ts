@@ -19,7 +19,8 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     } catch {
       /* 响应体不是 JSON，忽略 */
     }
-    throw new Error(detail || `请求失败（${res.status} ${res.statusText}）`);
+    // 带上 HTTP 状态码，调用方需要区分 404（如「还没有缓存」）时用
+    throw Object.assign(new Error(detail || `请求失败（${res.status} ${res.statusText}）`), { status: res.status });
   }
   return res.json() as Promise<T>;
 }
@@ -528,6 +529,16 @@ export function fetchAnalyticsPlatforms(): Promise<AnalyticsPlatform[]> {
 /** 抓某平台已登录账号的创作数据（后端起 headless 浏览器，数秒）。 */
 export function fetchAccountAnalytics(platform: string): Promise<AccountAnalytics> {
   return request<AccountAnalytics>(`/api/analytics/${encodeURIComponent(platform)}`);
+}
+
+/** 读后端落盘的最近一次抓取结果（毫秒级，不起浏览器）。还没有缓存（404）返回 null，其它错误照常抛。 */
+export async function fetchCachedAnalytics(platform: string): Promise<AccountAnalytics | null> {
+  try {
+    return await request<AccountAnalytics>(`/api/analytics/${encodeURIComponent(platform)}?cached=1`);
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) return null;
+    throw e;
+  }
 }
 
 /** 回填短信验证码（登录风控短信墙）：提交后 runner 读走填码继续登录。 */

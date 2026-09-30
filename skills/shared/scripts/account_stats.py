@@ -479,6 +479,27 @@ def _poll_stable(page, sig, max_ms: int = 10000, step: int = 400) -> list[str]:
     return lines
 
 
+def _poll_extract(page, js: str, max_ms: int = 8000, step: int = 300) -> list:
+    """轮询提取脚本本身，结果非空且连续两次相同（列表渲染完）就返回；超时返回最后一次结果。
+    比先等某个选择器可靠：平台改版后选择器常对不上，就会白等满超时——抖音作品页曾因此
+    每次多等 8 秒（数据 3 秒就到了）。evaluate 出错（页面还在跳转）当作空结果继续等。"""
+    prev = None
+    items: list = []
+    waited = 0
+    while True:
+        try:
+            items = page.evaluate(js) or []
+        except Exception:
+            items = []
+        if items and items == prev:
+            return items
+        prev = items
+        if waited >= max_ms:
+            return items
+        page.wait_for_timeout(step)
+        waited += step
+
+
 _XHS_UNPUBLISHED_TITLES = {"", "无笔记标题", "无标题", "(无标题)"}
 
 
@@ -663,18 +684,12 @@ def _scrape_notes(platform: str, page, cfg: dict) -> list[dict]:
             page.on("response", _on_resp)
             page.goto("https://creator.xiaohongshu.com/new/note-manager",
                       wait_until="domcontentloaded", timeout=30000)
-            try:
-                page.wait_for_selector(".note-card, [role='tab']", timeout=6000)
-            except Exception:
-                page.wait_for_timeout(1500)
+            # 先等「全部」列表出来；连它都没出来（页面没加载好/没有笔记）就不再切「已发布」白等
+            if not _poll_extract(page, _XHS_NOTES_JS, 8000):
+                return []
             _xhs_open_published_notes(page)
-            try:
-                page.wait_for_selector(".note-card", timeout=4000)
-            except Exception:
-                page.wait_for_timeout(800)
-            page.wait_for_timeout(800)  # 等已发布列表接口回来
             out = []
-            for n in (page.evaluate(_XHS_NOTES_JS) or []):
+            for n in _poll_extract(page, _XHS_NOTES_JS, 4000):   # 等「已发布」列表稳定
                 if not is_public_xhs_note(n):
                     continue
                 href = n.get("href") or ""
@@ -711,42 +726,30 @@ def _scrape_notes(platform: str, page, cfg: dict) -> list[dict]:
         try:
             page.goto("https://www.zhihu.com/creator/manage/creation/all",
                       wait_until="domcontentloaded", timeout=30000)
-            try:
-                page.wait_for_selector("a[href*='zhuanlan.zhihu.com/p/'], a[href*='/answer/']", timeout=6000)
-            except Exception:
-                page.wait_for_timeout(1500)
             return [{"title": n.get("title") or "(无标题)", "url": n.get("href") or "",
                      "cover": "", "stat": n.get("stat") or ""}
-                    for n in (page.evaluate(_ZHIHU_NOTES_JS) or [])]
+                    for n in _poll_extract(page, _ZHIHU_NOTES_JS, 7500)]
         except Exception:
             return []
     if platform == "douyin":
         try:
             page.goto("https://creator.douyin.com/creator-micro/content/manage",
                       wait_until="domcontentloaded", timeout=30000)
-            try:
-                page.wait_for_selector("a[href*='/video/'], img", timeout=6000)
-            except Exception:
-                page.wait_for_timeout(1500)
-            page.wait_for_timeout(800)   # 等作品列表异步渲染
+            # 作品页已没有 a[href*='/video/']，原先等选择器每次都白等满 6 秒；直接轮询提取结果
             return [{"title": n.get("title") or "(无标题)", "url": n.get("url") or "",
                      "cover": n.get("cover") or "", "stat": n.get("stat") or ""}
-                    for n in (page.evaluate(_DOUYIN_NOTES_JS) or [])]
+                    for n in _poll_extract(page, _DOUYIN_NOTES_JS, 8500)]
         except Exception:
             return []
     if platform == "kuaishou":
         try:
             page.goto("https://cp.kuaishou.com/article/manage/video",
                       wait_until="domcontentloaded", timeout=30000)
-            try:
-                page.wait_for_selector("[class*='video-item']", timeout=6000)
-            except Exception:
-                page.wait_for_timeout(1500)
             # 快手作品无独立公开链接，点击回到作品管理页；完播率在每条「数据」详情、列表不含
             return [{"title": n.get("title") or "(无标题)",
                      "url": "https://cp.kuaishou.com/article/manage/video",
                      "cover": "", "stat": n.get("stat") or ""}
-                    for n in (page.evaluate(_KUAISHOU_NOTES_JS) or [])]
+                    for n in _poll_extract(page, _KUAISHOU_NOTES_JS, 7500)]
         except Exception:
             return []
     # 其它平台：best-effort 从当前页 a[href] 按 note URL 模式抓
