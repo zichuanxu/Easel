@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ChatSession } from '../lib/store';
 import type { PersonaItem } from '../lib/api';
+import type { Page } from '../lib/layers';
 import type { ComponentType } from 'react';
 import {
   IconChat, IconSkills, IconOutputs, IconAccounts, IconProfile,
@@ -9,7 +10,7 @@ import {
 } from './icons';
 import { IconGear } from './settingsIcons';
 
-export type Page = 'dashboard' | 'chat' | 'trends' | 'ideas' | 'calendar' | 'publish' | 'breakdown' | 'skills' | 'outputs' | 'accounts' | 'profile';
+export type { Page } from '../lib/layers';
 
 interface SidebarProps {
   currentPage: Page;
