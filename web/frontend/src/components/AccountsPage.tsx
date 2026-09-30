@@ -28,7 +28,7 @@ const STATE_LABEL: Record<string, string> = {
   scanned: '扫码成功',
   sms_required: '需短信验证',
   verifying: '验证中…',
-  success: '登录成功 ✅',
+  success: '登录成功',
   expired: '二维码已过期',
   error: '登录出错',
   unknown: '等待中…',

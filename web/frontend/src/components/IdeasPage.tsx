@@ -13,10 +13,10 @@ interface IdeasPageProps {
   onUseTopic: (title: string) => void;
 }
 
-const COLUMNS: { key: string; label: string; color: string }[] = [
-  { key: 'pending', label: '待做', color: 'var(--c-ink-3)' },
-  { key: 'doing', label: '进行中', color: 'var(--layer-plan)' },
-  { key: 'done', label: '已完成', color: 'var(--c-ok)' },
+const COLUMNS: { key: string; label: string; color: string; empty: string }[] = [
+  { key: 'pending', label: '待做', color: 'var(--c-ink-3)', empty: '还没有选题，从热点雷达或对话里加一个' },
+  { key: 'doing', label: '进行中', color: 'var(--layer-plan)', empty: '没有正在做的选题' },
+  { key: 'done', label: '已完成', color: 'var(--c-ok)', empty: '做完的选题会出现在这里' },
 ];
 const NEXT: Record<string, string> = { pending: 'doing', doing: 'done', done: 'pending' };
 const EMPTY: IdeaInput = { title: '', note: '', source: '', status: 'pending' };
@@ -69,7 +69,7 @@ export default function IdeasPage({ onUseTopic }: IdeasPageProps) {
               {col.label}<span className="kanban-count">{byStatus[col.key].length}</span>
             </div>
             <div className="kanban-list">
-              {byStatus[col.key].length === 0 && <div className="kanban-empty">还没有选题，从热点收藏或新建一个</div>}
+              {byStatus[col.key].length === 0 && <div className="kanban-empty">{col.empty}</div>}
               {byStatus[col.key].map((it) => (
                 <div key={it.id} className="card idea-card">
                   <div className="idea-card-actions">

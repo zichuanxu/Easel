@@ -230,7 +230,7 @@ export default function SettingsPanel({ onClose }: Props) {
         music: d.channels.music?.rows || [],
         speech: d.channels.speech?.rows || [],
       });
-      setSavedNote(d.note ? `✓ 已保存（${d.note}）` : '✓ 已保存');
+      setSavedNote(d.note ? `已保存（${d.note}）` : '已保存');
       void refreshEnv();
     } catch (e) {
       setSavedNote(e instanceof Error ? `保存失败：${e.message}` : '保存失败');

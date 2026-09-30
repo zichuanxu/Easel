@@ -7,6 +7,7 @@
 .ana-stat-label, .ana-metric-label { font-size: var(--fs-12); color: var(--c-ink-3); }
 .ana-stat-delta, .ana-metric-vs { font-size: var(--fs-12); font-variant-numeric: tabular-nums; }
 .ana-muted { color: var(--c-ink-3); }
+.ana-col { min-width: 0; }
 .ana-col-main .ui-tabs { margin: var(--sp-4) 0 var(--sp-1); }
 .ana-wins-note { font-size: var(--fs-12); color: var(--c-ink-3); }
 .ana-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--sp-3) var(--sp-4); }

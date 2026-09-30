@@ -36,5 +36,7 @@ describe('layers', () => {
   it('isLayerKey 能识别合法和非法的 key', () => {
     expect(isLayerKey('produce')).toBe(true);
     expect(isLayerKey('other')).toBe(false);
+    expect(isLayerKey('toString')).toBe(false);
+    expect(isLayerKey('__proto__')).toBe(false);
   });
 });

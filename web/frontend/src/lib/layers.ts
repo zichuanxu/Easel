@@ -41,7 +41,7 @@ export function layerInfo(key: LayerKey): LayerInfo {
 }
 
 export function isLayerKey(v: string): v is LayerKey {
-  return v in BY_KEY;
+  return Object.hasOwn(BY_KEY, v);
 }
 
 /** 页面所属层：决定页头层标。技能库横跨所有层，不配。 */

@@ -30,7 +30,7 @@
 .ui-dot { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-13); color: var(--c-ink-2); white-space: nowrap; }
 .ui-dot i { width: 7px; height: 7px; border-radius: 50%; background: var(--c-rule-strong); flex: none; }
 .ui-dot[data-tone="ok"] i { background: var(--c-ok); }
-.ui-dot[data-tone="warn"] i { background: var(--layer-attribute); }
+.ui-dot[data-tone="warn"] i { background: var(--c-warn); }
 .ui-dot[data-tone="danger"] i { background: var(--c-danger); }
 
 /* ---- 页头 ---- */
@@ -100,3 +100,7 @@
 
 /* ---- 页内错误提示条 ---- */
 .notice-error { margin: 0 0 var(--sp-4); color: var(--c-danger); background: var(--c-danger-soft); border-radius: var(--r-control); padding: 10px 14px; font-size: var(--fs-13); }
+
+/* ---- 表单标签（旧类名沿用） ---- */
+.field-label { display: block; font-size: var(--fs-13); color: var(--c-ink-2); margin: var(--sp-3) 0 5px; }
+.field-label:first-child { margin-top: 0; }

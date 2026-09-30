@@ -1,4 +1,4 @@
-/* 发现层：热点雷达、爆款拆解（页面外层覆盖 legacy 的 .page-scroll 内边距） */
+/* 发现层：热点雷达、爆款拆解（页面外层覆盖 .page-scroll 内边距） */
 .trends-page, .breakdown-page { padding: 26px 34px 40px; }
 
 /* 热点雷达 */
