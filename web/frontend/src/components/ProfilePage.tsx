@@ -6,6 +6,7 @@ import PageHeader from './ui/PageHeader';
 import Button from './ui/Button';
 import EmptyState from './ui/EmptyState';
 import { Textarea } from './ui/Field';
+import { IconCheck } from './icons';
 
 // 粉丝量级：把粉丝数映射成人话档位（画像里“粉丝量级”一栏要的是量级而非精确值）
 function fanTier(n: number): string {
@@ -223,7 +224,7 @@ export default function ProfilePage({ persona, onNewProfile, onDeleted }: Profil
         )}
       </div>
 
-      {toast && <div className="toast ok"><span className="toast-icon">✓</span>{toast}</div>}
+      {toast && <div className="toast ok"><span className="toast-icon" aria-hidden="true"><IconCheck size={14} /></span>{toast}</div>}
     </div>
   );
 }

@@ -247,12 +247,12 @@ export default function SettingsPanel({ onClose }: Props) {
   const localRow: ModelRow = {
     order: 2, name: 'local-whisper', sub: '本机兜底 · 免 key', type: 'local',
     model: 'faster-whisper', baseUrl: '本机', keyMasked: '—', role: '备',
-    result: localReady ? '✓ 已就绪' : (tools.length ? '未装（去环境安装）' : '检测中…'),
+    result: localReady ? '已就绪' : (tools.length ? '未装（去环境安装）' : '检测中…'),
   };
 
   const resultText = (row: ModelRow): { text: string; cls: string } => {
     const st = row.baseUrl && row.baseUrl !== '—' ? selftest?.byBase[row.baseUrl] : undefined;
-    if (st) return st.ok ? { text: `✓ ${st.ms}ms`, cls: 'good' } : { text: `✗ ${(st.detail || '失败').slice(0, 42)}`, cls: 'bad' };
+    if (st) return st.ok ? { text: `${st.ms}ms`, cls: 'good' } : { text: (st.detail || '失败').slice(0, 42), cls: 'bad' };
     if (row.result.includes('已就绪') || row.result.includes('已配置')) return { text: row.result, cls: 'good' };
     if (row.result.includes('缺') || row.result.includes('未装')) return { text: row.result, cls: 'warn-text' };
     return { text: row.result, cls: '' };
@@ -336,9 +336,9 @@ export default function SettingsPanel({ onClose }: Props) {
                   />
                 </span>
               ) : (
-                <span className="pname">{r.name}<small>{r.sub}</small></span>
+                <span className="pname" title={`${r.name} ${r.sub}`}><span className="pname-name">{r.name}</span><small>{r.sub}</small></span>
               )}
-              <span>{r.type}</span>
+              <span className="cell-type" title={r.type}>{r.type}</span>
               {ed && ed.model && (!ops?.media || r.adv) ? (
                 <Input className="mock" value={r.model} placeholder={isCustom ? '模型名' : ''} onChange={(e) => ops?.onRow?.(i, { model: e.target.value })} />
               ) : (
@@ -401,12 +401,12 @@ export default function SettingsPanel({ onClose }: Props) {
                 <Tag tone={r.role === '主' ? 'ok' : 'neutral'}>{r.role}</Tag>
               )}
               <span className={`stt ${rt.cls}`} title={rt.text}>
-                {rt.cls ? <StatusDot tone={rt.cls === 'good' ? 'ok' : rt.cls === 'bad' ? 'danger' : 'warn'}>{rt.text}</StatusDot> : rt.text}
+                {rt.cls ? <StatusDot tone={rt.cls === 'good' ? 'ok' : rt.cls === 'bad' ? 'danger' : 'warn'}><span className="stt-text">{rt.text}</span></StatusDot> : rt.text}
               </span>
               {isCustom && ops?.onRemove ? (
                 <button className="row-del" onClick={() => ops.onRemove?.(i)} title="删除该供应商" aria-label="删除该供应商">×</button>
               ) : ops?.media && r.slot ? (
-                <button type="button" className="adv-btn" onClick={() => ops?.onRow?.(i, { adv: !r.adv })}>
+                <button type="button" className="btn btn-sm adv-btn" onClick={() => ops?.onRow?.(i, { adv: !r.adv })}>
                   {r.adv ? '收起' : '高级'}
                 </button>
               ) : (

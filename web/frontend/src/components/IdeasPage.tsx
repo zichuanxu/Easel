@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { fetchIdeas, createIdea, updateIdea, deleteIdea, createSchedule } from '../lib/api';
 import type { Idea, IdeaInput } from '../lib/api';
-import { IconEdit, IconTrash, IconChat, IconCalendar, IconChevron } from './icons';
+import { IconEdit, IconTrash, IconChat, IconCalendar, IconChevron, IconCheck } from './icons';
 import PageHeader from './ui/PageHeader';
 import Button from './ui/Button';
 import Tag from './ui/Tag';
@@ -114,7 +114,7 @@ export default function IdeasPage({ onUseTopic }: IdeasPageProps) {
         </Modal>
       )}
 
-      {toast && <div className="toast ok"><span className="toast-icon">✓</span>{toast}</div>}
+      {toast && <div className="toast ok"><span className="toast-icon" aria-hidden="true"><IconCheck size={14} /></span>{toast}</div>}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import PageHeader from './ui/PageHeader';
 import Panel from './ui/Panel';
 import Button from './ui/Button';
 import { Textarea } from './ui/Field';
+import { IconCheck } from './icons';
 
 interface BreakdownPageProps {
   persona: string;
@@ -72,7 +73,7 @@ export default function BreakdownPage({ persona }: BreakdownPageProps) {
         )}
       </div>
 
-      {toast && <div className="toast ok"><span className="toast-icon">✓</span>{toast}</div>}
+      {toast && <div className="toast ok"><span className="toast-icon" aria-hidden="true"><IconCheck size={14} /></span>{toast}</div>}
     </div>
   );
 }

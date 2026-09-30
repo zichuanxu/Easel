@@ -451,7 +451,7 @@ export default function PublishPage({ persona }: PublishPageProps) {
         })}
       </div>
 
-      {toast && <div className="toast ok"><span className="toast-icon">✓</span>{toast}</div>}
+      {toast && <div className="toast ok"><span className="toast-icon" aria-hidden="true"><IconCheck size={14} /></span>{toast}</div>}
 
       {pubSms && (
         <Modal
