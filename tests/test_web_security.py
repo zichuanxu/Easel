@@ -8,6 +8,7 @@ Key 外泄。下面全是负向用例，配一条正向用例保证闸没修成�
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -36,6 +37,11 @@ def client(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text(ORIGINAL_ENV, encoding="utf-8")
     monkeypatch.setattr(web, "ENV_FILE", env_file)
+    # 保存接口会顺手把供应商同步进 openclaw.json（_sync_openclaw_chat）。只换 .env 不换它，
+    # 在装过 Easel 的机器上跑一遍用例就把真机 ~/.openclaw-easel/openclaw.json 改坏过。
+    # 这里显式指定，不依赖仓库根 conftest.py 的兜底。
+    openclaw_state = tmp_path / "openclaw-state"
+    monkeypatch.setenv("EASEL_OPENCLAW_STATE_DIR", str(openclaw_state))
     monkeypatch.setattr(web, "_openclaw_provider_creds",
                         lambda: {"myproxy": ("https://good.example.com/v1", "sk-fake-custom")})
     # local_write_guard 会把「非本机写请求」判 403。设置为本机来源。
@@ -43,6 +49,7 @@ def client(tmp_path, monkeypatch):
     with TestClient(web.app, base_url=local, client=('127.0.0.1', 51234),
                     headers={'Origin': local}) as c:
         c.env_file = env_file          # 用例里用来断言「.env 一个字节都没变」
+        c.openclaw_state = openclaw_state
         yield c
 
 
@@ -254,6 +261,43 @@ def test_model_only_change_not_blocked(client):
          "baseUrl": "https://api.openai.com/v1", "key": ""}]})
     assert resp.status_code == 200, resp.text[:300]
     assert web._read_env()["OPENAI_MODEL"] == "gpt-4o-mini"
+
+
+def test_models_save_syncs_sandboxed_openclaw_json_never_home(client, tmp_path, monkeypatch):
+    """回归：跑 pytest 曾把真机 ~/.openclaw-easel/openclaw.json 改坏。
+
+    _sync_openclaw_chat 当时写死 Path.home()/.openclaw-easel，不认 EASEL_OPENCLAW_STATE_DIR，
+    夹具换了 .env 却换不掉它 —— 真配置里凭空多出 models.providers.openai，
+    `openclaw config validate` 不过，网关直接起不来。CI 没有这个目录，所以一直没暴露。
+    这里把家目录也换成假的、两边都放一份配置：沙箱那份必须被同步，家目录那份一个字节都不许动。
+    """
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    # 走 os.path.expanduser 的路径（而非 Path.home）也要落进假家目录
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("USERPROFILE", str(fake_home))
+    seed = json.dumps({"agents": {"defaults": {"model": {"primary": "anthropic/claude-opus-5"}}}},
+                      indent=2).encode("utf-8")
+    home_cfg = fake_home / ".openclaw-easel" / "openclaw.json"
+    sandbox_cfg = client.openclaw_state / "openclaw.json"
+    for cfg in (home_cfg, sandbox_cfg):
+        cfg.parent.mkdir(parents=True)
+        cfg.write_bytes(seed)
+
+    resp = _save(client, {"channel": "chat", "rows": [
+        {"slot": "openai", "model": "gpt-4o-mini",
+         "baseUrl": "https://api.openai.com/v1", "key": ""}]})
+    assert resp.status_code == 200, resp.text[:300]
+
+    assert home_cfg.read_bytes() == seed, "家目录下的 openclaw.json 被改了"
+    assert sorted(p.name for p in home_cfg.parent.iterdir()) == ["openclaw.json"], \
+        "家目录下多出了文件（.bak-web / .tmp）"
+
+    synced = json.loads(sandbox_cfg.read_text(encoding="utf-8"))
+    openai = synced["models"]["providers"]["openai"]
+    assert openai["baseUrl"] == "https://api.openai.com/v1"
+    assert openai["models"][0]["id"] == "gpt-4o-mini"
+    assert (client.openclaw_state / "openclaw.json.bak-web").read_bytes() == seed
 
 
 # ---- #48 传输层：直连常驻网关提速，但绝不能把会话历史搞丢 ----

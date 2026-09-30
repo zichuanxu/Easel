@@ -41,6 +41,7 @@ if str(PROJECT_ROOT / "scripts") not in sys.path:
 
 from easel.gateway_endpoint import chat_completions_url, healthz_url, port_source
 from easel.openclaw_cmd import openclaw_base_cmd
+from easel.openclaw_workspace import config_path as openclaw_config_path, state_dir as openclaw_state_dir
 from easel.persona import load_profile_text, persona_prefix, chat_turn_message, profile_exists, _FILE_ORDER
 from easel.timeouts import TIMEOUT_CHAT, TIMEOUT_DIRECT, TIMEOUT_PRODUCE
 try:
@@ -87,8 +88,16 @@ CHAT_TRANSPORT = os.environ.get("EASEL_CHAT_TRANSPORT", "http").strip().lower()
 # 全仓无人引用，但留着迟早会被新代码拿去用，而 OpenClaw 的布局 2026.9.x 起已经变成
 # <state 目录>/workspace（issue #19）。要用 workspace 路径请走 easel.openclaw_workspace.workspace_dir()，
 # 它直接问 openclaw 要运行时真值，不猜版本。
-# OpenClaw 会话历史（transcript）目录：<profile 配置目录>/agents/main/sessions/<session-id>.jsonl
-OPENCLAW_SESSIONS_DIR = Path.home() / f".openclaw-{OPENCLAW_PROFILE}" / "agents" / "main" / "sessions"
+# OpenClaw 会话历史（transcript）目录：<state 目录>/agents/main/sessions/<session-id>.jsonl。
+# 不能在 import 时算死：state 目录认 EASEL_OPENCLAW_STATE_DIR 覆盖（easel/openclaw_workspace.py），
+# 而 import 早于任何测试夹具，算死就等于绕开沙箱、直指真机的 ~/.openclaw-easel。
+# 一律经 _openclaw_sessions_dir() 在调用时解析；这个常量只留作显式覆盖（None = 跟随 state 目录）。
+OPENCLAW_SESSIONS_DIR: Path | None = None
+
+
+def _openclaw_sessions_dir() -> Path:
+    return OPENCLAW_SESSIONS_DIR or openclaw_state_dir() / "agents" / "main" / "sessions"
+
 
 # 思考档位（每轮 --thinking）。前后端已完整支持展示思考：后端把 thinking_delta 转成 SSE
 # `thinking` 事件，前端 MessageBubble 渲染「💭 思考过程」并在流式结束后持久保留。面板里有没有
@@ -179,7 +188,7 @@ def _heal_openclaw_session(sk: str) -> None:
     """
     try:
         import session_heal  # scripts/session_heal.py（已加入 sys.path）
-        p = OPENCLAW_SESSIONS_DIR / f"{_openclaw_session_id(sk)}.jsonl"
+        p = _openclaw_sessions_dir() / f"{_openclaw_session_id(sk)}.jsonl"
         if p.is_file():
             st = session_heal.sanitize_history_file(p)
             if st.get("changed"):
@@ -1287,7 +1296,7 @@ def _model_channels() -> dict:
     env = _read_env()
     primary = ""
     try:
-        oc = Path.home() / ".openclaw-easel" / "openclaw.json"
+        oc = openclaw_config_path()
         if oc.is_file():
             primary = str(json.loads(oc.read_text(encoding="utf-8"))
                           .get("agents", {}).get("defaults", {}).get("model", {}).get("primary", ""))
@@ -1328,7 +1337,7 @@ def _model_channels() -> dict:
 
     custom_rows = []
     try:
-        oc = Path.home() / ".openclaw-easel" / "openclaw.json"
+        oc = openclaw_config_path()
         if oc.is_file():
             provs = (json.loads(oc.read_text(encoding="utf-8"))
                      .get("models", {}).get("providers", {})) or {}
@@ -1447,7 +1456,7 @@ RESERVED_PROVIDER_KEYS = {"openai", "anthropic", "relay"}
 def _openclaw_provider_creds() -> dict[str, tuple[str, str]]:
     """读 openclaw.json 里每个 chat 供应商现存的 (baseUrl, apiKey)。读不到就当空表（不阻断保存）。"""
     try:
-        oc = Path.home() / '.openclaw-easel' / 'openclaw.json'
+        oc = openclaw_config_path()
         provs = json.loads(oc.read_text(encoding='utf-8')).get('models', {}).get('providers', {})
         return {k: (str(v.get('baseUrl') or ''), str(v.get('apiKey') or ''))
                 for k, v in provs.items() if isinstance(v, dict)}
@@ -1456,13 +1465,13 @@ def _openclaw_provider_creds() -> dict[str, tuple[str, str]]:
 
 
 def _sync_openclaw_chat(provider_updates: dict[str, dict], keep_custom: set[str], primary_ref: str) -> str:
-    """同步 chat 供应商到 ~/.openclaw-easel/openclaw.json：更新/新增 + 删除多余自定义 + 主模型。
+    """同步 chat 供应商到 <state 目录>/openclaw.json（默认 ~/.openclaw-easel）：更新/新增 + 删除多余自定义 + 主模型。
 
     provider_updates: {pkey: {"model","base","key"}}；keep_custom: 保留的自定义键；primary_ref: 目标主模型（空=不改）。
     只有确有差异才落盘（改前备份 .bak-web）。
     """
     try:
-        oc = Path.home() / '.openclaw-easel' / 'openclaw.json'
+        oc = openclaw_config_path()
         if not oc.is_file():
             return ''
         data = json.loads(oc.read_text(encoding='utf-8'))
@@ -1839,7 +1848,7 @@ def _resolve_transport(sk: str) -> str:
       2) 有 http 钉子文件 → 继续 http；
       3) 两者都没有 → 新会话，按总开关 + 真探针决定。
     """
-    if (OPENCLAW_SESSIONS_DIR / f"{_openclaw_session_id(sk)}.jsonl").is_file():
+    if (_openclaw_sessions_dir() / f"{_openclaw_session_id(sk)}.jsonl").is_file():
         return "cli"
     try:
         if _transport_pin_file(sk).read_text(encoding="utf-8").strip() == "http":
@@ -3790,7 +3799,7 @@ def _write_baseline_profile(name: str, form: dict) -> None:
 @app.delete("/api/session/{session_key}")
 async def api_delete_session(session_key: str):
     """删除 OpenClaw 本地的 session 记录。"""
-    sessions_file = Path.home() / '.openclaw-easel' / 'agents' / 'main' / 'sessions' / 'sessions.json'
+    sessions_file = _openclaw_sessions_dir() / 'sessions.json'
     if not sessions_file.is_file():
         return {'deleted': False, 'reason': 'sessions file not found'}
     data = json.loads(sessions_file.read_text(encoding="utf-8"))
