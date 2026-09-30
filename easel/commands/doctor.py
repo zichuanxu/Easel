@@ -354,6 +354,21 @@ def _claude_cli_ready(cfg: dict) -> tuple[bool, str]:
     return True, ""
 
 
+def _claude_cli_resume_ready() -> tuple[bool, str]:
+    """OpenClaw 续聊时能不能找到上一轮的 Claude Code 会话文件（见 easel/claude_cli_link.py）。"""
+    from easel import claude_cli_link
+    from easel.openclaw_workspace import workspace_dir
+
+    uses_cli, config_dir = claude_cli_link.from_openclaw()
+    if not uses_cli:
+        return True, ""
+    try:
+        workspace = workspace_dir()
+    except Exception as exc:  # noqa: BLE001 — 工作区都解析不出来时，由 Skills synced 那条报
+        return True, f"工作区解析失败，跳过：{exc}"
+    return claude_cli_link.check_link(config_dir, workspace)
+
+
 def _primary_model_routable() -> tuple[bool, str]:
     """检查 agents.defaults.model.primary 指向的 provider 在 openclaw 里真的配了认证。
 
@@ -461,6 +476,8 @@ def cmd_doctor(_args) -> int:
     route_ok, route_detail = _primary_model_routable()
     route_label = "OpenClaw model routing" + (" (Claude CLI)" if uses_claude_cli else "")
     all_ok &= _check(route_label, route_ok, route_detail)
+    if uses_claude_cli:
+        all_ok &= _check("Claude CLI session resume", *_claude_cli_resume_ready())
 
     # 4. OpenClaw gateway running
     gw_ok = _gateway_healthy()

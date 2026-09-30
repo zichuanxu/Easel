@@ -638,6 +638,16 @@ if [ "${EASEL_AGENT_RUNTIME:-}" = "claude-cli" ]; then
                 warn "Claude CLI 未登录，agent 暂时用不了：运行 ${CLI_LOGIN_CMD}"
             fi
         fi
+        # OpenClaw 续聊前到 ~/.claude/projects/<工作区> 找上一轮的会话文件、不看 CLAUDE_CONFIG_DIR：
+        # 隔离目录下不软链过去，隔一会儿再追问就会丢上下文（见 easel/claude_cli_link.py）
+        if [ -n "$CLI_DIR" ]; then
+            if LINK_MSG="$(PYTHONPATH="$PROJECT_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -m easel.claude_cli_link --config-dir "$CLI_DIR" 2>&1)"; then
+                info "${LINK_MSG}"
+            else
+                warn "续聊软链没建成：${LINK_MSG}"
+                warn "  处理后运行 python -m easel.claude_cli_link；不处理的话，隔一会儿再追问会丢上下文"
+            fi
+        fi
         DEFAULT_PRIMARY_MODEL="$CLI_MODEL"
         CLAUDE_MODEL="$CLI_MODEL"
         ok "Claude CLI 路线已配置：${CLI_MODEL}（Claude Code 配置目录：${CLI_DIR:-个人 ~/.claude}）"

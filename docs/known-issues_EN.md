@@ -4,6 +4,33 @@ This page tracks known issues relevant to using Easel, along with recommended wo
 
 ---
 
+## Claude CLI route: after a pause, the agent forgets the conversation
+
+- **Affects**: running the agent on the local Claude Code login (`EASEL_AGENT_RUNTIME=claude-cli`) with the default isolated config dir `~/.claude-easel`; observed on OpenClaw 2026.9.7.
+- **Symptom**: after a task finishes, a follow-up in the same chat a while later is answered as if the chat were new (for example the agent repeats the profile settings and says there is no task in the message). An immediate follow-up, while the previous Claude Code process is still alive, is fine.
+- **Gateway log** (`/tmp/easel-gateway.log`):
+
+  ```
+  claude-cli transcript probe v4 miss … expectedPath=~/.claude/projects/<workspace>/<id>.jsonl fileExists=false
+  cli session reset: provider=claude-cli reason=transcript-missing
+  ```
+
+### Root cause
+
+Before resuming, OpenClaw checks that the previous Claude Code session file exists, but it hardcodes the path to `~/.claude/projects/<workspace>/` and ignores the `CLAUDE_CONFIG_DIR` it passes to claude. Easel isolates Claude Code in `~/.claude-easel`, so the session file lives in `~/.claude-easel/projects/<workspace>/`; OpenClaw does not find it, resets the session, and the agent only sees the current message. The bug is in upstream OpenClaw, not in this repository.
+
+### Workaround
+
+`bash setup.sh` symlinks `~/.claude/projects/<workspace>` to `~/.claude-easel/projects/<workspace>`. Only that one directory is touched: files already in it are moved into the isolated dir first, and a name clash stops the move without overwriting anything. On an existing install, run once:
+
+```bash
+python -m easel.claude_cli_link
+```
+
+The "Claude CLI session resume" line of `easel doctor` checks the link. Once OpenClaw looks up session files under `CLAUDE_CONFIG_DIR`, the link can be deleted.
+
+---
+
 ## Duplicate reply after an "ask_user" prompt in the CLI chat
 
 - **Scope**: `easel chat` (terminal chat) only. **The Web workspace is unaffected.**
