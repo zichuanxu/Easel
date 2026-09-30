@@ -247,6 +247,269 @@ def test_doctor_passes_valid_configs(tmp_path, monkeypatch, primary, providers):
     assert ok, f"{primary} 被误判为不可路由：{detail}"
 
 
+# ── doctor：Claude CLI runtime 不走 provider、不要 key，改查 claude 的登录态 ─────────
+#
+# 现场：agent 跑在 OpenClaw 自带的 claude-cli runtime 上（复用本机 Claude Code 登录），
+# openclaw.json 里根本没有 models.providers.anthropic，.env 里也没有 key —— 对话好好的，
+# doctor 却报两条 FAIL。CI（ubuntu + windows）上没有真 claude，全部用替身。
+
+CLI_PRIMARY = "anthropic/claude-opus-5"
+
+
+def _cli_cfg(primary: str = CLI_PRIMARY, env: dict | None = None) -> dict:
+    """本机真实形态：模型级 agentRuntime=claude-cli，没有 models.providers.anthropic。"""
+    cfg: dict = {"agents": {"defaults": {
+        "model": {"primary": primary},
+        "models": {primary: {"agentRuntime": {"id": "claude-cli"}}}}}}
+    if env is not None:
+        cfg["env"] = env
+    return cfg
+
+
+class _FakeClaude:
+    """替身：记下 doctor 怎么调 claude，并按预设回 `claude auth status --json`。
+
+    默认的退出码/输出照本机实测：未登录 → 1 + loggedIn=false；已登录 → 0 + loggedIn=true。
+    """
+
+    def __init__(self, monkeypatch, *, logged_in: bool = True, path: str | None = "/fake/bin/claude",
+                 stdout: str | None = None, returncode: int | None = None,
+                 raises: BaseException | None = None):
+        self.calls: list[tuple[list[str], dict]] = []
+        self.logged_in = logged_in
+        self.stdout, self.returncode, self.raises = stdout, returncode, raises
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        monkeypatch.setattr(doctor.shutil, "which", lambda name: path if name == "claude" else None)
+        monkeypatch.setattr(doctor.subprocess, "run", self._run)
+
+    def _run(self, argv, **kwargs):
+        self.calls.append((list(argv), kwargs))
+        if self.raises is not None:
+            raise self.raises
+        out = self.stdout if self.stdout is not None else \
+            json.dumps({"loggedIn": self.logged_in, "authMethod": "claude.ai"})
+        rc = self.returncode if self.returncode is not None else (0 if self.logged_in else 1)
+        return subprocess.CompletedProcess(argv, rc, stdout=out, stderr="")
+
+    @property
+    def env(self) -> dict:
+        return self.calls[-1][1]["env"]
+
+
+def test_doctor_claude_cli_logged_in_passes(tmp_path, monkeypatch):
+    """本机现场：没有 anthropic provider 也要判可路由，并且真去问了 claude 的登录态。"""
+    fake = _FakeClaude(monkeypatch)
+    claude_dir = str(tmp_path / "claude-easel")
+    cfg = _cli_cfg(env={"vars": {"CLAUDE_CONFIG_DIR": claude_dir}})
+    assert _routable(tmp_path, cfg, monkeypatch) == (True, "")
+    assert [argv for argv, _ in fake.calls] == [["/fake/bin/claude", "auth", "status", "--json"]]
+    # 没有进程级的值时，用 openclaw.json 的 env.vars —— gateway 里的 claude 读的就是这份登录态
+    assert fake.env["CLAUDE_CONFIG_DIR"] == claude_dir
+
+
+def test_doctor_claude_cli_logged_out_fails_with_login_hint(tmp_path, monkeypatch):
+    _FakeClaude(monkeypatch, logged_in=False)
+    claude_dir = str(tmp_path / "claude easel")      # 带空格：提示里的命令得能直接粘贴
+    ok, detail = _routable(tmp_path, _cli_cfg(env={"vars": {"CLAUDE_CONFIG_DIR": claude_dir}}),
+                           monkeypatch)
+    assert not ok
+    assert "claude auth login" in detail
+    # 登录命令必须带上 gateway 用的那个配置目录，否则登进去的是另一份
+    assert doctor._claude_login_cmd(claude_dir) in detail
+
+
+# ---- 探测环境要和 gateway 给 claude 的一致 ----
+
+def test_doctor_claude_cli_process_env_beats_config(tmp_path, monkeypatch):
+    """OpenClaw 只在进程环境没有这个值时才用配置补，doctor 必须照同一规则。"""
+    fake = _FakeClaude(monkeypatch)
+    shell_dir = str(tmp_path / "from-shell")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", shell_dir)
+    cfg = _cli_cfg(env={"vars": {"CLAUDE_CONFIG_DIR": str(tmp_path / "from-config")}})
+    assert _routable(tmp_path, cfg, monkeypatch) == (True, "")
+    assert fake.env["CLAUDE_CONFIG_DIR"] == shell_dir
+
+
+def test_doctor_claude_cli_blank_process_env_counts_as_unset(tmp_path, monkeypatch):
+    fake = _FakeClaude(monkeypatch)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "   ")
+    claude_dir = str(tmp_path / "from-config")
+    assert _routable(tmp_path, _cli_cfg(env={"vars": {"CLAUDE_CONFIG_DIR": claude_dir}}),
+                     monkeypatch) == (True, "")
+    assert fake.env["CLAUDE_CONFIG_DIR"] == claude_dir
+
+
+def test_doctor_claude_cli_inline_env_form(tmp_path, monkeypatch):
+    """内联的 env.CLAUDE_CONFIG_DIR 同样生效，且与 env.vars 同名时它后处理、胜出。"""
+    fake = _FakeClaude(monkeypatch)
+    inline, via_vars = str(tmp_path / "inline"), str(tmp_path / "vars")
+    _routable(tmp_path, _cli_cfg(env={"CLAUDE_CONFIG_DIR": inline}), monkeypatch)
+    assert fake.env["CLAUDE_CONFIG_DIR"] == inline
+    _routable(tmp_path, _cli_cfg(env={"CLAUDE_CONFIG_DIR": inline,
+                                      "vars": {"CLAUDE_CONFIG_DIR": via_vars}}), monkeypatch)
+    assert fake.env["CLAUDE_CONFIG_DIR"] == inline
+
+
+@pytest.mark.parametrize("value", ["", "   ", "${HOME}/.claude-easel"],
+                         ids=["empty", "blank", "env-ref"])
+def test_doctor_claude_cli_config_values_openclaw_skips(tmp_path, monkeypatch, value):
+    """空白值、带 ${NAME} 引用的值 OpenClaw 整条不注入 —— gateway 的 claude 就没有这个变量。"""
+    fake = _FakeClaude(monkeypatch)
+    assert _routable(tmp_path, _cli_cfg(env={"vars": {"CLAUDE_CONFIG_DIR": value}}),
+                     monkeypatch) == (True, "")
+    assert "CLAUDE_CONFIG_DIR" not in fake.env
+
+
+def test_doctor_claude_cli_skipped_inline_falls_back_to_vars(tmp_path, monkeypatch):
+    fake = _FakeClaude(monkeypatch)
+    via_vars = str(tmp_path / "vars")
+    _routable(tmp_path, _cli_cfg(env={"CLAUDE_CONFIG_DIR": "${CLAUDE_HOME}",
+                                      "vars": {"CLAUDE_CONFIG_DIR": via_vars}}), monkeypatch)
+    assert fake.env["CLAUDE_CONFIG_DIR"] == via_vars
+
+
+@pytest.mark.parametrize("value", ["~/.claude-easel", "$HOME/.claude-easel", "claude-easel"])
+def test_doctor_claude_cli_relative_config_dir_fails_without_probing(tmp_path, monkeypatch, value):
+    """OpenClaw 原样传、claude 也不展开 ~ / $VAR（2.1.285 实测会在当前目录建出字面的 `~/x`）。
+
+    doctor 若自己展开，查的是 gateway 根本不用的目录 —— 假 PASS；照原样去探测，又会在
+    当前目录建出字面的 `~` 目录。所以不探测，直接指出要写绝对路径。
+    """
+    fake = _FakeClaude(monkeypatch)
+    ok, detail = _routable(tmp_path, _cli_cfg(env={"vars": {"CLAUDE_CONFIG_DIR": value}}),
+                           monkeypatch)
+    assert not ok
+    assert "绝对路径" in detail and "env.vars.CLAUDE_CONFIG_DIR" in detail
+    assert fake.calls == []
+
+
+def test_doctor_claude_cli_probe_drops_vars_openclaw_clears(tmp_path, monkeypatch):
+    """shell 里导出的 key / OAuth token 会让 auth status 报已登录，而 gateway 的 claude 拿不到它们。"""
+    fake = _FakeClaude(monkeypatch)
+    cleared = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+               "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK")
+    for key in cleared:
+        monkeypatch.setenv(key, "from-doctor-shell")
+    monkeypatch.setenv("EASEL_UNRELATED_VAR", "keep-me")
+    assert _routable(tmp_path, _cli_cfg(), monkeypatch) == (True, "")
+    for key in cleared:
+        assert key not in fake.env, f"{key} 没从探测环境里删掉"
+    assert fake.env["EASEL_UNRELATED_VAR"] == "keep-me"
+
+
+def test_claude_cli_clear_env_matches_openclaw_minimum():
+    """清单抄自 OpenClaw 2026.9.6 的 CLAUDE_CLI_CLEAR_ENV；认证/传输类一个都不能少，
+    而 CLAUDE_CONFIG_DIR 不在其中 —— gateway 的 claude 靠它选登录态。"""
+    must_clear = {
+        "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD", "ANTHROPIC_API_TOKEN", "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_OAUTH_TOKEN",
+        "ANTHROPIC_UNIX_SOCKET", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+        "CLAUDE_CODE_OAUTH_SCOPES", "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+        "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR", "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+    }
+    assert must_clear <= doctor.CLAUDE_CLI_CLEAR_ENV
+    assert "CLAUDE_CONFIG_DIR" not in doctor.CLAUDE_CLI_CLEAR_ENV
+
+
+# ---- 拿不准一律放行：只有明确的 loggedIn=false 才算未登录 ----
+
+@pytest.mark.parametrize("stdout,returncode", [
+    ("", 1),                                           # 输出为空
+    ("error: unknown option '--json'", 1),             # 老版本不认 --json
+    ("not json at all", 0),
+    ('{"authMethod": "none"}', 1),                     # 没有 loggedIn
+    ('{"loggedIn": "false"}', 1),                      # loggedIn 不是布尔
+    ("[false]", 1),                                    # JSON 但不是对象
+], ids=["empty", "old-cli", "non-json-exit0", "no-field", "non-bool", "non-object"])
+def test_doctor_claude_cli_unclear_status_passes(tmp_path, monkeypatch, stdout, returncode):
+    fake = _FakeClaude(monkeypatch, stdout=stdout, returncode=returncode)
+    assert _routable(tmp_path, _cli_cfg(), monkeypatch) == (True, "")
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.parametrize("exc", [subprocess.TimeoutExpired(["claude"], 20), OSError("boom")],
+                         ids=["timeout", "oserror"])
+def test_doctor_claude_cli_probe_errors_pass(tmp_path, monkeypatch, exc):
+    _FakeClaude(monkeypatch, raises=exc)
+    assert _routable(tmp_path, _cli_cfg(), monkeypatch) == (True, "")
+
+
+def test_doctor_claude_cli_missing_binary_fails(tmp_path, monkeypatch):
+    fake = _FakeClaude(monkeypatch, path=None)
+    ok, detail = _routable(tmp_path, _cli_cfg(), monkeypatch)
+    assert not ok
+    assert "PATH" in detail and "claude" in detail
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("cfg", [
+    # 老写法：primary 直接写成 claude-cli/<model>
+    _cfg("claude-cli/claude-opus-4-7", {}),
+    # 供应商级 runtime：provider 在，但没有 apiKey —— CLI 路线本来就不要 key
+    _cfg(CLI_PRIMARY, {"anthropic": {"agentRuntime": {"id": "claude-cli"}}}),
+], ids=["legacy-prefix", "provider-scoped"])
+def test_doctor_recognizes_other_claude_cli_forms(tmp_path, monkeypatch, cfg):
+    fake = _FakeClaude(monkeypatch)
+    assert _routable(tmp_path, cfg, monkeypatch) == (True, "")
+    assert len(fake.calls) == 1, "没有走 Claude CLI 的登录态检查"
+
+    fake.logged_in = False
+    ok, detail = _routable(tmp_path, cfg, monkeypatch)
+    assert not ok and "claude auth login" in detail
+
+
+def test_doctor_provider_route_unchanged_without_runtime(tmp_path, monkeypatch):
+    """没配 runtime 的常规 provider 路由照旧：缺 provider 就报，也不去碰 claude。"""
+    fake = _FakeClaude(monkeypatch)
+    ok, detail = _routable(tmp_path, _cfg(CLI_PRIMARY, {}), monkeypatch)
+    assert not ok
+    assert "models.providers.anthropic 不存在" in detail
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("config_dir,os_name,expected", [
+    ("", "posix", "claude auth login"),
+    ("", "nt", "claude auth login"),
+    ("/Users/a/.claude-easel", "posix", "CLAUDE_CONFIG_DIR=/Users/a/.claude-easel claude auth login"),
+    ("/Users/a b/it's", "posix", "CLAUDE_CONFIG_DIR='/Users/a b/it'\"'\"'s' claude auth login"),
+    (r"C:\Users\a\.claude-easel", "nt", r"$env:CLAUDE_CONFIG_DIR='C:\Users\a\.claude-easel'; claude auth login"),
+    (r"C:\Users\it's $x", "nt", r"$env:CLAUDE_CONFIG_DIR='C:\Users\it''s $x'; claude auth login"),
+])
+def test_claude_login_cmd_is_shell_correct(config_dir, os_name, expected):
+    """提示里的命令要能原样粘贴：POSIX 走 shlex.quote，Windows 给 PowerShell 单引号串（不展开 $）。"""
+    assert doctor._claude_login_cmd(config_dir, os_name) == expected
+
+
+@pytest.mark.parametrize("cli_route", [True, False])
+def test_cmd_doctor_api_key_line_on_claude_cli_route(tmp_path, monkeypatch, capsys, cli_route):
+    """CLI 路线不需要 key：`.env (API Key)` 不能因为 .env 没 key 报 FAIL；常规路线照旧 FAIL。"""
+    fake = _FakeClaude(monkeypatch)
+    monkeypatch.setenv("EASEL_OPENCLAW_STATE_DIR", str(tmp_path))
+    cfg = _cli_cfg() if cli_route else _cfg("openai/gpt-4o", {"openai": {"apiKey": "sk-x"}})
+    (tmp_path / "openclaw.json").write_text(json.dumps(cfg), encoding="utf-8")
+    # 其余检查与本用例无关，且有的会起真进程 / 连真网关 / 真 import 依赖，全部钉死
+    monkeypatch.setattr(doctor, "_env_key_valid", lambda: False)
+    monkeypatch.setattr(doctor, "_openclaw_version", lambda: (2026, 9, 6))
+    monkeypatch.setattr(doctor, "_node_version_ok", lambda strict: True)
+    monkeypatch.setattr(doctor, "_module_available", lambda name: True)
+    monkeypatch.setattr(doctor, "_chromium_available", lambda: True)
+    monkeypatch.setattr(doctor, "_gateway_healthy", lambda: False)
+    monkeypatch.setattr(doctor, "_skills_synced", lambda: (True, ""))
+
+    doctor.cmd_doctor(None)
+    lines = capsys.readouterr().out.splitlines()
+    key_line = next(line for line in lines if line.strip().startswith(".env (API Key)"))
+    if cli_route:
+        assert "OK" in key_line and "FAIL" not in key_line
+        assert any("不需要 API Key" in line for line in lines)
+        assert len(fake.calls) == 1, "一次 doctor 只该问一次 claude auth status"
+    else:
+        assert "FAIL" in key_line
+        assert not any("不需要 API Key" in line for line in lines)
+        assert fake.calls == []
+
+
 # ── setup.ps1：-and 必须处在表达式模式 ────────────────────────────────
 
 

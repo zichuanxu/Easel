@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import urllib.request
@@ -198,9 +199,159 @@ def _env_key_valid() -> bool:
 
 
 def _openclaw_config_path() -> Path:
-    """easel 用独立 profile，不碰用户本机的 OpenClaw 配置（与 gateway_questions 同一约定）。"""
-    state = os.environ.get("EASEL_OPENCLAW_STATE_DIR")
-    return (Path(state) if state else Path.home() / ".openclaw-easel") / "openclaw.json"
+    """easel 用独立 profile，不碰用户本机的 OpenClaw 配置；路径走 openclaw_workspace 的唯一真相。"""
+    from easel.openclaw_workspace import config_path
+    return config_path()
+
+
+CLAUDE_CLI_RUNTIME = "claude-cli"
+
+# OpenClaw 拉起 Claude CLI 子进程前从环境里删掉的变量，原样抄自 OpenClaw 2026.9.6
+# dist/cli-constants-0f4y8Jm6.mjs 的 CLAUDE_CLI_CLEAR_ENV（约 453 行），升级 OpenClaw 时对一下。
+# 探测登录态时必须照删：doctor 所在 shell 里导出的 ANTHROPIC_API_KEY / OAuth token 会让
+# `claude auth status` 报已登录，而 gateway 里的 claude 根本拿不到它们 —— 不删就是假 PASS。
+# 这份清单**不含** CLAUDE_CONFIG_DIR（实测 gateway 的 claude 会话落在 env.vars 指定的目录），
+# 它由 _claude_config_dir 单独解析。
+CLAUDE_CLI_CLEAR_ENV = frozenset({
+    "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD", "ANTHROPIC_API_TOKEN", "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_UNIX_SOCKET",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING", "MAX_THINKING_TOKENS",
+    "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN", "CLAUDE_CODE_OAUTH_SCOPES", "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR", "CLAUDE_CODE_PLUGIN_CACHE_DIR",
+    "CLAUDE_CODE_PLUGIN_SEED_DIR", "CLAUDE_CODE_REMOTE", "CLAUDE_CODE_USE_COWORK_PLUGINS",
+    "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_VERTEX",
+    "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+    "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_METRICS_HEADERS", "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+    "OTEL_LOGS_EXPORTER", "OTEL_METRICS_EXPORTER", "OTEL_SDK_DISABLED", "OTEL_TRACES_EXPORTER",
+})
+
+# openclaw.json 的 env 条目里带 ${NAME} 引用的，OpenClaw 整条不注入进程环境（$${NAME} 是转义，
+# 不算）—— 见 2026.9.6 dist/config-env-vars-BHI12YH5.mjs 的 isConfigRuntimeEnvVarAllowed。
+_ENV_SUBSTITUTION_RE = re.compile(r"(?<!\$)\$\{[A-Z_][A-Z0-9_]*\}")
+
+
+def _runtime_id_of(entry: object) -> str | None:
+    runtime = entry.get("agentRuntime") if isinstance(entry, dict) else None
+    rid = runtime.get("id") if isinstance(runtime, dict) else None
+    return rid.strip() if isinstance(rid, str) and rid.strip() else None
+
+
+def _agent_runtime_id(cfg: dict) -> str | None:
+    """primary 实际跑在哪个 agent runtime 上，选择顺序与 OpenClaw 一致：
+
+    1. 模型级：agents.defaults.models["<provider/model>"].agentRuntime.id
+    2. 供应商级：models.providers.<provider>.agentRuntime.id
+    3. 老写法：primary 写成 "claude-cli/<model>" 本身就是 Claude CLI runtime
+
+    都没有返回 None，即常规的 provider 路由（按 models.providers 里的认证走）。
+    """
+    agents = cfg.get("agents") if isinstance(cfg.get("agents"), dict) else {}
+    defaults = agents.get("defaults") if isinstance(agents.get("defaults"), dict) else {}
+    model = defaults.get("model") if isinstance(defaults.get("model"), dict) else {}
+    primary = model.get("primary")
+    if not isinstance(primary, str) or not primary:
+        return None
+    per_model = defaults.get("models") if isinstance(defaults.get("models"), dict) else {}
+    rid = _runtime_id_of(per_model.get(primary))
+    if rid or "/" not in primary:
+        return rid
+    provider = primary.split("/", 1)[0]
+    models = cfg.get("models") if isinstance(cfg.get("models"), dict) else {}
+    providers = models.get("providers") if isinstance(models.get("providers"), dict) else {}
+    rid = _runtime_id_of(providers.get(provider))
+    if rid:
+        return rid
+    return CLAUDE_CLI_RUNTIME if provider == CLAUDE_CLI_RUNTIME else None
+
+
+def _uses_claude_cli() -> bool:
+    """primary 是否走 Claude CLI runtime。配置读不出来就当不是 —— 那种情况由 model routing 那条报。"""
+    try:
+        cfg = json.loads(_openclaw_config_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(cfg, dict) and _agent_runtime_id(cfg) == CLAUDE_CLI_RUNTIME
+
+
+def _claude_config_dir(cfg: dict) -> tuple[str, str]:
+    """gateway 里的 claude 实际拿到的 CLAUDE_CONFIG_DIR，返回 (值, 来源)；没有就是 ("", "")。
+
+    照 OpenClaw 2026.9.6 把配置注入进程环境的规则（dist/config-env-vars-BHI12YH5.mjs）：
+    - 进程环境里已有非空白值就用它，配置不覆盖；
+    - 否则取 openclaw.json 的 env 块。内联的 env.CLAUDE_CONFIG_DIR 在 env.vars 之后处理、
+      同名时盖掉后者；空白值、带 ${NAME} 引用的值整条不注入；
+    - 值**原样**传下去：OpenClaw 不展开 ~ / $VAR，claude 也不展开（Claude Code 2.1.285 实测
+      CLAUDE_CONFIG_DIR='~/x' 会在当前目录下建出字面的 `~/x`）。所以这里也不展开。
+    """
+    process_value = os.environ.get("CLAUDE_CONFIG_DIR", "")
+    if process_value.strip():
+        return process_value, "进程环境的 CLAUDE_CONFIG_DIR"
+    env_block = cfg.get("env") if isinstance(cfg.get("env"), dict) else {}
+    env_vars = env_block.get("vars") if isinstance(env_block.get("vars"), dict) else {}
+    for value, source in ((env_block.get("CLAUDE_CONFIG_DIR"), "openclaw.json 的 env.CLAUDE_CONFIG_DIR"),
+                          (env_vars.get("CLAUDE_CONFIG_DIR"), "openclaw.json 的 env.vars.CLAUDE_CONFIG_DIR")):
+        if isinstance(value, str) and value.strip() and not _ENV_SUBSTITUTION_RE.search(value):
+            return value, source
+    return "", ""
+
+
+def _claude_login_cmd(config_dir: str, os_name: str | None = None) -> str:
+    """可直接粘贴的登录命令。带上 gateway 用的配置目录，否则登进去的是另一份登录态。"""
+    if not config_dir:
+        return "claude auth login"
+    if (os_name or os.name) == "nt":
+        # PowerShell 单引号串不做任何展开，内部的 ' 写成 ''
+        quoted = config_dir.replace("'", "''")
+        return f"$env:CLAUDE_CONFIG_DIR='{quoted}'; claude auth login"
+    return f"CLAUDE_CONFIG_DIR={shlex.quote(config_dir)} claude auth login"
+
+
+def _claude_cli_ready(cfg: dict) -> tuple[bool, str]:
+    """Claude CLI runtime 的就绪检查：gateway 直接 spawn PATH 上的 `claude`，复用它的登录态。
+
+    这条路线不经过 models.providers，也不需要任何 API Key，所以按 provider 认证去查只会报
+    假 FAIL；真正会让对话失败的是「找不到 claude」和「claude 没登录」这两件事。
+    只认 PATH 上的 claude：2026.9 起 cliBackends 的启动细节归插件管，gateway/cli-backends.md
+    明确不让写进 openclaw.json，这里不去解析 command 覆盖。
+    """
+    claude = shutil.which("claude")
+    if not claude:
+        return False, ("primary 走 Claude CLI runtime，但 PATH 上找不到 claude —— "
+                       "先安装 Claude Code，并确保 claude 在 PATH 上（gateway 也是从 PATH 找它）")
+
+    # 探测用的环境要和 gateway 给 claude 的一致：先删 OpenClaw 会删的认证/传输变量，
+    # 再把 CLAUDE_CONFIG_DIR 换成 gateway 那边实际生效的值，查的才是 gateway 那份登录态。
+    config_dir, source = _claude_config_dir(cfg)
+    if config_dir and not os.path.isabs(config_dir):
+        # 相对路径会按 gateway 的工作目录解析，doctor 这边复现不了；照原样拿去探测还会在
+        # 当前目录建出字面的 `~` 之类的目录。这是确定的配置错误，不是「拿不准」。
+        return False, (f"{source} 是 {config_dir!r}，不是绝对路径 —— OpenClaw 原样传给 claude，"
+                       "两边都不展开 ~ / $VAR，实际会落到 gateway 工作目录下；改成绝对路径")
+    env = {k: v for k, v in os.environ.items() if k not in CLAUDE_CLI_CLEAR_ENV}
+    env.pop("CLAUDE_CONFIG_DIR", None)
+    if config_dir:
+        env["CLAUDE_CONFIG_DIR"] = config_dir
+
+    try:
+        proc = subprocess.run(
+            [claude, "auth", "status", "--json"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=20, env=env,
+        )
+        status = json.loads(proc.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return True, ""  # 超时 / 起不来 / 输出不是 JSON：拿不准，放行，交给 `easel ping`
+    # 只认明确的 loggedIn=false（实测未登录：退出码 1 + {"loggedIn": false, ...}）。
+    # 退出码本身不作数：老版本不认 --json、输出为空之类的都算拿不准。
+    if isinstance(status, dict) and status.get("loggedIn") is False:
+        return False, f"Claude CLI 未登录 —— 运行 {_claude_login_cmd(config_dir)}"
+    return True, ""
 
 
 def _primary_model_routable() -> tuple[bool, str]:
@@ -210,7 +361,8 @@ def _primary_model_routable() -> tuple[bool, str]:
     写进 openclaw.json。两边脱节时（例如认证判定被占位符卡住、provider 一个字没写却照样
     设了 primary），doctor 会全绿而对话直接报
     "No route-compatible authentication source is configured for <provider>"。
-    这条就是补上 openclaw 侧的对账。
+    这条就是补上 openclaw 侧的对账。primary 走 Claude CLI runtime 时不需要 provider，
+    改查 claude 在不在、登没登录（见 _claude_cli_ready）。
 
     返回 (是否可路由, 失败提示)。拿不准的情况一律放行，不制造假告警。
     """
@@ -226,6 +378,8 @@ def _primary_model_routable() -> tuple[bool, str]:
                .get("model") or {}).get("primary") or ""
     if not primary:
         return False, "未设置 agents.defaults.model.primary — 重新跑 setup 脚本"
+    if _agent_runtime_id(cfg) == CLAUDE_CLI_RUNTIME:
+        return _claude_cli_ready(cfg)
     if "/" not in primary:
         # 不是 provider/model 形式，解析不出 provider，交给 `easel ping` 去判，不在这里猜。
         return True, ""
@@ -292,13 +446,21 @@ def cmd_doctor(_args) -> int:
                       "运行 python3 -m playwright install chromium")
 
     # 3. .env file with valid key
-    env_ok = _env_key_valid()
-    all_ok &= _check(".env (API Key)", env_ok,
-                      "填 ANTHROPIC_API_KEY，或 EASEL_LLM_API_KEY + EASEL_LLM_BASE_URL")
+    # Claude CLI runtime 复用本机 Claude Code 的登录态，不读任何 API Key —— 照查 .env 只会给
+    # 这类机器报假 FAIL。它真正的就绪检查（claude 在不在 PATH、登没登录）在下一条 model routing 里。
+    uses_claude_cli = _uses_claude_cli()
+    if uses_claude_cli:
+        all_ok &= _check(".env (API Key)", True)
+        print("    └─ agent 走 Claude CLI（复用 Claude Code 登录），不需要 API Key")
+    else:
+        env_ok = _env_key_valid()
+        all_ok &= _check(".env (API Key)", env_ok,
+                          "填 ANTHROPIC_API_KEY，或 EASEL_LLM_API_KEY + EASEL_LLM_BASE_URL")
 
     # .env 填了 ≠ setup 真的把 provider 写进了 openclaw；不对账就会「doctor 全绿但对话报错」。
     route_ok, route_detail = _primary_model_routable()
-    all_ok &= _check("OpenClaw model routing", route_ok, route_detail)
+    route_label = "OpenClaw model routing" + (" (Claude CLI)" if uses_claude_cli else "")
+    all_ok &= _check(route_label, route_ok, route_detail)
 
     # 4. OpenClaw gateway running
     gw_ok = _gateway_healthy()
