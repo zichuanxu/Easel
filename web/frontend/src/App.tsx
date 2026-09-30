@@ -15,6 +15,8 @@ import BreakdownPage from './components/BreakdownPage';
 import SubNav from './components/SubNav';
 import OnboardingWizard from './components/OnboardingWizard';
 import SettingsPanel from './components/SettingsPanel';
+import Modal from './components/ui/Modal';
+import Button from './components/ui/Button';
 import { fetchStatus, fetchPersonas, streamChat, fetchLastTurn, stopChat } from './lib/api';
 import type { PersonaItem, UploadedFile, ChatQuestion } from './lib/api';
 import { questionStatus } from './lib/api';
@@ -794,20 +796,21 @@ export default function App() {
 
       {/* 首次使用：推荐配置画像 */}
       {showRecommend && (
-        <div className="overlay">
-          <div className="modal" style={{ width: 420, maxWidth: '100%', textAlign: 'center' }}>
-            <div style={{ fontSize: 40 }}>👋</div>
-            <h2 style={{ margin: '12px 0 8px', fontSize: 20 }}>欢迎使用 Easel</h2>
-            <p style={{ color: 'var(--text-secondary)', fontSize: 14, lineHeight: 1.6 }}>
-              配置你的账号画像，生成的内容会更贴合你的风格、受众和平台调性。<br />
-              大约 2 分钟，也可以随时在侧栏「+ 新建画像」补配。
-            </p>
-            <div style={{ display: 'flex', gap: 10, marginTop: 20, justifyContent: 'center' }}>
-              <button className="btn" onClick={dismissRecommend}>先用通用模式</button>
-              <button className="btn btn-primary" onClick={openWizard}>开始配置</button>
-            </div>
-          </div>
-        </div>
+        <Modal
+          title="欢迎使用 Easel"
+          width={440}
+          onClose={dismissRecommend}
+          footer={(
+            <>
+              <Button onClick={dismissRecommend}>先用通用模式</Button>
+              <Button variant="primary" onClick={openWizard}>开始配置</Button>
+            </>
+          )}
+        >
+          <p className="modal-text">
+            配置你的账号画像，生成的内容会更贴合你的风格、受众和平台调性。大约 2 分钟，之后也可以在侧栏的画像选择里新建。
+          </p>
+        </Modal>
       )}
 
       {/* 画像配置向导 */}

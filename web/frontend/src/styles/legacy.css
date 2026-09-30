@@ -135,52 +135,6 @@
 }
 
 /* ============ Reusable components ============ */
-/* Modal / drawer */
-.overlay {
-  position: fixed; inset: 0; z-index: 1000;
-  background: rgba(24,24,48,0.42); backdrop-filter: blur(3px);
-  display: flex; align-items: center; justify-content: center; padding: 20px;
-  animation: fadeIn 0.18s var(--ease);
-}
-.modal {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius-xl); box-shadow: var(--shadow-lg);
-  padding: 28px; animation: popIn 0.2s var(--ease);
-}
-.drawer-overlay {
-  position: fixed; inset: 0; z-index: 1000;
-  background: rgba(24,24,48,0.40); backdrop-filter: blur(3px);
-  display: flex; justify-content: flex-end;
-  animation: fadeIn 0.18s var(--ease);
-}
-.drawer {
-  width: 560px; max-width: 92vw; height: 100%;
-  background: var(--surface); border-left: 1px solid var(--border);
-  box-shadow: var(--shadow-lg); overflow-y: auto;
-  animation: slideInRight 0.24s var(--ease);
-}
-.drawer-header {
-  position: sticky; top: 0; z-index: 2;
-  background: var(--surface); border-bottom: 1px solid var(--border);
-  padding: 20px 24px;
-}
-.drawer-body { padding: 22px 24px 40px; }
-.icon-btn {
-  background: none; border: none; color: var(--text-secondary);
-  font-size: 22px; cursor: pointer; line-height: 1; padding: 2px 6px; border-radius: 6px;
-  transition: all var(--t-fast);
-}
-.icon-btn:hover { color: var(--text); background: var(--surface-hover); }
-
-.toast {
-  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-  z-index: 2000; padding: 11px 20px; border-radius: var(--radius);
-  background: var(--surface); border: 1px solid var(--border);
-  box-shadow: var(--shadow-md); font-size: 14px; color: var(--text);
-  animation: popIn 0.2s var(--ease);
-}
-.toast.ok { border-color: var(--green-soft); }
-.toast .toast-icon { color: var(--green); margin-right: 7px; }
 
 /* ============ Chat page ============ */
 .chat-page {
