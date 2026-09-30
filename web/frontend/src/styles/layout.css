@@ -14,7 +14,7 @@
 .sidebar-wordmark { font-family: var(--font-brand); font-style: italic; font-weight: 600; font-size: 24px; letter-spacing: -0.5px; line-height: 1; color: var(--c-ink); }
 .persona-select { font-size: var(--fs-13); min-height: 34px; padding: 6px 10px; }
 
-.sidebar-nav { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.sidebar-nav { flex: 1; min-height: 0; margin: 0 -12px; padding: 0 12px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 .nav-group { display: flex; flex-direction: column; gap: 1px; }
 .nav-group-title { display: flex; align-items: center; gap: 7px; padding: 4px 10px 2px; font-size: var(--fs-12); color: var(--c-ink-3); }
 .nav-item {
@@ -42,6 +42,7 @@
   .sidebar { width: var(--sidebar-rail); min-width: var(--sidebar-rail); padding: 14px 8px 10px; align-items: center; }
   .sidebar-wordmark, .nav-label, .nav-sub, .nav-group-title, .sidebar-status-text { display: none; }
   .persona-select { display: none; }
+  .sidebar-nav { margin: 0 -8px; padding: 0 8px; align-items: center; }
   .nav-group { align-items: center; }
   .nav-group + .nav-group { border-top: 1px solid var(--c-rule); padding-top: 8px; }
   .nav-item { justify-content: center; width: 40px; height: 36px; padding: 0; }

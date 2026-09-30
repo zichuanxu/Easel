@@ -6,7 +6,7 @@ export default function ChatLayout({ sessions, children }: { sessions: ReactNode
   const [open, setOpen] = useState(false);
   const closeOnPick = (e: MouseEvent) => {
     const item = (e.target as HTMLElement).closest('.session-item');
-    if (item && !item.querySelector('input')) setOpen(false);
+    if (item && !item.querySelector('input') && !(e.target as HTMLElement).closest('.session-actions')) setOpen(false);
   };
   return (
     <div className={`chat-layout${open ? ' sessions-open' : ''}`}>
