@@ -134,6 +134,7 @@
 /* 输入框外壳 */
 .composer { width: 100%; padding: 12px 14px; background: var(--c-surface); border: 1px solid var(--c-rule-strong); border-radius: 12px; box-shadow: var(--shadow-composer); transition: border-color var(--t-fast); }
 .composer:focus-within { border-color: var(--c-ink-3); }
+.composer:has(.chat-input:focus-visible) { border-color: var(--c-ink); box-shadow: var(--shadow-composer), 0 0 0 1px var(--c-ink); }
 .composer-hero { margin-top: var(--sp-2); }
 .composer-drag { border-color: var(--c-ink); border-style: dashed; background: var(--c-sunken); }
 .composer-top { display: flex; gap: var(--sp-2); align-items: flex-start; }

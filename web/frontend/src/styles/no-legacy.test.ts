@@ -8,6 +8,7 @@ const OLD_VARS = [
   '--text', '--text-secondary', '--text-tertiary', '--border', '--border-strong', '--bg', '--bg-elev',
   '--surface', '--surface-2', '--surface-hover', '--accent-start', '--accent-end', '--accent-soft',
   '--accent-gradient', '--green', '--amber', '--red', '--trend-up', '--trend-down', '--code-bg',
+  '--green-soft', '--amber-soft', '--red-soft', '--accent-gradient-soft',
   '--radius', '--radius-sm', '--radius-lg', '--radius-xl', '--shadow-sm', '--shadow-md', '--shadow-lg', '--glow',
 ];
 const isTest = (p: string) => /\.test\.tsx?$/.test(p);
@@ -32,11 +33,11 @@ describe('迁移完成，没有残留', () => {
     const hits: string[] = [];
     for (const [p, text] of Object.entries(css)) {
       if (p.endsWith('tokens.css')) continue;
-      if (/#[0-9a-fA-F]{3,8}\b|rgba?\(/.test(text)) hits.push(p);
+      if (/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/.test(text)) hits.push(p);
     }
     for (const [p, text] of Object.entries(tsx)) {
       if (isTest(p)) continue;
-      if (/['"`]#[0-9a-fA-F]{3,8}['"`]|rgba?\(/.test(text)) hits.push(p);
+      if (/['"`]#[0-9a-fA-F]{3,8}['"`]|rgba?\(|hsla?\(/.test(text)) hits.push(p);
     }
     expect(hits).toEqual([]);
   });
