@@ -58,17 +58,37 @@ def _chrome_missing(e: BaseException) -> bool:
     return "chrome" in s and ("not found" in s or "doesn't exist" in s or "no such file" in s)
 
 
+def _headless_user_agent(ctx) -> str:
+    """无头 Chrome 的 UA 带「HeadlessChrome」，X 对这样的未登录访问一律回 403（真机校准于 2026-10-01）。
+    读出默认 UA，带这个标记就返回换成普通「Chrome」的 UA；读不到或不带标记返回空串。"""
+    try:
+        ua = first_page(ctx).evaluate("navigator.userAgent") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+    return ua.replace("HeadlessChrome", "Chrome") if "HeadlessChrome" in ua else ""
+
+
 def open_context(p, profile: Path, *, headed: bool, env=None):
-    """优先用本机 Google Chrome（Google 登录只认真 Chrome），没装就退回自带 Chromium 并提示。"""
+    """优先用本机 Google Chrome（Google 登录只认真 Chrome），没装就退回自带 Chromium 并提示。
+    无头启动时把 UA 里的 HeadlessChrome 换成 Chrome 再重开一次（多 1 秒左右）。"""
     profile.mkdir(parents=True, exist_ok=True)
     opts = launch_options(headed, env)
+    channel = {"channel": "chrome"}
     try:
-        return p.chromium.launch_persistent_context(str(profile), channel="chrome", **opts)
+        ctx = p.chromium.launch_persistent_context(str(profile), **channel, **opts)
     except Exception as e:  # noqa: BLE001
         if not _chrome_missing(e):
             raise
         print(f"⚠️ {CHROME_MISSING_HINT}", file=sys.stderr)
-        return p.chromium.launch_persistent_context(str(profile), **opts)
+        channel = {}
+        ctx = p.chromium.launch_persistent_context(str(profile), **opts)
+    if headed:
+        return ctx
+    ua = _headless_user_agent(ctx)
+    if not ua:
+        return ctx
+    close_quietly(ctx)
+    return p.chromium.launch_persistent_context(str(profile), **channel, **opts, user_agent=ua)
 
 
 def close_quietly(ctx) -> None:

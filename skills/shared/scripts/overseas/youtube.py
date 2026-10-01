@@ -1,6 +1,8 @@
 """YouTube：YouTube Studio（studio.youtube.com），Google 账号登录（只认本机真 Chrome）。
 
-登录判定：youtube.com 上的登录 cookie + 不在 Google 登录页。昵称 / 头像选择器待真机校准（PR 1 计划 Task 7）。
+登录判定：youtube.com 上的登录 cookie + 不在 Google 登录页（真机校准于 2026-10-01）。
+账号还没有 YouTube 频道时，Studio 会带 channel_creation_token 跳回 youtube.com：登录判定照样成立，
+但上传要先建频道（发布前检查放在 PR 2）。头像取 youtube.com 页头的头像按钮；频道名要有频道后在 Studio 校准。
 """
 from __future__ import annotations
 
@@ -20,8 +22,8 @@ KINDS = frozenset({"video"})
 LIMITS = Limits(caption=5000, title=100)
 VISIBILITY = ("public", "unlisted", "private")
 VISIBILITY_DEFAULT = "public"
-NAME_SELECTORS = ""
-AVATAR_SELECTORS = ""
+NAME_SELECTORS = ""        # 频道名在 Studio 里，要等账号有频道后再校准
+AVATAR_SELECTORS = "#avatar-btn img"
 
 
 def compose(post: Post) -> dict:

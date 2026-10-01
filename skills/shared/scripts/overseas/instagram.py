@@ -1,6 +1,7 @@
 """Instagram：instagram.com 网页版（桌面版支持发帖和 Reels）。
 
-登录判定：sessionid 登录 cookie + 不在登录 / 安全验证页。昵称 / 头像选择器待真机校准（PR 1 计划 Task 7）。
+登录判定：sessionid 登录 cookie + 不在登录 / 安全验证页（真机校准于 2026-10-01）。
+身份：首页信息流里全是别人的头像，只认左侧导航栏里指向 /<用户名>/、带头像的那一项（个人主页入口）。
 """
 from __future__ import annotations
 
@@ -19,8 +20,18 @@ KINDS = frozenset({"video", "image"})
 LIMITS = Limits(caption=2200, hashtags=30, images=10)
 VISIBILITY: tuple[str, ...] = ()
 VISIBILITY_DEFAULT = ""
-NAME_SELECTORS = ""
+NAME_SELECTORS = ""        # 不用选择器，见 read_identity
 AVATAR_SELECTORS = ""
+_ME_JS = """() => {
+  for (const a of document.querySelectorAll('a[href]')) {
+    const img = a.querySelector('img');
+    const r = a.getBoundingClientRect();
+    if (img && r.width > 0 && r.left < 100 && /^\\/[^/]+\\/$/.test(a.getAttribute('href') || '')) {
+      return {name: a.getAttribute('href').split('/').join(''), avatar: img.src || ''};
+    }
+  }
+  return null;
+}"""
 
 
 def compose(post: Post) -> dict:
@@ -32,4 +43,11 @@ def is_logged_in(page) -> bool:
 
 
 def read_identity(page) -> dict:
-    return base.read_identity(page, NAME_SELECTORS, AVATAR_SELECTORS)
+    try:
+        me = page.evaluate(_ME_JS)
+    except Exception:  # noqa: BLE001 — 读身份尽力而为，不抛错
+        me = None
+    if not me:
+        return {"name": "", "avatar": ""}
+    avatar = me.get("avatar") or ""
+    return {"name": (me.get("name") or "")[:40], "avatar": avatar if avatar.startswith("http") else ""}

@@ -194,3 +194,57 @@ def test_read_identity_best_effort():
 def test_short_err_truncates():
     assert base.short_err(RuntimeError("x" * 500)).endswith("…")
     assert base.short_err(RuntimeError("")) == "RuntimeError"
+
+
+class UAChromium(FakeChromium):
+    """launch 出的上下文第一页报告给定 UA；记录关闭次数。"""
+
+    def __init__(self, ua, fail_chrome=None):
+        super().__init__(fail_chrome)
+        self.ua = ua
+        self.closed = 0
+
+    def launch_persistent_context(self, user_data_dir, **kw):
+        self.calls.append(kw)
+        if kw.get("channel") == "chrome" and self.fail_chrome:
+            raise self.fail_chrome
+        outer = self
+
+        class Page:
+            def evaluate(self, _js):
+                return outer.ua
+
+        class Ctx:
+            pages = [Page()]
+
+            def close(self):
+                outer.closed += 1
+
+        ctx = Ctx()
+        ctx.kw = kw
+        return ctx
+
+
+HEADLESS_UA = "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36"
+
+
+def test_headless_relaunches_with_plain_chrome_user_agent(tmp_path):
+    """X 对 UA 带 HeadlessChrome 的无头浏览器一律回 403（真机校准）：换成普通 Chrome 的 UA 重开。"""
+    ch = UAChromium(HEADLESS_UA)
+    ctx = base.open_context(SimpleNamespace(chromium=ch), tmp_path / "Prof", headed=False, env={})
+    assert len(ch.calls) == 2 and ch.closed == 1
+    assert ctx.kw["user_agent"] == HEADLESS_UA.replace("HeadlessChrome", "Chrome")
+    assert ctx.kw["channel"] == "chrome"
+
+
+def test_headless_fallback_chromium_also_gets_plain_user_agent(tmp_path, capsys):
+    ch = UAChromium(HEADLESS_UA, fail_chrome=RuntimeError("Chromium distribution 'chrome' is not found"))
+    ctx = base.open_context(SimpleNamespace(chromium=ch), tmp_path / "Prof", headed=False, env={})
+    assert "channel" not in ctx.kw
+    assert ctx.kw["user_agent"] == HEADLESS_UA.replace("HeadlessChrome", "Chrome")
+
+
+def test_headed_keeps_default_user_agent(tmp_path):
+    ch = UAChromium(HEADLESS_UA)
+    ctx = base.open_context(SimpleNamespace(chromium=ch), tmp_path / "Prof", headed=True, env={})
+    assert len(ch.calls) == 1 and "user_agent" not in ctx.kw

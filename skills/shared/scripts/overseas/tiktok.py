@@ -1,6 +1,6 @@
 """TikTok：TikTok Studio 网页版（www.tiktok.com/tiktokstudio）。
 
-登录判定：sessionid 登录 cookie + 不在登录页。昵称 / 头像选择器待真机校准（PR 1 计划 Task 7）。
+登录判定：sessionid 登录 cookie + 不在登录页。昵称取 Studio 首页用户信息里的链接，头像取页头右上角（真机校准于 2026-10-01）。
 """
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ KINDS = frozenset({"video", "image"})
 LIMITS = Limits(caption=2200, images=35)
 VISIBILITY = ("everyone", "friends", "only_me")
 VISIBILITY_DEFAULT = "everyone"
-NAME_SELECTORS = ""
-AVATAR_SELECTORS = ""
+NAME_SELECTORS = '[data-tt="NewHome_UserInfo_a"]'
+AVATAR_SELECTORS = '[data-tt="Header_NewHeader_Clickable"] img, [data-tt="components_Avatar_AvatarContainer"] img'
 
 
 def compose(post: Post) -> dict:
