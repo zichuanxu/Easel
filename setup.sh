@@ -588,6 +588,7 @@ if [ "${EASEL_AGENT_RUNTIME:-}" = "claude-cli" ]; then
     # agent 跑在 OpenClaw 自带的 claude-cli runtime 上，复用本机 Claude Code 的登录，不写任何 provider。
     # 注意：变量后面紧跟中文时一律写 ${VAR}。bash 3.2（macOS 自带）在 UTF-8 locale 下会把全角字符的
     # 字节吞进变量名，set -u 当场报 unbound variable、整个安装中断（tests 里有静态检查）。
+    # Web 设置「一键接入 Claude Code」用 easel/claude_cli_route.py 里同一套规则（模型名、配置目录、写法），改这里要一起改
     CLAUDE_CLI_DEFAULT_MODEL="anthropic/claude-opus-5"   # = OpenClaw 2026.9.6 的 CLAUDE_CLI_DEFAULT_MODEL_REF
     CLI_MODEL="${CLAUDE_MODEL:-}"
     case "$CLI_MODEL" in
