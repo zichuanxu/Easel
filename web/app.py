@@ -3716,7 +3716,6 @@ async def api_analytics(platform: str, cached: int = 0):
     return await asyncio.shield(task)
 
 
-OVERSEAS_PUBLISH = {"tiktok", "youtube", "instagram", "x", "threads"}
 # 要带媒体的平台：海外的 X / Threads 可以纯文字，TikTok / Instagram / YouTube 要图片或视频
 MEDIA_REQUIRED = {"xiaohongshu", "douyin", "kuaishou", "weixin-channels", "bilibili", "tiktok", "youtube", "instagram"}
 # 只能发视频的平台（海外只有 YouTube）
