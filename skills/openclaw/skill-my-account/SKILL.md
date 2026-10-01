@@ -39,6 +39,7 @@ layer: general
 ## 支持平台
 
 whoami：小红书 / 抖音 / 知乎 / 快手 / 视频号。
+海外平台（TikTok / YouTube / Instagram / X / Threads）的登录身份：`python skills/shared/scripts/overseas_publisher.py whoami --platform <平台码>`。
 account_stats fetch `--platform`：`xiaohongshu` / `douyin` / `kuaishou` / `zhihu` / `weixin-channels`。
 
 > 各平台数据完整度不同（真机现状）：**小红书**最全（粉丝/获赞/关注/近 7 日环比 + 笔记带链接封面）；

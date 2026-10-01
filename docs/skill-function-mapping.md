@@ -1,7 +1,7 @@
 # Easel Skill 能力地图
 
 > 本文档按 Easel 的内容工作流分层介绍当前技能库。每个条目对应 `skills/openclaw/` 中一个可用的 `SKILL.md`。
-> 当前共 **114 个 Skill**；这里只说明各 Skill 负责什么，具体输入、输出和执行流程请查看对应目录。
+> 当前共 **115 个 Skill**；这里只说明各 Skill 负责什么，具体输入、输出和执行流程请查看对应目录。
 
 ## 🗺️ 分层总览
 
@@ -138,6 +138,7 @@
 | `skill-cross-platform-publish` | 跨平台一键发布：一份内容适配并发布到多个平台（小红书/抖音/B站/公众号/快手/视频号/知乎）。 按各平台格式约束（字数/比例/标签/内容类型）适配内容，再逐个委派对应平台发布 SKILL。 |
 | `skill-douyin-upload` | 将视频/图文内容发布到抖音（creator.douyin.com）。 |
 | `skill-kuaishou-upload` | 快手视频发布：把竖版短视频发布到快手创作者中心。 |
+| `skill-overseas-publish` | 海外平台发布：把视频发到 TikTok、YouTube、Instagram（Reels）、X、Threads 上自己的账号（本机浏览器自动化，不经第三方服务）。 |
 | `skill-persona-check` | 人设一致性检查与品牌调性检查：对比内容与创作者画像的账号定位、内容赛道、形式、受众、 风格和偏好， 输出一致性评分和具体偏离点。 |
 | `skill-publish-checklist` | 发布前完整性检查：逐项检查标题、封面、标签、格式、合规标记、链接、CTA 是否齐全， 确保内容没有遗漏就能发布。 |
 | `skill-publish-notify` | 发布通知推送：内容发布成功/失败后，把结果推送到飞书/钉钉/企业微信群机器人、 Telegram、Slack 或任意 webhook。 |

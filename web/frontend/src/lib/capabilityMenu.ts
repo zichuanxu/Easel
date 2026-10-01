@@ -405,6 +405,12 @@ export const CAPABILITY_MENU: { meta?: unknown; tabs: CapabilityTab[] } = {
        "status": "ready"
       },
       {
+       "skill": "skill-overseas-publish",
+       "label": "海外平台",
+       "desc": "海外平台发布：把视频发到 TikTok、YouTube、Instagram（Reels）、X、Threads 上自己的账号。本机浏览器自动化，不经第三方服务。",
+       "status": "ready"
+      },
+      {
        "skill": "skill-wechat-publisher",
        "label": "公众号",
        "desc": "微信公众号文章自动创作与发布工具。给定参考文章、文字或文档，自动搜索整理全网相关信息、生成图文并茂的公众号文章，并发布到微信公众号草稿箱。特别强调反 AI 检测写作。 触发场景（沾边就用）：用户提到\"公众号 / 微信文章",

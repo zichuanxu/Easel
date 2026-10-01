@@ -6,6 +6,7 @@ import asyncio
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -124,3 +125,70 @@ def test_logout_removes_overseas_profile(login_dir, monkeypatch, tmp_path):
 ])
 def test_can_open_window(platform, os_name, env, expected):
     assert web._can_open_window(platform=platform, env=env, os_name=os_name) is expected
+
+
+def _outputs_with(tmp_path, monkeypatch, name, data):
+    outputs = tmp_path / "outputs"
+    (outputs / "proj").mkdir(parents=True)
+    (outputs / "proj" / name).write_bytes(data)
+    monkeypatch.setattr(web, "OUTPUTS_DIR", outputs)
+    monkeypatch.setattr(web, "PUBLISH_DIR", outputs / "_publish")
+    return outputs
+
+
+def test_publish_overseas_runs_async_with_exact_title(monkeypatch, tmp_path):
+    """海外平台走异步发布；title 原样传（发布中心对非 YouTube 平台传空，不能被拿正文前 20 字顶上）。"""
+    _outputs_with(tmp_path, monkeypatch, "clip.mp4", b"\x00")
+    started = {}
+
+    def fake_start(platform, cmd, title, body, cfg, status_file, code_file):
+        started.update(platform=platform, cmd=list(cmd), title=title)
+        return {"async": True, "pending": True}
+
+    monkeypatch.setattr(web, "_start_async_publish", fake_start)
+    req = web.PublishRequest(title="", body="Hello world #ai", media=["proj/clip.mp4"], tags="", visibility="only_me")
+    res = asyncio.run(web.api_publish("tiktok", req))
+    assert res["async"] is True
+    cmd = started["cmd"]
+    assert cmd[1].endswith("overseas_publisher.py") and cmd[2] == "publish"
+    assert cmd[cmd.index("--platform") + 1] == "tiktok"
+    assert cmd[cmd.index("--title") + 1] == ""
+    assert cmd[cmd.index("--desc") + 1] == "Hello world #ai"
+    assert cmd[cmd.index("--visibility") + 1] == "only_me"
+    assert cmd[cmd.index("--media") + 1].endswith("clip.mp4")
+    assert "--exec" in cmd and "--status-file" in cmd
+
+
+def test_second_publish_same_platform_while_running_is_409(monkeypatch, tmp_path):
+    """同一平台上一条还在发：第二次请求直接 409。排队等登录目录锁会在第一条发完后把同一条再发一遍（Final review 3）。"""
+    _outputs_with(tmp_path, monkeypatch, "clip.mp4", b"\x00")
+    release = threading.Event()
+    runs: list[str] = []
+
+    def fake_bg(platform, *_a):
+        runs.append(platform)
+        release.wait(5)
+
+    monkeypatch.setattr(web, "_run_publish_bg", fake_bg)
+    monkeypatch.setattr(web, "_PUBLISH_THREADS", {}, raising=False)
+    req = web.PublishRequest(body="Hello", media=["proj/clip.mp4"])
+    try:
+        assert asyncio.run(web.api_publish("x", req))["async"] is True
+        with pytest.raises(web.HTTPException) as ei:
+            asyncio.run(web.api_publish("x", req))
+        assert ei.value.status_code == 409 and "正在发布" in ei.value.detail
+        assert asyncio.run(web.api_publish("threads", req))["async"] is True     # 别的平台不受影响
+    finally:
+        release.set()
+    for t in list(web._PUBLISH_THREADS.values()):
+        t.join(5)
+    assert asyncio.run(web.api_publish("x", req))["async"] is True               # 上一条结束后可以再发
+    assert runs.count("x") == 2
+
+
+def test_publish_overseas_requires_video_for_now(monkeypatch, tmp_path):
+    _outputs_with(tmp_path, monkeypatch, "a.png", b"\x89PNG")
+    for platform in OVERSEAS:
+        with pytest.raises(web.HTTPException) as ei:
+            asyncio.run(web.api_publish(platform, web.PublishRequest(body="hi", media=["proj/a.png"])))
+        assert ei.value.status_code == 400

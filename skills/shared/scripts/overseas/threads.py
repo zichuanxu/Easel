@@ -23,6 +23,19 @@ VISIBILITY: tuple[str, ...] = ()
 VISIBILITY_DEFAULT = ""
 NAME_SELECTORS = ""        # 不用选择器，见 read_identity
 AVATAR_SELECTORS = ""
+PUBLISH_URL = HOME_URL
+READY_KINDS = frozenset({"video"})       # 图文 / 纯文字在 PR 3 接通
+# 首页「What's new?」打开发帖弹窗；真机校准于 2026-10-01
+OPEN_COMPOSER = '[aria-label^="Empty text field"]'
+DIALOG = '[role="dialog"]'
+TEXTBOX = f'{DIALOG} [role="textbox"]'
+FILE_INPUT = f'{DIALOG} input[type="file"]'
+MEDIA_READY = f'{DIALOG} video'
+# 按钮是 div[role=button] > div > 「Post」：:text-is 只匹配直接装着文字的那层，所以用 :has；精确匹配，别点成 Post Options
+POST_BUTTON = f'{DIALOG} div[role="button"]:has(:text-is("Post"))'
+POSTED_LINK = 'a[href*="/post/"]:has-text("View")'
+POST_WAIT_S = 120
+PROCESS_WAIT_MS = 300000                 # 视频传完之前 Post 是灰的
 _ME_JS = """() => {
   let user = '';
   for (const a of document.querySelectorAll('a[href^="/@"]')) {
@@ -52,3 +65,26 @@ def read_identity(page) -> dict:
         return {"name": "", "avatar": ""}
     avatar = me.get("avatar") or ""
     return {"name": (me.get("name") or "")[:40], "avatar": avatar if avatar.startswith("http") else ""}
+
+
+def publish(drv, fields: dict, post: Post) -> base.Result:
+    drv.goto(PUBLISH_URL)
+    if not drv.wait_for(OPEN_COMPOSER, 30000):
+        raise base.StepFailed("找不到发帖入口（What's new?）")
+    drv.click(OPEN_COMPOSER)
+    if not drv.wait_for(TEXTBOX, 15000):
+        raise base.StepFailed("发帖弹窗没打开")
+    drv.upload(FILE_INPUT, post.media)
+    if not drv.wait_for(MEDIA_READY, 120000):
+        raise base.StepFailed("视频没挂上（弹窗里没出现视频预览）")
+    drv.type_text(TEXTBOX, fields["caption"], clear=False)
+    if not drv.wait_enabled(POST_BUTTON, PROCESS_WAIT_MS):
+        raise base.StepFailed("视频处理超时，发布按钮一直不能点")
+    drv.commit(POST_BUTTON)
+    for _ in range(POST_WAIT_S):
+        if not drv.visible(DIALOG) and drv.visible(POSTED_LINK):
+            href = drv.attr(POSTED_LINK, "href")
+            url = f"https://www.threads.com{href}" if href.startswith("/") else href
+            return base.Result("success", url=url, message="已发布到 Threads")
+        drv.pause(1000)
+    return base.Result("unknown", message="点了发布，但没等到「已发布」提示")

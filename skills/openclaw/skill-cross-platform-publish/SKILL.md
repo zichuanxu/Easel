@@ -1,7 +1,7 @@
 ---
 name: skill-cross-platform-publish
 description: >-
-  跨平台一键发布：一份内容适配并发布到多个平台（小红书/抖音/B站/公众号/快手/视频号/知乎）。
+  跨平台一键发布：一份内容适配并发布到多个平台（小红书/抖音/B站/公众号/快手/视频号/知乎/TikTok/YouTube/Instagram/X/Threads）。
   按各平台格式约束（字数/比例/标签/内容类型）适配内容，再逐个委派对应平台发布 SKILL。
   当用户说"一键发布""同时发到多个平台""多平台发布""一稿多发""全平台发""发到抖音+小红书+B站"
   "分发到各平台"时使用。适配由 LLM 做，路由与约束检查由 scripts/publish_dispatch.py。
@@ -25,6 +25,7 @@ layer: publish
 | kuaishou | skill-kuaishou-upload ✅ |
 | weixin-channels（视频号）| skill-channels-upload ✅ |
 | zhihu | skill-zhihu-publisher ✅ |
+| tiktok / youtube / instagram / x / threads（海外）| skill-overseas-publish ✅（目前只发视频；文案改写成英文）|
 
 `python <skill>/scripts/publish_dispatch.py platforms` 看全部平台及约束。
 
