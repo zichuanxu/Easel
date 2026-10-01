@@ -6,9 +6,11 @@
 from __future__ import annotations
 
 import os
+import random
 import sys
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 PROFILE_ROOT = Path.home() / ".easel-browser-profiles"
@@ -263,3 +265,163 @@ class ProfileLock:
             except OSError:
                 pass
             self.fd = None
+
+
+# ---- 发布：页面驱动、结果、失败现场 ----------------------------------------------------------
+
+# 落到这些页面 = 平台要人工验证（验证码 / 安全检查），无头浏览器过不去，调用方改开有头窗口
+BLOCK_MARKERS = ("captcha", "/challenge", "checkpoint", "/account/access", "/suspended")
+
+
+class StepFailed(RuntimeError):
+    """发布流程某一步做不下去（找不到元素、超时）：多半是平台改版，调用方保存失败现场。"""
+
+
+class Blocked(RuntimeError):
+    """平台拦了无头浏览器（验证码 / 安全检查页）：调用方可改开有头窗口重试一次。"""
+
+
+@dataclass
+class Result:
+    status: str          # success：确认已发出；failed：明确失败；unknown：点了发布但没等到成功信号
+    url: str = ""
+    message: str = ""
+
+
+class PageDriver:
+    """平台发布流程只通过它操作页面，离线测试里换成按剧本走的假驱动。
+    pace：每个动作后随机停顿的秒数区间（像人一样操作，测试里传 (0, 0)）。"""
+
+    def __init__(self, page, *, pace: tuple[float, float] = (0.25, 0.7)):
+        self.page = page
+        self.pace = pace
+
+    def _rest(self) -> None:
+        lo, hi = self.pace
+        if hi > 0:
+            self.page.wait_for_timeout(int(random.uniform(lo, hi) * 1000))
+
+    def goto(self, url: str, timeout_ms: int = 60000) -> None:
+        self.page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        now = self.url().lower()
+        if any(m in now for m in BLOCK_MARKERS):
+            raise Blocked(f"被带到了验证页：{self.url()}")
+
+    def url(self) -> str:
+        try:
+            return self.page.url or ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def count(self, sel: str) -> int:
+        try:
+            return self.page.locator(sel).count()
+        except Exception:  # noqa: BLE001
+            return 0
+
+    def visible(self, sel: str) -> bool:
+        try:
+            loc = self.page.locator(sel)
+            return any(loc.nth(i).is_visible() for i in range(min(loc.count(), 5)))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def click(self, sel: str, timeout_ms: int = 15000) -> None:
+        try:
+            self.page.locator(sel).first.click(timeout=timeout_ms)
+        except Exception as e:  # noqa: BLE001
+            raise StepFailed(f"点不到 {sel}：{short_err(e)}") from e
+        self._rest()
+
+    def upload(self, sel: str, files, timeout_ms: int = 30000) -> None:
+        try:
+            self.page.locator(sel).first.set_input_files([str(f) for f in files], timeout=timeout_ms)
+        except Exception as e:  # noqa: BLE001
+            raise StepFailed(f"选不了文件（{sel}）：{short_err(e)}") from e
+        self._rest()
+
+    def type_text(self, sel: str, text: str, *, clear: bool = True, timeout_ms: int = 15000) -> None:
+        """点进输入框（可先全选删掉预填内容）再逐行输入、行间回车：
+        富文本编辑器（DraftJS 等）只认真实的键盘事件，直接 fill 会被忽略。"""
+        self.click(sel, timeout_ms)
+        kb = self.page.keyboard
+        if clear:
+            kb.press("Meta+A" if sys.platform == "darwin" else "Control+A")
+            kb.press("Backspace")
+        for i, line in enumerate(text.split("\n")):
+            if i:
+                kb.press("Enter")
+            if line:
+                kb.type(line, delay=random.randint(15, 45))
+        self._rest()
+
+    def press(self, key: str) -> None:
+        self.page.keyboard.press(key)
+
+    def wait_for(self, sel: str, timeout_ms: int = 15000, state: str = "visible") -> bool:
+        try:
+            self.page.locator(sel).first.wait_for(state=state, timeout=timeout_ms)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def wait_enabled(self, sel: str, timeout_ms: int = 60000) -> bool:
+        """等按钮真能点：is_enabled 且 aria-disabled 不是 true（视频处理完之前发布按钮是灰的）。"""
+        deadline = time.monotonic() + timeout_ms / 1000
+        while True:
+            try:
+                loc = self.page.locator(sel).first
+                if loc.count() and loc.is_enabled() and loc.get_attribute("aria-disabled") != "true":
+                    return True
+            except Exception:  # noqa: BLE001
+                pass
+            if time.monotonic() >= deadline:
+                return False
+            self.page.wait_for_timeout(500)
+
+    def text(self, sel: str) -> str:
+        try:
+            return self.page.locator(sel).first.inner_text(timeout=2000) or ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def attr(self, sel: str, name: str) -> str:
+        try:
+            return self.page.locator(sel).first.get_attribute(name, timeout=2000) or ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def pause(self, ms: int) -> None:
+        self.page.wait_for_timeout(ms)
+
+    def dismiss(self, selectors, rounds: int = 2) -> None:
+        """点掉挡路的提示（开通知、新功能引导、内容检查询问……）：可见就点，点不到不报错。"""
+        for _ in range(rounds):
+            hit = False
+            for sel in selectors:
+                if not self.visible(sel):
+                    continue
+                try:
+                    self.page.locator(sel).first.click(timeout=3000)
+                    hit = True
+                    self.page.wait_for_timeout(600)
+                except Exception:  # noqa: BLE001
+                    pass
+            if not hit:
+                return
+
+    def settle(self, mod) -> bool | None:
+        return settle(self.page, mod)
+
+
+def save_failure(page, key: str) -> Path | None:
+    """失败现场：截图 + 页面 HTML 存到 outputs/_login/<平台>-publish-fail.png/.html，对着它改选择器。"""
+    try:
+        import output_paths
+        png = output_paths.validate_output_path(
+            output_paths.OUTPUTS_DIR / "_login" / f"{key}-publish-fail.png", allow_system=True, create_parent=True)
+        page.screenshot(path=str(png), full_page=True)
+        png.with_suffix(".html").write_text(page.content(), encoding="utf-8")
+        return png
+    except Exception:  # noqa: BLE001 — 保存现场失败不能盖掉发布本身的结果
+        return None
