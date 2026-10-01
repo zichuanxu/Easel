@@ -13,6 +13,8 @@ from overseas import PLATFORMS, base  # noqa: E402
 from overseas.post import Post  # noqa: E402
 
 VIDEO = Path("/tmp/clip.mp4")
+IMG = Path("/tmp/easel-flow-a.jpg")     # 流程测试不读文件
+IMG2 = Path("/tmp/easel-flow-b.png")
 
 
 class FakeDriver:
@@ -158,12 +160,37 @@ def test_x_no_toast_is_unknown():
     assert d.paused >= X.POST_WAIT_S * 1000 - 1000
 
 
+def test_x_publishes_images_after_every_preview_attached():
+    d = x_driver()
+    d.hooks[("upload", X.FILE_INPUT)] = lambda dr: dr.counts.__setitem__(X.MEDIA_READY, 2)
+    p = Post(media=[IMG, IMG2], desc="Hello")
+    assert X.publish(d, X.compose(p), p).status == "success"
+    assert ("wait_count", X.MEDIA_READY, 2) in d.actions
+
+
+def test_x_partial_image_attach_never_posts():
+    """2 张图只挂上 1 张：不去点发布（Review Focus 3）。"""
+    d = x_driver()
+    d.hooks[("upload", X.FILE_INPUT)] = lambda dr: dr.counts.__setitem__(X.MEDIA_READY, 1)
+    p = Post(media=[IMG, IMG2], desc="Hello")
+    with pytest.raises(base.StepFailed, match="图片没全挂上"):
+        X.publish(d, X.compose(p), p)
+    assert not d.committed
+
+
+def test_x_text_only_post_skips_upload():
+    d = x_driver()
+    p = Post(desc="Just text #ai")
+    assert X.publish(d, X.compose(p), p).status == "success"
+    assert not d.acts("upload") and d.acts("type")[0][2] == "Just text #ai"
+    assert X.READY_KINDS == {"video", "image", "text"}
+
+
 def test_registry_publish_contract():
     for key, m in PLATFORMS.items():
         assert callable(m.publish), key
         assert m.READY_KINDS <= m.KINDS, key
         assert m.PUBLISH_URL.startswith("https://"), key
-    assert PLATFORMS["x"].READY_KINDS == {"video"}
 
 
 # ---------------------------------------------------------------- Threads

@@ -22,17 +22,19 @@ VISIBILITY_DEFAULT = ""
 NAME_SELECTORS = '[data-testid="SideNav_AccountSwitcher_Button"]'
 AVATAR_SELECTORS = '[data-testid="SideNav_AccountSwitcher_Button"] img'
 PUBLISH_URL = "https://x.com/compose/post"
-READY_KINDS = frozenset({"video"})       # 图文 / 纯文字在 PR 3 接通
+READY_KINDS = frozenset({"video", "image", "text"})
 # 发帖弹窗（首页还有一个内嵌发帖框，同样的 testid，一律限定在弹窗里）；真机校准于 2026-10-01
 _DIALOG = '[role="dialog"]'
 TEXTBOX = f'{_DIALOG} [data-testid="tweetTextarea_0"]'
 FILE_INPUT = f'{_DIALOG} input[data-testid="fileInput"]'
-MEDIA_READY = f'{_DIALOG} [aria-label="Remove media"]'     # 视频挂上后才出现
+MEDIA_READY = f'{_DIALOG} [aria-label="Remove media"]'     # 视频 / 每张图挂上后各出现一个
 POST_BUTTON = f'{_DIALOG} [data-testid="tweetButton"]'
 TOAST = '[data-testid="toast"]'
 TOAST_LINK = f'{TOAST} a[href*="/status/"]'
 POST_WAIT_S = 90
 PROCESS_WAIT_MS = 300000
+MEDIA_WAIT_MS = 120000                    # 视频 / 图片挂上的最长等待
+TEXT_WAIT_MS = 30000                      # 纯文字：发布按钮该立刻能点
 
 
 def compose(post: Post) -> dict:
@@ -51,12 +53,14 @@ def publish(drv, fields: dict, post: Post) -> base.Result:
     drv.goto(PUBLISH_URL)
     if not drv.wait_for(TEXTBOX, 30000):
         raise base.StepFailed("没打开发帖框")
-    drv.upload(FILE_INPUT, post.media)
-    if not drv.wait_for(MEDIA_READY, 120000):
-        raise base.StepFailed("视频没挂上（没出现 Remove media）")
+    if post.media:
+        drv.upload(FILE_INPUT, post.media)
+        if not drv.wait_count(MEDIA_READY, len(post.media), MEDIA_WAIT_MS):
+            raise base.StepFailed("视频没挂上（没出现 Remove media）" if post.kind == "video"
+                                  else f"图片没全挂上（{len(post.media)} 张里没全出现 Remove media）")
     drv.type_text(TEXTBOX, fields["caption"])
-    if not drv.wait_enabled(POST_BUTTON, PROCESS_WAIT_MS):
-        raise base.StepFailed("视频处理超时，发布按钮一直不能点")
+    if not drv.wait_enabled(POST_BUTTON, PROCESS_WAIT_MS if post.media else TEXT_WAIT_MS):
+        raise base.StepFailed(base.POST_DISABLED_MSG[post.kind])
     drv.commit(POST_BUTTON)
     for _ in range(POST_WAIT_S):
         if "sent" in drv.text(TOAST).lower():

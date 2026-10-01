@@ -278,6 +278,11 @@ SUGGESTIONS = '[role="listbox"]'
 BLOCK_MARKERS = ("captcha", "/challenge", "checkpoint", "/account/access", "/suspended")
 
 
+# 等不到发布按钮能点时的提示（按形式）：纯文字多半是文案超了平台上限
+POST_DISABLED_MSG = {"video": "视频处理超时，发布按钮一直不能点", "image": "图片处理超时，发布按钮一直不能点",
+                     "text": "发布按钮一直不能点（文案可能超长）"}
+
+
 class StepFailed(RuntimeError):
     """发布流程某一步做不下去（找不到元素、超时）：多半是平台改版，调用方保存失败现场。"""
 
