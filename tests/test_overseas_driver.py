@@ -36,7 +36,7 @@ class FakeLocator:
         return self
 
     def count(self):
-        return 1 if self.sel in self.page.present else 0
+        return self.page.counts.get(self.sel, 1 if self.sel in self.page.present else 0)
 
     def is_visible(self):
         return self.sel in self.page.present
@@ -67,6 +67,7 @@ class FakePWPage:
     def __init__(self, url="https://example.test/home"):
         self.url = url
         self.present: set[str] = set()
+        self.counts: dict = {}
         self.enabled: set[str] = set()
         self.attrs: dict = {}
         self.texts: dict = {}
@@ -97,7 +98,31 @@ def test_type_text_clears_then_types_lines_with_enter():
     sel_all = "Meta+A" if sys.platform == "darwin" else "Control+A"
     assert page.clicks == ["#box"]
     assert page.keyboard.events == [("press", sel_all), ("press", "Backspace"), ("type", "Hello"),
-                                    ("press", "Enter"), ("press", "Enter"), ("type", "#ai")]
+                                    ("press", "Enter"), ("press", "Enter"), ("type", "#ai"), ("type", " ")]
+
+
+def test_type_text_closes_tag_suggestions_before_next_line():
+    """以话题结尾的行：先补空格（X / Instagram / TikTok 的联想框就收了），联想框还开着（Threads）再按 Esc，然后才回车（Review Focus 1）。"""
+    page = FakePWPage()
+    page.present.update({"#box", '[role="listbox"]'})
+    drv_for(page).type_text("#box", "Hi #ai\nBye", clear=False)
+    assert page.keyboard.events == [("type", "Hi #ai"), ("type", " "), ("press", "Escape"),
+                                    ("press", "Enter"), ("type", "Bye"), ("press", "Escape")]
+
+
+def test_type_text_never_presses_escape_without_suggestions():
+    page = FakePWPage()
+    page.present.add("#box")
+    drv_for(page).type_text("#box", "Hi #ai", clear=False)
+    assert page.keyboard.events == [("type", "Hi #ai"), ("type", " ")]
+
+
+def test_wait_count_waits_for_n_matches():
+    page = FakePWPage()
+    page.counts = {"img.preview": 1}
+    assert drv_for(page).wait_count("img.preview", 2, timeout_ms=1500) is False
+    page.counts["img.preview"] = 2
+    assert drv_for(page).wait_count("img.preview", 2, timeout_ms=1500) is True
 
 
 def test_type_text_without_clear_keeps_existing_text():

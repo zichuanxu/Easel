@@ -16,6 +16,8 @@ KIND_LABEL = {"video": "视频", "image": "图文", "text": "纯文字"}
 _X_LIGHT_RANGES = ((0, 4351), (8192, 8205), (8208, 8223), (8242, 8247))
 _X_URL_WEIGHT = 23
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+# 行尾是话题 / @：打字时补一个空格把联想框收掉（见 PageDriver.type_text），校验字数时也要算上
+TAG_AT_LINE_END = re.compile(r"[#@][^\s#@]+$")
 
 
 class PostError(ValueError):
@@ -76,6 +78,11 @@ def caption_text(post: Post, *, with_title: bool = True) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
+def typed_extra(text: str) -> int:
+    """打字时额外补进去的空格数：每个以话题 / @ 结尾的行一个。"""
+    return sum(1 for line in text.split("\n") if TAG_AT_LINE_END.search(line))
+
+
 def _x_char_weight(ch: str) -> int:
     cp = ord(ch)
     return 1 if any(lo <= cp <= hi for lo, hi in _X_LIGHT_RANGES) else 2
@@ -119,7 +126,7 @@ def validate(post: Post, *, name: str, kinds, limits: Limits, visibility: tuple[
         body = caption_text(post)
     if kind == "text" and not body:
         raise PostError("纯文字帖子不能为空")
-    n = x_weighted_length(body) if limits.weighted else len(body)
+    n = (x_weighted_length(body) if limits.weighted else len(body)) + typed_extra(body)
     if n > limits.caption:
         unit = "（加权，中日韩文字算 2）" if limits.weighted else ""
         raise PostError(f"{name} 文案最多 {limits.caption} 个字符{unit}，当前 {n}")

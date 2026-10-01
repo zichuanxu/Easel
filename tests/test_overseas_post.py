@@ -135,3 +135,18 @@ def test_check_media_symlink_to_non_media(tmp_path):
         pytest.skip("本机不允许建符号链接（Windows 非开发者模式）")
     with pytest.raises(P.PostError, match="不是图片或视频"):
         P.check_media([link])
+
+
+def test_typed_extra_counts_lines_ending_in_tag_or_mention():
+    assert P.typed_extra("Hello #ai\nworld") == 1
+    assert P.typed_extra("Hello\n\n#ai #tech") == 1
+    assert P.typed_extra("ping @bob\n#x\nend") == 2
+    assert P.typed_extra("no tags here") == 0
+
+
+def test_validate_counts_space_typed_after_trailing_tag():
+    """打字时以话题结尾的行会补一个空格收联想框：X 卡在 280 的文案要提前报超限（Review Focus 2）。"""
+    text = "a" * 276 + " #ai"            # 280
+    with pytest.raises(P.PostError, match="280"):
+        P.validate(P.Post(desc=text), name="X", kinds={"text"}, limits=P.Limits(caption=280, weighted=True))
+

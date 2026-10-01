@@ -13,6 +13,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from .post import TAG_AT_LINE_END
+
 PROFILE_ROOT = Path.home() / ".easel-browser-profiles"
 # 不加 --no-sandbox / --disable-gpu：真 Chrome 会为这些参数弹「不受支持的命令行标记」提示条
 LAUNCH_ARGS = ("--disable-blink-features=AutomationControlled", "--no-first-run",
@@ -269,6 +271,9 @@ class ProfileLock:
 
 # ---- 发布：页面驱动、结果、失败现场 ----------------------------------------------------------
 
+# 话题 / @ 联想框：X、Threads 是 listbox（Instagram、TikTok 的列表打空格就收，不用认）
+SUGGESTIONS = '[role="listbox"]'
+
 # 落到这些页面 = 平台要人工验证（验证码 / 安全检查），无头浏览器过不去，调用方改开有头窗口
 BLOCK_MARKERS = ("captcha", "/challenge", "checkpoint", "/account/access", "/suspended")
 
@@ -380,6 +385,12 @@ class PageDriver:
                 kb.press("Enter")
             if line:
                 kb.type(line, delay=random.randint(15, 45))
+            # 行尾是话题 / @ 时联想框开着，这时回车会选中联想项（X 默认选第一项）：先补空格收掉
+            if TAG_AT_LINE_END.search(line):
+                kb.type(" ")
+            # Threads 的话题框打空格不收；Esc 只收联想框、不关发帖弹窗（真机校准）。没联想框时绝不按 Esc
+            if self.visible(SUGGESTIONS):
+                kb.press("Escape")
         self._rest()
 
     def press(self, key: str) -> None:
@@ -391,6 +402,16 @@ class PageDriver:
             return True
         except Exception:  # noqa: BLE001
             return False
+
+    def wait_count(self, sel: str, n: int, timeout_ms: int = 120000, step_ms: int = 500) -> bool:
+        """等页面上至少有 n 个匹配（多张图的预览都挂上了）。"""
+        waited = 0
+        while self.count(sel) < n:
+            if waited >= timeout_ms:
+                return False
+            self.page.wait_for_timeout(step_ms)
+            waited += step_ms
+        return True
 
     def wait_enabled(self, sel: str, timeout_ms: int = 60000) -> bool:
         """等按钮真能点：is_enabled 且 aria-disabled 不是 true（视频处理完之前发布按钮是灰的）。"""

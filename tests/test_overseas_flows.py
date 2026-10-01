@@ -18,12 +18,13 @@ VIDEO = Path("/tmp/clip.mp4")
 class FakeDriver:
     """记录动作；visible / enabled / text / attr 读剧本，hooks[(动作, 选择器)] 在动作后改剧本。"""
 
-    def __init__(self, *, visible=(), enabled=(), texts=None, attrs=None, url="https://example.test/"):
+    def __init__(self, *, visible=(), enabled=(), texts=None, attrs=None, counts=None, url="https://example.test/"):
         self.actions: list[tuple] = []
         self.visible_set = set(visible)
         self.enabled_set = set(enabled)
         self.texts = dict(texts or {})
         self.attrs = dict(attrs or {})
+        self.counts = dict(counts or {})
         self._url = url
         self.hooks: dict = {}
         self.paused = 0
@@ -44,7 +45,11 @@ class FakeDriver:
         return self._url
 
     def count(self, sel):
-        return 1 if sel in self.visible_set else 0
+        return self.counts.get(sel, 1 if sel in self.visible_set else 0)
+
+    def wait_count(self, sel, n, timeout_ms=120000):
+        self._do("wait_count", sel, n)
+        return self.count(sel) >= n
 
     def visible(self, sel):
         return sel in self.visible_set
