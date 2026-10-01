@@ -199,8 +199,8 @@ TH = PLATFORMS["threads"]
 
 def threads_driver():
     d = FakeDriver(visible={TH.OPEN_COMPOSER}, enabled={TH.POST_BUTTON})
-    d.hooks[("click", TH.OPEN_COMPOSER)] = lambda dr: dr.visible_set.update({TH.TEXTBOX, TH.DIALOG})
-    d.hooks[("upload", TH.FILE_INPUT)] = lambda dr: dr.visible_set.update({TH.MEDIA_READY, TH.POST_BUTTON})
+    d.hooks[("click", TH.OPEN_COMPOSER)] = lambda dr: dr.visible_set.update({TH.TEXTBOX, TH.DIALOG, TH.POST_BUTTON})
+    d.hooks[("upload", TH.FILE_INPUT)] = lambda dr: dr.visible_set.add(TH.MEDIA_READY["video"])
 
     def posted(dr):
         dr.visible_set.discard(TH.DIALOG)
@@ -217,7 +217,6 @@ def test_threads_publishes_video():
     assert r.status == "success" and r.url == "https://www.threads.com/@demo/post/ABC"
     kinds = [a[0] + ":" + str(a[1]) for a in d.actions]
     assert kinds.index(f"click:{TH.OPEN_COMPOSER}") < kinds.index(f"upload:{TH.FILE_INPUT}")
-    assert TH.READY_KINDS == {"video"}
 
 
 def test_threads_waits_for_post_button_enabled():
@@ -228,6 +227,31 @@ def test_threads_waits_for_post_button_enabled():
     with pytest.raises(base.StepFailed, match="处理超时"):
         TH.publish(d, TH.compose(p), p)
     assert TH.POST_BUTTON not in [a[1] for a in d.acts("click")] and not d.committed
+
+
+def test_threads_publishes_images():
+    d = threads_driver()
+    d.hooks[("upload", TH.FILE_INPUT)] = lambda dr: dr.counts.__setitem__(TH.MEDIA_READY["image"], 2)
+    p = Post(media=[IMG, IMG2], desc="Hello")
+    assert TH.publish(d, TH.compose(p), p).status == "success"
+    assert ("wait_count", TH.MEDIA_READY["image"], 2) in d.actions
+
+
+def test_threads_partial_image_attach_never_posts():
+    """2 张图只挂上 1 张：不去点发布（Review Focus 3）。"""
+    d = threads_driver()
+    d.hooks[("upload", TH.FILE_INPUT)] = lambda dr: dr.counts.__setitem__(TH.MEDIA_READY["image"], 1)
+    p = Post(media=[IMG, IMG2], desc="Hello")
+    with pytest.raises(base.StepFailed, match="图片没全挂上"):
+        TH.publish(d, TH.compose(p), p)
+    assert not d.committed
+
+
+def test_threads_text_only_post():
+    d = threads_driver()
+    p = Post(desc="Just text")
+    assert TH.publish(d, TH.compose(p), p).status == "success"
+    assert not d.acts("upload") and TH.READY_KINDS == {"video", "image", "text"}
 
 
 def test_threads_dialog_stays_open_is_unknown():

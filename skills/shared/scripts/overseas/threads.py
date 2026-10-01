@@ -24,18 +24,20 @@ VISIBILITY_DEFAULT = ""
 NAME_SELECTORS = ""        # 不用选择器，见 read_identity
 AVATAR_SELECTORS = ""
 PUBLISH_URL = HOME_URL
-READY_KINDS = frozenset({"video"})       # 图文 / 纯文字在 PR 3 接通
+READY_KINDS = frozenset({"video", "image", "text"})
 # 首页「What's new?」打开发帖弹窗；真机校准于 2026-10-01
 OPEN_COMPOSER = '[aria-label^="Empty text field"]'
 DIALOG = '[role="dialog"]'
 TEXTBOX = f'{DIALOG} [role="textbox"]'
 FILE_INPUT = f'{DIALOG} input[type="file"]'
-MEDIA_READY = f'{DIALOG} video'
+MEDIA_READY = {"video": f'{DIALOG} video', "image": f'{DIALOG} img[src^="blob:"]'}   # 每张图一个预览
 # 按钮是 div[role=button] > div > 「Post」：:text-is 只匹配直接装着文字的那层，所以用 :has；精确匹配，别点成 Post Options
 POST_BUTTON = f'{DIALOG} div[role="button"]:has(:text-is("Post"))'
 POSTED_LINK = 'a[href*="/post/"]:has-text("View")'
 POST_WAIT_S = 120
 PROCESS_WAIT_MS = 300000                 # 视频传完之前 Post 是灰的
+MEDIA_WAIT_MS = 120000
+TEXT_WAIT_MS = 30000                     # 纯文字：Post 该立刻能点
 _ME_JS = """() => {
   let user = '';
   for (const a of document.querySelectorAll('a[href^="/@"]')) {
@@ -74,12 +76,14 @@ def publish(drv, fields: dict, post: Post) -> base.Result:
     drv.click(OPEN_COMPOSER)
     if not drv.wait_for(TEXTBOX, 15000):
         raise base.StepFailed("发帖弹窗没打开")
-    drv.upload(FILE_INPUT, post.media)
-    if not drv.wait_for(MEDIA_READY, 120000):
-        raise base.StepFailed("视频没挂上（弹窗里没出现视频预览）")
+    if post.media:
+        drv.upload(FILE_INPUT, post.media)
+        if not drv.wait_count(MEDIA_READY[post.kind], len(post.media), MEDIA_WAIT_MS):
+            raise base.StepFailed("视频没挂上（弹窗里没出现视频预览）" if post.kind == "video"
+                                  else f"图片没全挂上（{len(post.media)} 张里没全出现预览）")
     drv.type_text(TEXTBOX, fields["caption"], clear=False)
-    if not drv.wait_enabled(POST_BUTTON, PROCESS_WAIT_MS):
-        raise base.StepFailed("视频处理超时，发布按钮一直不能点")
+    if not drv.wait_enabled(POST_BUTTON, PROCESS_WAIT_MS if post.media else TEXT_WAIT_MS):
+        raise base.StepFailed(base.POST_DISABLED_MSG[post.kind])
     drv.commit(POST_BUTTON)
     for _ in range(POST_WAIT_S):
         if not drv.visible(DIALOG) and drv.visible(POSTED_LINK):
