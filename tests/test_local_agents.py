@@ -24,6 +24,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "web"))
 sys.path.insert(0, str(PROJECT_ROOT / "skills" / "shared" / "scripts"))
 
 import app as web  # noqa: E402
+from easel import claude_cli_route as ccr  # noqa: E402
 from easel import local_agents as la  # noqa: E402
 
 
@@ -61,14 +62,18 @@ def test_missing_cli_is_never_usable(monkeypatch):
 
 
 def test_configured_reflects_openclaw_json(monkeypatch, tmp_path):
-    """openclaw.json 里已有 anthropic provider → configured 为真（cli 已接入）。"""
+    """configured 反映 openclaw.json：Claude Code 看主模型走不走 Claude CLI runtime，Gemini 看 google provider。"""
     cfg = tmp_path / "openclaw.json"
-    cfg.write_text(json.dumps({"models": {"providers": {"anthropic": {"baseUrl": "x"}}}}),
-                   encoding="utf-8")
+    cfg.write_text(json.dumps({
+        "models": {"providers": {"google": {"baseUrl": "x"}}},
+        "agents": {"defaults": {"model": {"primary": "anthropic/claude-opus-5"},
+                                "models": {"anthropic/claude-opus-5": {"agentRuntime": {"id": "claude-cli"}}}}},
+    }), encoding="utf-8")
     monkeypatch.setenv("EASEL_OPENCLAW_STATE_DIR", str(tmp_path))
-    monkeypatch.setattr(la.shutil, "which", lambda c: "/usr/bin/claude" if c == "claude" else None)
+    monkeypatch.setattr(la.shutil, "which", lambda c: f"/usr/bin/{c}" if c in ("claude", "gemini") else None)
     by_id = {a["id"]: a for a in la.detect_local_agents()}
     assert by_id["claude-code"]["configured"] is True
+    assert by_id["gemini-cli"]["configured"] is True
 
 
 def test_broken_config_does_not_raise(monkeypatch, tmp_path):
@@ -108,12 +113,17 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(web.Path, "home", staticmethod(lambda: tmp_path))
     # 本仓库根 conftest 给每个用例设了 EASEL_OPENCLAW_STATE_DIR（config_path() 优先认它）：指到这份沙箱
     monkeypatch.setenv("EASEL_OPENCLAW_STATE_DIR", str(oc_dir))
+    # 登录探测、续聊软链都碰真机（claude auth status、openclaw status），这里默认就绪；个别用例再改
+    monkeypatch.setattr(ccr, "login_problem", lambda cfg: "")
+    monkeypatch.setattr(ccr, "ensure_resume_link", lambda config_dir: "")
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)     # 进程环境里的值优先于配置，别让开发机的值混进来
 
     local = "http://127.0.0.1:7860"
     with TestClient(web.app, base_url=local, client=("127.0.0.1", 51234),
                     headers={"Origin": local}) as c:
         c.env_file = env_file
         c.oc_file = oc
+        c.home = tmp_path
         yield c
 
 
@@ -152,37 +162,56 @@ def test_enable_rejects_cli_without_backend(sandbox, monkeypatch):
     assert "codex" not in providers and "anthropic" not in providers
 
 
-def test_enable_claude_code_writes_provider_and_primary(sandbox, monkeypatch):
-    """接入 Claude Code：声明 anthropic provider + 主模型切到 claude-cli。"""
+def test_enable_claude_code_uses_claude_cli_runtime_like_setup(sandbox, monkeypatch):
+    """接入 Claude Code 与 setup.sh 的 claude-cli 路线同一套写法：anthropic/<模型> + 模型级 agentRuntime，
+    不写 provider；独立的 Claude Code 配置目录；.env 记下路线，重跑 setup.sh 也不会改回 API Key。"""
     monkeypatch.setattr(la.shutil, "which", lambda c: "/usr/bin/claude" if c == "claude" else None)
     resp = sandbox.post("/api/settings/local-agents/enable", json={"id": "claude-code"})
     assert resp.status_code == 200, resp.text
 
     data = json.loads(sandbox.oc_file.read_text(encoding="utf-8"))
-    assert data["models"]["providers"]["anthropic"]["baseUrl"] == "https://api.anthropic.com"
-    # 不写 apiKey：登录态由 CLI 自己持有，写空 key 反而会覆盖掉已有配置
-    assert "apiKey" not in data["models"]["providers"]["anthropic"]
-    assert data["agents"]["defaults"]["model"]["primary"] == "claude-cli/claude-sonnet-4-6"
+    defaults = data["agents"]["defaults"]
+    assert defaults["model"]["primary"] == "anthropic/claude-opus-5"
+    assert defaults["models"]["anthropic/claude-opus-5"]["agentRuntime"] == {"id": "claude-cli"}
+    assert "anthropic" not in data["models"]["providers"]
+    assert data["env"]["vars"]["CLAUDE_CONFIG_DIR"] == str(sandbox.home / ".claude-easel")
+    assert "EASEL_AGENT_RUNTIME=claude-cli" in sandbox.env_file.read_text(encoding="utf-8").splitlines()
     # 原有 provider 与备份行为不变
     assert data["models"]["providers"]["openai"]["apiKey"] == "k"
     assert (sandbox.oc_file.parent / "openclaw.json.bak-web").is_file()
+    note = resp.json()["note"]
+    assert "easel gateway restart" in note and "/reset" in note        # 配置目录变了要重启 gateway
 
 
-def test_enable_claude_code_respects_relay_base_from_env(sandbox, monkeypatch):
-    """.env 里配了中转站时，一键接入必须保留它，不能覆盖成官方端点。
-
-    （真实 bug：实现最初用 os.environ 读 base —— .env 不在进程环境里，
-    永远拿到空，然后把用户已配好的 ANTHROPIC_BASE_URL 静默覆盖成官方端点。）
-    """
-    sandbox.env_file.write_text(
-        "OPENAI_BASE_URL=https://api.openai.com/v1\n"
-        "ANTHROPIC_BASE_URL=https://my-relay.example.com\n",
-        encoding="utf-8")
+def test_enable_claude_code_shared_config_dir_uses_personal_claude(sandbox, monkeypatch):
+    """EASEL_CLAUDE_CONFIG_DIR=shared：不隔离，不写 CLAUDE_CONFIG_DIR（与 setup.sh 一致）。"""
+    sandbox.env_file.write_text("EASEL_CLAUDE_CONFIG_DIR=shared\n", encoding="utf-8")
     monkeypatch.setattr(la.shutil, "which", lambda c: "/usr/bin/claude" if c == "claude" else None)
     resp = sandbox.post("/api/settings/local-agents/enable", json={"id": "claude-code"})
     assert resp.status_code == 200, resp.text
     data = json.loads(sandbox.oc_file.read_text(encoding="utf-8"))
-    assert data["models"]["providers"]["anthropic"]["baseUrl"] == "https://my-relay.example.com"
+    assert "CLAUDE_CONFIG_DIR" not in data.get("env", {}).get("vars", {})
+    assert "easel gateway restart" not in resp.json()["note"]
+
+
+def test_enable_claude_code_rejects_relative_config_dir(sandbox, monkeypatch):
+    """EASEL_CLAUDE_CONFIG_DIR 是相对路径：400，配置一个字节都不动。"""
+    sandbox.env_file.write_text("EASEL_CLAUDE_CONFIG_DIR=claude-dir\n", encoding="utf-8")
+    monkeypatch.setattr(la.shutil, "which", lambda c: "/usr/bin/claude" if c == "claude" else None)
+    before = sandbox.oc_file.read_text(encoding="utf-8")
+    resp = sandbox.post("/api/settings/local-agents/enable", json={"id": "claude-code"})
+    assert resp.status_code == 400 and "绝对路径" in resp.json()["detail"]
+    assert sandbox.oc_file.read_text(encoding="utf-8") == before
+    assert "EASEL_AGENT_RUNTIME" not in sandbox.env_file.read_text(encoding="utf-8")
+
+
+def test_enable_claude_code_reports_login_command(sandbox, monkeypatch):
+    """独立配置目录里还没登录：照样接入，但提示里给出带目录的登录命令（网页做不了交互式登录）。"""
+    monkeypatch.setattr(la.shutil, "which", lambda c: "/usr/bin/claude" if c == "claude" else None)
+    monkeypatch.setattr(ccr, "login_problem", lambda cfg: "Claude CLI 未登录 —— 运行 CLAUDE_CONFIG_DIR=/x claude auth login")
+    resp = sandbox.post("/api/settings/local-agents/enable", json={"id": "claude-code"})
+    assert resp.status_code == 200, resp.text
+    assert "claude auth login" in resp.json()["note"]
 
 
 def test_enable_gemini_cli_writes_primary(sandbox, monkeypatch):
@@ -252,13 +281,14 @@ def test_detect_local_agents_includes_models_field(sandbox):
 
 
 def test_enable_with_chosen_model_switches_primary(sandbox, monkeypatch):
-    """enable 传 model=claude-opus-5-5 → 主模型必须是那个，不是默认 sonnet。"""
+    """enable 传 model=claude-opus-5-5 → 主模型必须是 anthropic/claude-opus-5-5，不是默认。"""
     monkeypatch.setattr(la.shutil, "which", lambda c: "/usr/bin/claude" if c == "claude" else None)
     resp = sandbox.post("/api/settings/local-agents/enable",
                         json={"id": "claude-code", "model": "claude-opus-5-5"})
     assert resp.status_code == 200, resp.text
     data = json.loads(sandbox.oc_file.read_text(encoding="utf-8"))
-    assert data["agents"]["defaults"]["model"]["primary"] == "claude-cli/claude-opus-5-5"
+    assert data["agents"]["defaults"]["model"]["primary"] == "anthropic/claude-opus-5-5"
+    assert data["agents"]["defaults"]["models"]["anthropic/claude-opus-5-5"]["agentRuntime"]["id"] == "claude-cli"
 
 
 def test_enable_rejects_model_not_in_catalog(sandbox, monkeypatch):
@@ -277,13 +307,40 @@ def test_enable_rejects_model_not_in_catalog(sandbox, monkeypatch):
     assert "可选" in resp.text
 
 
-def test_enable_default_model_unchanged_when_no_model_param(sandbox, monkeypatch):
-    """不传 model → 行为与此前完全一致（claude 默认 sonnet-4-6）。"""
+def test_enable_default_model_follows_setup_sh(sandbox, monkeypatch):
+    """不传 model：与 setup.sh 一样先看 .env 的 CLAUDE_MODEL，没有就用 anthropic/claude-opus-5。"""
     monkeypatch.setattr(la.shutil, "which", lambda c: "/usr/bin/claude" if c == "claude" else None)
     resp = sandbox.post("/api/settings/local-agents/enable", json={"id": "claude-code"})
     assert resp.status_code == 200
     data = json.loads(sandbox.oc_file.read_text(encoding="utf-8"))
-    assert data["agents"]["defaults"]["model"]["primary"] == "claude-cli/claude-sonnet-4-6"
+    assert data["agents"]["defaults"]["model"]["primary"] == "anthropic/claude-opus-5"
+
+    sandbox.env_file.write_text("CLAUDE_MODEL=claude-sonnet-4-6\n", encoding="utf-8")
+    resp = sandbox.post("/api/settings/local-agents/enable", json={"id": "claude-code"})
+    assert resp.status_code == 200
+    data = json.loads(sandbox.oc_file.read_text(encoding="utf-8"))
+    assert data["agents"]["defaults"]["model"]["primary"] == "anthropic/claude-sonnet-4-6"
+
+
+def _write_cfg(sandbox, cfg):
+    sandbox.oc_file.write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+
+
+def test_claude_code_configured_only_when_primary_runs_on_claude_cli(sandbox, monkeypatch):
+    """「已接入」看主模型实际走不走 Claude CLI（与 easel doctor 同一套判断），不是「有 anthropic provider」。"""
+    monkeypatch.setattr(la.shutil, "which", lambda c: "/usr/bin/claude" if c == "claude" else None)
+
+    def claude():
+        return next(a for a in la.detect_local_agents() if a["id"] == "claude-code")
+
+    _write_cfg(sandbox, {"models": {"providers": {"anthropic": {"apiKey": "sk-ant"}}},
+                         "agents": {"defaults": {"model": {"primary": "anthropic/claude-opus-5"}}}})
+    assert claude()["configured"] is False          # API Key 用户：有 provider，但不走 CLI
+    _write_cfg(sandbox, {"agents": {"defaults": {"model": {"primary": "anthropic/claude-opus-5"},
+                                                 "models": {"anthropic/claude-opus-5": {"agentRuntime": {"id": "claude-cli"}}}}}})
+    assert claude()["configured"] is True           # setup.sh / 一键接入写的新写法
+    _write_cfg(sandbox, {"agents": {"defaults": {"model": {"primary": "claude-cli/claude-opus-5"}}}})
+    assert claude()["configured"] is True           # 老写法仍认
 
 
 def test_gemini_cli_catalog_real(tmp_path, monkeypatch):
@@ -298,3 +355,84 @@ def test_gemini_cli_catalog_real(tmp_path, monkeypatch):
     ids = {m["id"] for m in cat}
     assert "gemini-3.1-pro-preview" in ids
     assert len(cat) >= 5
+
+
+def _enable_claude(sandbox, monkeypatch, **body):
+    monkeypatch.setattr(la.shutil, "which", lambda c: f"/usr/bin/{c}" if c in ("claude", "gemini") else None)
+    return sandbox.post("/api/settings/local-agents/enable", json={"id": "claude-code", **body})
+
+
+def _env_lines(sandbox):
+    return sandbox.env_file.read_text(encoding="utf-8").splitlines()
+
+
+def test_enable_claude_code_second_call_rewrites_nothing(sandbox, monkeypatch):
+    assert _enable_claude(sandbox, monkeypatch).status_code == 200
+    bak = sandbox.oc_file.parent / "openclaw.json.bak-web"
+    bak_before, env_before = bak.read_text(encoding="utf-8"), _env_lines(sandbox)
+    resp = _enable_claude(sandbox, monkeypatch)
+    assert resp.status_code == 200 and "此前已是" in resp.json()["note"]
+    assert bak.read_text(encoding="utf-8") == bak_before                 # 没变化不再备份
+    assert _env_lines(sandbox) == env_before and env_before.count("EASEL_AGENT_RUNTIME=claude-cli") == 1
+
+
+def test_enable_claude_code_malformed_config_is_400(sandbox, monkeypatch):
+    sandbox.oc_file.write_text("{ not json", encoding="utf-8")
+    resp = _enable_claude(sandbox, monkeypatch)
+    assert resp.status_code == 400 and "openclaw.json" in resp.json()["detail"]
+    assert "EASEL_AGENT_RUNTIME" not in sandbox.env_file.read_text(encoding="utf-8")
+    sandbox.oc_file.write_text(json.dumps({"agents": {"defaults": {"model": "openai/m"}}}), encoding="utf-8")
+    assert _enable_claude(sandbox, monkeypatch).status_code == 400   # 老的字符串写法之类：400，不是 500
+
+
+def test_enable_claude_code_model_rules(sandbox, monkeypatch):
+    """显式选了别家模型 → 400；.env 的 CLAUDE_MODEL 是别家的 → 与 setup.sh 一样打回默认；带引号的值照 shell 去引号。"""
+    assert _enable_claude(sandbox, monkeypatch, model="gpt-4o").status_code == 400
+    sandbox.env_file.write_text("CLAUDE_MODEL=openai/gpt-4o\n", encoding="utf-8")
+    assert _enable_claude(sandbox, monkeypatch).status_code == 200
+    primary = lambda: json.loads(sandbox.oc_file.read_text(encoding="utf-8"))["agents"]["defaults"]["model"]["primary"]
+    assert primary() == "anthropic/claude-opus-5"
+    sandbox.env_file.write_text('CLAUDE_MODEL="claude-sonnet-4-6"\nEASEL_CLAUDE_CONFIG_DIR=\'~/cc\'\n', encoding="utf-8")
+    assert _enable_claude(sandbox, monkeypatch).status_code == 200
+    assert primary() == "anthropic/claude-sonnet-4-6"
+    data = json.loads(sandbox.oc_file.read_text(encoding="utf-8"))
+    assert data["env"]["vars"]["CLAUDE_CONFIG_DIR"] == str(sandbox.home / "cc")
+
+
+def test_enable_claude_code_warns_when_inline_env_overrides(sandbox, monkeypatch):
+    """openclaw.json 里内联的 env.CLAUDE_CONFIG_DIR 盖过 env.vars（setup.sh 也会提醒）：说出实际生效的目录。"""
+    data = json.loads(sandbox.oc_file.read_text(encoding="utf-8"))
+    data["env"] = {"CLAUDE_CONFIG_DIR": "/somewhere/else"}
+    sandbox.oc_file.write_text(json.dumps(data), encoding="utf-8")
+    resp = _enable_claude(sandbox, monkeypatch)
+    assert resp.status_code == 200 and "/somewhere/else" in resp.json()["note"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX 权限位")
+def test_enable_claude_code_keeps_config_file_mode(sandbox, monkeypatch):
+    sandbox.oc_file.chmod(0o600)              # 里面有 API Key
+    assert _enable_claude(sandbox, monkeypatch).status_code == 200
+    assert sandbox.oc_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_switching_to_gemini_clears_claude_cli_flag(sandbox, monkeypatch):
+    """主模型从 Claude CLI 换走后，.env 里的 EASEL_AGENT_RUNTIME=claude-cli 要去掉，否则重跑 setup.sh 又切回来。"""
+    assert _enable_claude(sandbox, monkeypatch).status_code == 200
+    assert "EASEL_AGENT_RUNTIME=claude-cli" in _env_lines(sandbox)
+    resp = sandbox.post("/api/settings/local-agents/enable", json={"id": "gemini-cli"})
+    assert resp.status_code == 200, resp.text
+    assert not any(line.startswith("EASEL_AGENT_RUNTIME=") for line in _env_lines(sandbox))
+
+
+def test_saving_api_primary_leaves_claude_cli_route(sandbox, monkeypatch):
+    """设置里把 Anthropic API 行设为主：同名模型上的 agentRuntime=claude-cli 要摘掉（同 setup.sh 的 API 路线），
+    .env 的路线标记也去掉 —— 否则选了 API Key 实际仍走 Claude CLI。"""
+    assert _enable_claude(sandbox, monkeypatch).status_code == 200
+    resp = sandbox.post("/api/settings/models/save", json={"channel": "chat", "rows": [
+        {"slot": "anthropic", "model": "claude-opus-5", "key": "sk-ant-test", "primary": True}]})
+    assert resp.status_code == 200, resp.text
+    data = json.loads(sandbox.oc_file.read_text(encoding="utf-8"))
+    assert data["agents"]["defaults"]["model"]["primary"] == "anthropic/claude-opus-5"
+    assert "agentRuntime" not in data["agents"]["defaults"]["models"].get("anthropic/claude-opus-5", {})
+    assert not any(line.startswith("EASEL_AGENT_RUNTIME=") for line in _env_lines(sandbox))
+

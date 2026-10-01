@@ -1566,6 +1566,10 @@ def _sync_openclaw_chat(provider_updates: dict[str, dict], keep_custom: set[str]
             if ref.get('primary') != primary_ref:
                 ref['primary'] = primary_ref
                 changed = True
+            # 设置里选的是 API 供应商：同名模型上残留的 claude-cli runtime 会让它照旧走 Claude CLI
+            from easel.claude_cli_route import drop_claude_cli_runtime
+            if drop_claude_cli_runtime(data, primary_ref):
+                changed = True
         if not changed:
             return ''
         shutil.copy2(oc, oc.parent / (oc.name + '.bak-web'))
@@ -1776,6 +1780,9 @@ async def api_settings_models_save(req: ModelSaveRequest):
                                           updates.get('ANTHROPIC_API_KEY', ''))
             if _an:
                 note = f'{note}；{_an}' if note else _an
+        _left = _forget_claude_cli_route_if_left()
+        if _left:
+            note = f'{note}；{_left}' if note else _left
     resp = {"ok": True, "note": note}
     resp.update(_model_channels())
     return resp
@@ -1823,17 +1830,13 @@ async def api_local_agent_enable(req: LocalAgentEnableRequest):
         raise HTTPException(400, f"{agent['label']} 暂无底座后端，无法免 key 接入")
     chosen = (req.model or "").strip()
     catalog = catalog_for_provider(str(agent["openclawProvider"]))
+    if chosen and catalog and chosen not in {m["id"] for m in catalog}:
+        raise HTTPException(400, f"{chosen} 不在 {agent['label']} 的可选模型里（可选：{', '.join(str(m['id']) for m in catalog)}）")
     if provider == "claude-cli":
-        # base 必须读 .env（不是 os.environ）：面板/.env 里配的中转站或自建网关值
-        # 只在项目 .env 里，不在进程环境里 —— 用 os.environ 会永远拿到空，然后把
-        # 用户已配好的 baseUrl 静默覆盖成官方端点。
-        note = _declare_anthropic_provider(
-            (_read_env().get("ANTHROPIC_BASE_URL") or "").strip().rstrip("/")
-            or "https://api.anthropic.com")
-        model_id = chosen or "claude-sonnet-4-6"
-        # claude-cli 后端的模型走 provider=claude-cli；把主模型指过去
-        primary_ref = f"claude-cli/{model_id}"
-    elif provider == "google-gemini-cli":
+        # 与 setup.sh 的 claude-cli 路线同一套写法（easel/claude_cli_route.py）；登录探测最多等 20 秒，放线程里跑
+        note = await asyncio.to_thread(_enable_claude_cli_route, chosen)
+        return {"ok": True, "agent": agent, "note": note}
+    if provider == "google-gemini-cli":
         # google 插件的 CLI 后端默认启用（enabledByDefault），无需写 provider 块；
         # 接入 = 把主模型指到 CLI 后端的一个真实模型上。
         model_id = chosen or "gemini-3.1-pro-preview"
@@ -1843,14 +1846,109 @@ async def api_local_agent_enable(req: LocalAgentEnableRequest):
         # 不该到这：supported 的 CLI 都应在上面有明确分支。新后端接入时必须补写，
         # 否则会像 gemini 最初那样返回「已接入」却什么都没写（假成功）。
         raise HTTPException(500, f"{agent['label']} 的接入流程未实现（openclawProvider={provider}）")
-    if chosen and catalog and model_id not in {m["id"] for m in catalog}:
-        raise HTTPException(400, f"{model_id} 不在 {agent['label']} 的可选模型里（可选：{', '.join(str(m['id']) for m in catalog)}）")
     if primary_ref:
         _oc_note = _set_openclaw_primary(primary_ref)
         note = f"{note}；{_oc_note}" if note else _oc_note
         if not _oc_note:
             note = f"已接入（主模型此前已是 {primary_ref}）"
+        _left = _forget_claude_cli_route_if_left()
+        if _left:
+            note = f"{note}；{_left}"
     return {"ok": True, "agent": agent, "note": note or "已接入"}
+
+
+def _enable_claude_cli_route(chosen: str) -> str:
+    """一键接入 Claude Code：写法与 setup.sh 的 EASEL_AGENT_RUNTIME=claude-cli 路线一致，返回给用户的说明。
+
+    - openclaw.json：主模型 anthropic/<模型> + 模型级 agentRuntime=claude-cli（不写 provider），
+      env.vars.CLAUDE_CONFIG_DIR 指向独立的 Claude Code 配置目录（.env 的 EASEL_CLAUDE_CONFIG_DIR，默认 ~/.claude-easel）；
+    - .env 记下 EASEL_AGENT_RUNTIME=claude-cli，之后重跑 setup.sh 也保持这条路线，不会改回 API Key；
+    - 不重启 gateway（可能有任务在跑）：配置目录变了只提示用户自己重启。
+    """
+    from easel import claude_cli_route as ccr
+    from easel.commands.doctor import _claude_config_dir
+    env = _read_env()
+    model_ref = ccr.normalize_model(chosen or ccr.unquote(env.get("CLAUDE_MODEL", "")))
+    if model_ref is None:
+        if chosen:
+            raise HTTPException(400, f"{chosen} 不是 Claude 模型")
+        model_ref = ccr.DEFAULT_MODEL          # .env 的 CLAUDE_MODEL 是别家的：与 setup.sh 一样打回默认
+    config_dir, err = ccr.resolve_config_dir(ccr.unquote(env.get("EASEL_CLAUDE_CONFIG_DIR", "")), Path.home())
+    if err:
+        raise HTTPException(400, f"{err}；改好 .env 后再点")
+    oc = openclaw_config_path()
+    if not oc.is_file():
+        raise HTTPException(400, "openclaw.json 不存在，请先运行 bash setup.sh")
+    try:
+        data = json.loads(oc.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("顶层不是对象")
+        before = json.dumps(data, sort_keys=True, ensure_ascii=False)
+        dir_changed = ccr.apply_route(data, model_ref, config_dir)
+        after = json.dumps(data, sort_keys=True, ensure_ascii=False)
+    except (ValueError, TypeError, AttributeError) as e:
+        raise HTTPException(400, f"openclaw.json 读不了或结构不对（{e}）：先运行 bash setup.sh 或 easel doctor 查")
+    notes = []
+    # 先写 .env：万一后面写 openclaw.json 失败，重跑 setup.sh 也会按这条路线补齐
+    if ccr.unquote(env.get("EASEL_AGENT_RUNTIME", "")) != "claude-cli":
+        _write_env_direct({"EASEL_AGENT_RUNTIME": "claude-cli"})
+        env_note = "已在 .env 写入 EASEL_AGENT_RUNTIME=claude-cli，之后重跑 setup.sh 也保持这条路线"
+    else:
+        env_note = ""
+    if after != before:
+        shutil.copy2(oc, oc.parent / (oc.name + ".bak-web"))
+        tmp = oc.parent / (oc.name + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        shutil.copymode(oc, tmp)                # 里面可能有 API Key：别把 0600 换成默认权限
+        tmp.replace(oc)
+        notes.append(f"主模型已切到 {model_ref}，走 Claude CLI（复用本机 Claude Code 的登录，不用 API Key）")
+    else:
+        notes.append(f"已接入（主模型此前已是 {model_ref}，走 Claude CLI）")
+    if env_note:
+        notes.append(env_note)
+    if dir_changed:
+        notes.append(f"Claude Code 配置目录改为 {config_dir or '个人 ~/.claude'}：运行 easel gateway restart 生效，"
+                     "已有对话请 /reset 或新开")
+    # 内联的 env.CLAUDE_CONFIG_DIR、web 进程环境里导出的 CLAUDE_CONFIG_DIR 都会盖过 env.vars（setup.sh 同样提醒）
+    effective, source = _claude_config_dir(data)
+    if ccr.strip_slash(effective) != config_dir and (effective or config_dir):
+        notes.append(f"注意：实际生效的是{source}（{effective}），它优先于这里写的设置")
+    notes.extend(m for m in (ccr.ensure_resume_link(config_dir), ccr.login_problem(data)) if m)
+    return "；".join(notes)
+
+
+def _unset_env_direct(keys: set[str]) -> bool:
+    """从 .env 删掉这些键的行（注释不动），原子写。返回是否删了。"""
+    if not ENV_FILE.is_file():
+        return False
+    lines = ENV_FILE.read_text(encoding='utf-8').splitlines()
+    kept = [line for line in lines
+            if not (line.strip() and not line.strip().startswith('#') and '=' in line
+                    and line.split('=', 1)[0].strip() in keys)]
+    if len(kept) == len(lines):
+        return False
+    tmp = ENV_FILE.with_suffix('.env.tmp')
+    tmp.write_text('\n'.join(kept) + '\n', encoding='utf-8')
+    tmp.replace(ENV_FILE)
+    return True
+
+
+def _forget_claude_cli_route_if_left() -> str:
+    """主模型已不走 Claude CLI 时，去掉 .env 的 EASEL_AGENT_RUNTIME=claude-cli：setup.sh 把它排在一切 API Key 之前，
+    留着的话下次重跑 setup.sh 会把用户刚选的供应商又切回 Claude CLI。读不出配置就不动 .env。"""
+    from easel.claude_cli_route import CLAUDE_CLI_RUNTIME, unquote
+    if unquote(_read_env().get('EASEL_AGENT_RUNTIME', '')) != CLAUDE_CLI_RUNTIME:
+        return ''
+    try:
+        from easel.commands.doctor import _agent_runtime_id
+        data = json.loads(openclaw_config_path().read_text(encoding='utf-8'))
+        if not isinstance(data, dict) or _agent_runtime_id(data) == CLAUDE_CLI_RUNTIME:
+            return ''
+    except (OSError, ValueError):
+        return ''
+    if not _unset_env_direct({'EASEL_AGENT_RUNTIME'}):
+        return ''
+    return '主模型不再走 Claude CLI，已从 .env 去掉 EASEL_AGENT_RUNTIME'
 
 
 def _set_openclaw_primary(primary_ref: str) -> str:
@@ -1871,34 +1969,6 @@ def _set_openclaw_primary(primary_ref: str) -> str:
         return f'主模型已切到 {primary_ref}（下一条消息生效）'
     except Exception as e:  # noqa: BLE001
         return f'主模型切换失败：{e}'
-
-
-def _declare_anthropic_provider(base: str) -> str:
-    """在 openclaw.json 里声明 anthropic provider（apiKey 缺省走 CLI 登录态/auth store）。
-
-    与 setup.sh 的 oc_write_anthropic 同构；不写 key 时 agent 侧会回落到 claude-cli
-    后端复用本机 Claude Code 的登录。原子写 + .bak-web 备份。
-    """
-    try:
-        oc = openclaw_config_path()
-        if not oc.is_file():
-            return 'openclaw.json 不存在，请先运行 bash setup.sh'
-        data = json.loads(oc.read_text(encoding='utf-8'))
-        providers = data.setdefault('models', {}).setdefault('providers', {})
-        prov = providers.get('anthropic')
-        if isinstance(prov, dict) and prov.get('baseUrl') == base:
-            return ''
-        new_prov = dict(prov) if isinstance(prov, dict) else {'models': []}
-        new_prov['baseUrl'] = base
-        new_prov.setdefault('models', [])
-        providers['anthropic'] = new_prov
-        shutil.copy2(oc, oc.parent / (oc.name + '.bak-web'))
-        tmp = oc.parent / (oc.name + '.tmp')
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
-        tmp.replace(oc)
-        return 'anthropic provider 已声明'
-    except Exception as e:  # noqa: BLE001
-        return f'anthropic provider 声明失败：{e}'
 
 
 class SelftestRequest(BaseModel):

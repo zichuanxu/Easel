@@ -42,7 +42,10 @@ def test_local_agents_respects_state_dir_override(tmp_path, monkeypatch):
 
     monkeypatch.setenv("EASEL_OPENCLAW_STATE_DIR", str(tmp_path))
     oc = tmp_path / "openclaw.json"
-    oc.write_text(json.dumps({"models": {"providers": {"anthropic": {"baseUrl": "x"}}}}),
+    # Claude Code 的「已接入」= 主模型跑在 claude-cli runtime 上（与 setup.sh / easel doctor 一致）
+    oc.write_text(json.dumps({"agents": {"defaults": {
+        "model": {"primary": "anthropic/claude-opus-5"},
+        "models": {"anthropic/claude-opus-5": {"agentRuntime": {"id": "claude-cli"}}}}}}),
                   encoding="utf-8")
     monkeypatch.setattr(la.shutil, "which", lambda c: "/usr/bin/claude" if c == "claude" else None)
     by_id = {a["id"]: a for a in la.detect_local_agents()}

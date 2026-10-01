@@ -128,7 +128,7 @@ Tests put `web/` and `skills/shared/scripts/` on `sys.path`, then import `web/ap
 
 The root `conftest.py` has an autouse fixture that points `EASEL_OPENCLAW_STATE_DIR` at a temp dir for every test. It lives at the repo root because a `tests/conftest.py` collides with `skills/openclaw/skill-wechat-publisher/tests/conftest.py`: both directories have an `__init__.py`, so both files get the module name `tests.conftest`.
 
-The agent can run through OpenClaw's `claude-cli` runtime instead of an API key, using the local Claude Code login. Opt in with `EASEL_AGENT_RUNTIME=claude-cli` in `.env` (or setup wizard option 4). `setup.sh` then writes:
+The agent can run through OpenClaw's `claude-cli` runtime instead of an API key, using the local Claude Code login. Opt in with `EASEL_AGENT_RUNTIME=claude-cli` in `.env` (or setup wizard option 4, or Settings → 对话 → 本机 Agent 「一键接入」 for Claude Code, which writes the same config through `easel/claude_cli_route.py` and records `EASEL_AGENT_RUNTIME` in `.env`; keep its rules in step with `setup.sh`). `setup.sh` then writes:
 
 - `agents.defaults.models["anthropic/<model>"].agentRuntime.id = "claude-cli"`
 - `env.vars.CLAUDE_CONFIG_DIR`, default `~/.claude-easel`. `EASEL_CLAUDE_CONFIG_DIR=shared` disables isolation.

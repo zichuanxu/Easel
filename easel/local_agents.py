@@ -30,7 +30,11 @@ KNOWN_AGENT_CLIS: tuple[dict[str, object], ...] = (
         # openclaw.json 里的 provider 键名与后端 id 不同名：CLI 后端 = claude-cli，
         # 配置块 = anthropic（models.providers.anthropic）。
         "config_provider": "anthropic",
-        "login_hint": "在终端运行 claude 完成登录后，本机即无需再填 API Key。",
+        # 「已接入」看主模型实际跑在哪个 runtime 上（与 easel doctor 同一套判断）：
+        # 只有 anthropic provider 的 API Key 用户不算接入了 Claude Code
+        "configured_runtime": "claude-cli",
+        "login_hint": "接入后 Easel 用独立的 Claude Code 配置目录（默认 ~/.claude-easel），"
+                      "要在终端按提示单独登录一次；之后本机无需再填 API Key。",
     },
     {
         "id": "gemini-cli",
@@ -92,17 +96,27 @@ def _openclaw_config_path() -> Path:
     return config_path()
 
 
-def _configured_providers() -> set[str]:
-    """读 openclaw.json，返回已写入的 provider 名（用于判断本地 CLI 是否已接好）。"""
+def _read_openclaw_config() -> dict:
     cfg = _openclaw_config_path()
     if not cfg.is_file():
-        return set()
+        return {}
     try:
         data = json.loads(cfg.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return set()
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _configured_providers(data: dict) -> set[str]:
+    """已写入 openclaw.json 的 provider 名（用于判断本地 CLI 是否已接好）。"""
     providers = (data.get("models") or {}).get("providers") or {}
     return {k for k in providers if isinstance(k, str)}
+
+
+def _primary_runtime(data: dict) -> str | None:
+    from easel.commands.doctor import _agent_runtime_id
+
+    return _agent_runtime_id(data) if data else None
 
 
 def catalog_for_provider(openclaw_provider: str | None) -> list[dict[str, object]]:
@@ -161,7 +175,9 @@ def detect_local_agents() -> list[dict[str, object]]:
       configured            该 provider 是否已出现在 openclaw.json 里
       login_hint            给用户的一句话说明
     """
-    configured = _configured_providers()
+    data = _read_openclaw_config()
+    configured = _configured_providers(data)
+    runtime = _primary_runtime(data)
     out: list[dict[str, object]] = []
     for spec in KNOWN_AGENT_CLIS:
         found_cmd = ""
@@ -174,7 +190,10 @@ def detect_local_agents() -> list[dict[str, object]]:
         provider = spec["openclaw_provider"]
         config_provider = spec.get("config_provider")
         installed = bool(found_path)
-        is_configured = bool(config_provider) and config_provider in configured
+        if spec.get("configured_runtime"):
+            is_configured = runtime == spec["configured_runtime"]
+        else:
+            is_configured = bool(config_provider) and config_provider in configured
         out.append({
             "id": spec["id"],
             "label": spec["label"],
