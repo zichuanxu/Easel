@@ -248,3 +248,23 @@ def test_headed_keeps_default_user_agent(tmp_path):
     ch = UAChromium(HEADLESS_UA)
     ctx = base.open_context(SimpleNamespace(chromium=ch), tmp_path / "Prof", headed=True, env={})
     assert len(ch.calls) == 1 and "user_agent" not in ctx.kw
+
+
+def test_settle_unsure_when_cookie_present_but_never_stable():
+    """有登录 cookie、却等满都没稳定成登录态：说不准（None），调用方不能当成「未登录」。"""
+    mod = SimpleNamespace(COOKIE_URL="https://example.com", AUTH_COOKIES=("sid",), LOGIN_MARKERS=("/login",),
+                          is_logged_in=lambda page: False)
+    assert base.settle(FakePage(cookies=SID), mod, rounds=3, step_ms=1, stable=2) is None
+
+
+def test_settle_login_form_means_logged_out():
+    """平台不跳登录页、直接在首页给登录表单（Instagram）：看到表单就是可信的「未登录」。"""
+    class FormPage(FakePage):
+        def query_selector(self, sel):
+            return object() if sel == 'input[name="username"]' else None
+
+    mod = SimpleNamespace(COOKIE_URL="https://example.com", AUTH_COOKIES=("sid",), LOGIN_MARKERS=("/login",),
+                          LOGIN_FORM='input[name="username"]', is_logged_in=lambda page: False)
+    page = FormPage(cookies=SID)
+    assert base.settle(page, mod, rounds=5, step_ms=1, stable=2) is False
+    assert page.waits == 1

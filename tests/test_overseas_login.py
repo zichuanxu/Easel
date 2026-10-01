@@ -24,11 +24,22 @@ class Clock:
         return self.t
 
 
+class FakeCookies:
+    def __init__(self, page):
+        self.page = page
+
+    def cookies(self, urls=None):
+        w, pg = self.page.world, self.page
+        has = w.logged(pg) if pg.headed else (w.saved or w.stale)
+        return [{"name": "sid", "value": "v"}] if has else []
+
+
 class FakePage:
     def __init__(self, world, headed):
         self.world, self.headed = world, headed
         self.url = ""
         self.closed = False
+        self.context = FakeCookies(self)
 
     def goto(self, url, **_kw):
         if self.world.goto_error:
@@ -58,9 +69,11 @@ class World:
     """logged_after：有头窗口里等了几次之后登录成功（None = 一直不登录）；already：一打开就是登录态；
     saved：关掉窗口、无头重开后是否还是登录态。"""
 
-    def __init__(self, logged_after=None, saved=True, already=False):
+    def __init__(self, logged_after=None, saved=True, already=False, stale=False, flicker=()):
         self.clock = Clock()
         self.logged_after, self.saved, self.already = logged_after, saved, already
+        self.stale = stale            # 无头重开后 cookie 还在，但页面始终不是登录态（说不准）
+        self.flicker = set(flicker)   # 有头窗口里只在这几次等待时短暂显示登录态
         self.waits = 0
         self.launches: list[bool] = []
         self.goto_error: Exception | None = None
@@ -69,7 +82,8 @@ class World:
 
     def logged(self, page) -> bool:
         if page.headed:
-            return self.already or (self.logged_after is not None and self.waits >= self.logged_after)
+            return (self.already or self.waits in self.flicker
+                    or (self.logged_after is not None and self.waits >= self.logged_after))
         return self.saved
 
     @contextmanager
@@ -84,6 +98,7 @@ def make_mod(world):
     return SimpleNamespace(
         KEY="demo", NAME="Demo", PROFILE="DemoProfile",
         HOME_URL="https://demo.test/home", LOGIN_URL="https://demo.test/login", LOGIN_MARKERS=("/login",),
+        COOKIE_URL="https://demo.test", AUTH_COOKIES=("sid",),
         is_logged_in=world.logged,
         read_identity=lambda page: {"name": "Alice", "avatar": "https://cdn/a.jpg"},
     )
@@ -265,3 +280,25 @@ def test_cli_platforms_lists_all(capsys):
 def test_selftest_passes(capsys):
     assert op.main(["selftest"]) == 0
     assert "✅" in capsys.readouterr().out
+
+
+def test_login_window_stays_open_through_a_flicker(tmp_path, states):
+    """旧 cookie 让页面短暂显示登录态又跳回登录页：不能就此关窗口（否则重登永远失败）。"""
+    world = World(flicker={0}, logged_after=5)
+    rc, final = run(world, tmp_path)
+    assert rc == 0 and final["state"] == "success"
+    assert world.waits >= 5
+
+
+def test_verify_unsettled_is_not_reported_as_not_saved(tmp_path, states):
+    """重开确认时页面一直没稳定（cookie 在、却始终不是登录态）：报「确认出错」，不报「没保存」。"""
+    rc, final = run(World(logged_after=1, saved=False, stale=True), tmp_path)
+    assert rc == 1
+    assert final["state"] == "error" and final["message"].startswith("登录已完成，但确认登录态时")
+
+
+def test_whoami_unsettled_is_unconfident(tmp_path):
+    """慢网 / 一直没稳定：带 error 交给后端，不能当成可信的「未登录」去删登录标记。"""
+    (tmp_path / "profiles" / "DemoProfile").mkdir(parents=True)
+    res = _whoami(World(saved=False, stale=True), tmp_path)
+    assert res["loggedIn"] is False and res.get("error")

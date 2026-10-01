@@ -132,21 +132,38 @@ def on_login_page(page, markers) -> bool:
     return any(m.lower() in url for m in markers)
 
 
-def settle(page, mod, *, rounds: int = 12, step_ms: int = 800, stable: int = 3) -> bool:
-    """等客户端跳转落定再下结论：连续 stable 轮都是登录态才算已登录；落到登录页、或等满都没稳定，算未登录。
-    会话过期时登录 cookie 往往还在，页面要过几秒才跳回登录页——只看第一眼会误判成已登录。"""
+def shows_login_form(page, selector: str) -> bool:
+    """页面上有登录表单（有的平台会话失效时不跳登录页，直接在首页给表单，如 Instagram）。"""
+    if not selector:
+        return False
+    try:
+        return page.query_selector(selector) is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def settle(page, mod, *, rounds: int = 12, step_ms: int = 800, stable: int = 3) -> bool | None:
+    """等客户端跳转落定再下结论，三种结果：
+    - True：连续 stable 轮都是登录态。会话过期时登录 cookie 往往还在、页面过几秒才跳回登录页——只看第一眼会误判。
+    - False：可信的未登录——落到登录页 / 出现登录表单（模块的 LOGIN_FORM），或等满了连登录 cookie 都没有。
+    - None：说不准——有登录 cookie 却一直没稳定成登录态（慢网、页面卡住）。调用方不能据此当成未登录。"""
     streak = 0
+    login_form = getattr(mod, "LOGIN_FORM", "")
     for _ in range(rounds):
         page.wait_for_timeout(step_ms)
         try:
-            if on_login_page(page, mod.LOGIN_MARKERS):
+            if on_login_page(page, mod.LOGIN_MARKERS) or shows_login_form(page, login_form):
                 return False
             streak = streak + 1 if mod.is_logged_in(page) else 0
         except Exception:  # noqa: BLE001
             streak = 0
         if streak >= stable:
             return True
-    return False
+    try:
+        has_cookie = has_auth_cookie(page, mod.COOKIE_URL, mod.AUTH_COOKIES)
+    except Exception:  # noqa: BLE001 — 判断不了就当说不准
+        return None
+    return None if has_cookie else False
 
 
 def _split(selectors: str) -> list[str]:

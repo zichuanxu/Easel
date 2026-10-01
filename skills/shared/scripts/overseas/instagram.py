@@ -16,6 +16,8 @@ LOGIN_URL = "https://www.instagram.com/accounts/login/"
 COOKIE_URL = "https://www.instagram.com"
 AUTH_COOKIES = ("sessionid",)
 LOGIN_MARKERS = ("/accounts/login", "/challenge")
+# 会话失效时 Instagram 不跳登录页，直接在首页给登录表单：看到它就是未登录（旧 sessionid 可能还在）
+LOGIN_FORM = 'input[name="username"]'
 KINDS = frozenset({"video", "image"})
 LIMITS = Limits(caption=2200, hashtags=30, images=10)
 VISIBILITY: tuple[str, ...] = ()
@@ -39,7 +41,8 @@ def compose(post: Post) -> dict:
 
 
 def is_logged_in(page) -> bool:
-    return base.has_auth_cookie(page, COOKIE_URL, AUTH_COOKIES) and not base.on_login_page(page, LOGIN_MARKERS)
+    return (base.has_auth_cookie(page, COOKIE_URL, AUTH_COOKIES) and not base.on_login_page(page, LOGIN_MARKERS)
+            and not base.shows_login_form(page, LOGIN_FORM))
 
 
 def read_identity(page) -> dict:

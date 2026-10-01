@@ -22,9 +22,13 @@ class FakeContext:
 
 
 class FakePage:
-    def __init__(self, url, cookies=()):
+    def __init__(self, url, cookies=(), form=False):
         self.url = url
         self.context = FakeContext(list(cookies))
+        self.form = form
+
+    def query_selector(self, _sel):
+        return object() if self.form else None
 
 
 def test_registry_has_five_platforms_with_unique_profiles():
@@ -184,3 +188,11 @@ def test_youtube_identity_reads_header_avatar():
 
     assert PLATFORMS["youtube"].read_identity(Page()) == {"name": "", "avatar": "https://yt3.example/a=s88"}
 
+
+
+def test_instagram_login_form_on_home_means_logged_out():
+    """Instagram 会话失效时不跳登录页，直接在首页给登录表单：旧 sessionid 还在也要判未登录。"""
+    ig = PLATFORMS["instagram"]
+    good = [{"name": "sessionid", "value": "v"}]
+    assert ig.is_logged_in(FakePage(ig.HOME_URL, good))
+    assert not ig.is_logged_in(FakePage(ig.HOME_URL, good, form=True))

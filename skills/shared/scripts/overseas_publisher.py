@@ -73,7 +73,10 @@ def _login_locked(mod, sf, timeout_s, profile, launch, clock) -> int:
                 base.ensure_window_open(page)
                 if mod.is_logged_in(page):
                     page.wait_for_timeout(COOKIE_SETTLE_MS)
-                    break
+                    # 再看一眼：旧 cookie 会让页面短暂显示登录态又跳回登录页，这时关窗口重登就永远失败
+                    if mod.is_logged_in(page):
+                        break
+                    continue
                 if clock() >= deadline:
                     return _fail(sf, "expired", EXPIRED_MSG.format(minutes=minutes))
                 page.wait_for_timeout(LOGIN_POLL_MS)
@@ -99,7 +102,10 @@ def _verify_saved(mod, profile, launch) -> dict | None:
     with launch(profile, headed=False) as ctx:
         page = base.first_page(ctx)
         page.goto(mod.HOME_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
-        if not base.settle(page, mod):
+        state = base.settle(page, mod)
+        if state is None:
+            raise RuntimeError("页面一直没稳定下来，登录态没法确认")
+        if not state:
             return None
         return mod.read_identity(page)
 
@@ -121,7 +127,10 @@ def run_whoami(mod, *, launch=base.launch, profile_root=None) -> dict:
         with launch(profile, headed=False) as ctx:
             page = base.first_page(ctx)
             page.goto(mod.HOME_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT_MS)
-            if base.settle(page, mod):
+            state = base.settle(page, mod)
+            if state is None:
+                result["error"] = "登录态未能确认（页面一直没稳定下来）"
+            elif state:
                 result["loggedIn"] = True
                 result.update(mod.read_identity(page))
     except Exception as e:  # noqa: BLE001 — whoami 永远输出 JSON
