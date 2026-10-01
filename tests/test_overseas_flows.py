@@ -338,3 +338,9 @@ def test_youtube_without_channel_says_so():
     p = post(title="T")
     with pytest.raises(base.StepFailed, match="频道"):
         YT.publish(d, YT.compose(p), p)
+
+
+def test_threads_post_button_matches_nested_label():
+    """真机：Threads 的「Post」按钮是 div[role=button] > div > 文字，Playwright 的 :text-is 只匹配直接装着文字的
+    最小元素，外层按钮匹配不上（2026-10-01 真发时点不到）。要用 :has(:text-is("Post"))，且不能误中「Post Options」。"""
+    assert TH.POST_BUTTON == '[role="dialog"] div[role="button"]:has(:text-is("Post"))'

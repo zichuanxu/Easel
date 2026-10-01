@@ -31,7 +31,8 @@ DIALOG = '[role="dialog"]'
 TEXTBOX = f'{DIALOG} [role="textbox"]'
 FILE_INPUT = f'{DIALOG} input[type="file"]'
 MEDIA_READY = f'{DIALOG} video'
-POST_BUTTON = f'{DIALOG} div[role="button"]:text-is("Post")'   # 精确匹配，别点成 Post Options
+# 按钮是 div[role=button] > div > 「Post」：:text-is 只匹配直接装着文字的那层，所以用 :has；精确匹配，别点成 Post Options
+POST_BUTTON = f'{DIALOG} div[role="button"]:has(:text-is("Post"))'
 POSTED_LINK = 'a[href*="/post/"]:has-text("View")'
 POST_WAIT_S = 120
 _ME_JS = """() => {
