@@ -74,11 +74,14 @@ def publish(drv, fields: dict, post: Post) -> base.Result:
     drv.click(option(VISIBILITY_LABEL[fields["visibility"]]))
     if not drv.wait_enabled(POST_BUTTON, 120000):
         raise base.StepFailed("发布按钮一直不能点")
-    drv.click(POST_BUTTON)
+    drv.commit(POST_BUTTON)
     for _ in range(POST_WAIT_S):
         if "/tiktokstudio/content" in drv.url():
             return base.Result("success", message="已发布到 TikTok")
         if drv.visible(POST_NOW):
-            drv.click(POST_NOW)
+            try:
+                drv.click(POST_NOW, 5000)
+            except base.StepFailed:
+                pass                 # 确认框自己消失了（内容检查刚好跑完）：接着等跳转
         drv.pause(1000)
     return base.Result("unknown", message="点了发布，但页面没跳到作品管理")

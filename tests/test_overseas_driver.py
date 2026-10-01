@@ -122,6 +122,57 @@ def test_goto_onto_challenge_page_raises_blocked():
     assert page.url == "https://x.com/home"
 
 
+def _challenge_cleared_after(page, ms):
+    """模拟用户在窗口里过验证：等够 ms 后页面离开验证页，之后再打开目标页也不再被拦。"""
+    gotos: list[str] = []
+    real_goto = page.goto
+
+    def goto(url, wait_until=None, timeout=None):
+        gotos.append(url)
+        real_goto(url, wait_until, timeout)
+
+    def wait(n):
+        page.waited += n
+        if page.waited >= ms:
+            page.url = "https://www.instagram.com/"
+            page.after_goto = None
+
+    page.goto, page.wait_for_timeout = goto, wait
+    return gotos
+
+
+def test_goto_headed_waits_for_user_to_clear_challenge_then_reopens_target():
+    """有头窗口落到验证页：等用户在窗口里过验证，过了再重开目标页，不是一看到验证页就关窗口（Final review 1）。"""
+    page = FakePWPage()
+    page.after_goto = "https://www.instagram.com/challenge/?next=/"
+    gotos = _challenge_cleared_after(page, 6000)
+    base.PageDriver(page, pace=(0, 0), block_wait_ms=60000).goto("https://www.instagram.com/create/")
+    assert gotos == ["https://www.instagram.com/create/", "https://www.instagram.com/create/"]
+    assert page.url == "https://www.instagram.com/create/"
+
+
+def test_goto_headed_gives_up_when_challenge_never_cleared():
+    page = FakePWPage()
+    page.after_goto = "https://www.instagram.com/challenge/?next=/"
+    _challenge_cleared_after(page, 10 ** 9)
+    with pytest.raises(base.Blocked):
+        base.PageDriver(page, pace=(0, 0), block_wait_ms=8000).goto("https://www.instagram.com/")
+    assert 8000 <= page.waited < 12000
+
+
+def test_commit_marks_committed_before_clicking():
+    """点最终发布按钮前就记下 committed：点击本身报错也可能已经发出去了（Final review 2）。"""
+    page = FakePWPage()
+    drv = drv_for(page)
+    assert drv.committed is False
+    with pytest.raises(base.StepFailed):
+        drv.commit("#post", timeout_ms=10)
+    assert drv.committed is True
+    page.present.add("#post")
+    drv.commit("#post")
+    assert page.clicks == ["#post"]
+
+
 def test_wait_enabled_respects_aria_disabled():
     page = FakePWPage()
     page.present.add("#post")

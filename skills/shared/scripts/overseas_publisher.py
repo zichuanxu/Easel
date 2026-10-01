@@ -47,6 +47,7 @@ EXIT_PLAYWRIGHT = 3
 EXIT_UNKNOWN = 5
 EXIT_NOT_LOGGED_IN = 6
 PUBLISH_LOCK_WAIT_S = 60
+VERIFY_WAIT_MS = 300000       # 有头窗口里落到验证页时，等用户亲手过验证的最长时间
 UNKNOWN_MSG = "{name}：{detail}。结果待确认，请先到 {name} 上看一眼，不要直接重发"
 STEP_FAILED_MSG = "{name} 发布失败：{err}（页面可能改版了，现场截图在 outputs/_login/{key}-publish-fail.png）"
 
@@ -212,8 +213,10 @@ def run_publish(mod, post: Post, fields: dict, *, headed: bool = False, status_f
 
 def _publish_once(mod, post, fields, headed, sf, launch, driver_cls, profile, record) -> int:
     with launch(profile, headed=headed) as ctx:
-        drv = driver_cls(base.first_page(ctx))
-        login_state.write_status(sf, "publishing", f"正在打开 {mod.NAME}…")
+        drv = driver_cls(base.first_page(ctx), block_wait_ms=VERIFY_WAIT_MS if headed else 0)
+        opening = (f"已弹出 {mod.NAME} 窗口，别关掉它；要人工验证就在窗口里完成（最长 {VERIFY_WAIT_MS // 60000} 分钟）"
+                   if headed else f"正在打开 {mod.NAME}…")
+        login_state.write_status(sf, "publishing", opening)
         drv.goto(mod.HOME_URL)
         state = drv.settle(mod)
         if state is None:
@@ -223,9 +226,13 @@ def _publish_once(mod, post, fields, headed, sf, launch, driver_cls, profile, re
         login_state.write_status(sf, "publishing", f"正在发布到 {mod.NAME}（上传和处理视频可能要几分钟）…")
         try:
             result = mod.publish(drv, fields, post)
-        except base.StepFailed as e:
-            base.save_failure(drv.page, mod.KEY)
-            return _pub_fail(sf, STEP_FAILED_MSG.format(name=mod.NAME, err=e, key=mod.KEY), 1)
+        except Exception as e:  # noqa: BLE001 — 点了发布之后出任何错都可能已经发出去了，只能报待确认
+            if not drv.committed:
+                if isinstance(e, base.StepFailed):
+                    base.save_failure(drv.page, mod.KEY)
+                    return _pub_fail(sf, STEP_FAILED_MSG.format(name=mod.NAME, err=e, key=mod.KEY), 1)
+                raise
+            result = base.Result("unknown", message=f"点了发布之后出错（{base.short_err(e)}）")
         if result.status == "success":
             msg = result.message or f"已发布到 {mod.NAME}"
             if result.url:

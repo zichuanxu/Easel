@@ -6,6 +6,7 @@ import asyncio
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -156,6 +157,33 @@ def test_publish_overseas_runs_async_with_exact_title(monkeypatch, tmp_path):
     assert cmd[cmd.index("--visibility") + 1] == "only_me"
     assert cmd[cmd.index("--media") + 1].endswith("clip.mp4")
     assert "--exec" in cmd and "--status-file" in cmd
+
+
+def test_second_publish_same_platform_while_running_is_409(monkeypatch, tmp_path):
+    """同一平台上一条还在发：第二次请求直接 409。排队等登录目录锁会在第一条发完后把同一条再发一遍（Final review 3）。"""
+    _outputs_with(tmp_path, monkeypatch, "clip.mp4", b"\x00")
+    release = threading.Event()
+    runs: list[str] = []
+
+    def fake_bg(platform, *_a):
+        runs.append(platform)
+        release.wait(5)
+
+    monkeypatch.setattr(web, "_run_publish_bg", fake_bg)
+    monkeypatch.setattr(web, "_PUBLISH_THREADS", {}, raising=False)
+    req = web.PublishRequest(body="Hello", media=["proj/clip.mp4"])
+    try:
+        assert asyncio.run(web.api_publish("x", req))["async"] is True
+        with pytest.raises(web.HTTPException) as ei:
+            asyncio.run(web.api_publish("x", req))
+        assert ei.value.status_code == 409 and "正在发布" in ei.value.detail
+        assert asyncio.run(web.api_publish("threads", req))["async"] is True     # 别的平台不受影响
+    finally:
+        release.set()
+    for t in list(web._PUBLISH_THREADS.values()):
+        t.join(5)
+    assert asyncio.run(web.api_publish("x", req))["async"] is True               # 上一条结束后可以再发
+    assert runs.count("x") == 2
 
 
 def test_publish_overseas_requires_video_for_now(monkeypatch, tmp_path):

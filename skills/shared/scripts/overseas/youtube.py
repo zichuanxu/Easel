@@ -77,7 +77,7 @@ def publish(drv, fields: dict, post: Post) -> base.Result:
     for _ in range(3):
         drv.click(NEXT)
     drv.click(VISIBILITY_RADIO[fields["visibility"]])
-    drv.click(DONE)
+    drv.commit(DONE)
     for _ in range(POST_WAIT_S):
         if drv.visible(PUBLISHED_LINK):
             return base.Result("success", url=drv.attr(PUBLISHED_LINK, "href"), message="已发布到 YouTube")

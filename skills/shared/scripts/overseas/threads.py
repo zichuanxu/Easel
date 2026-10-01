@@ -35,6 +35,7 @@ MEDIA_READY = f'{DIALOG} video'
 POST_BUTTON = f'{DIALOG} div[role="button"]:has(:text-is("Post"))'
 POSTED_LINK = 'a[href*="/post/"]:has-text("View")'
 POST_WAIT_S = 120
+PROCESS_WAIT_MS = 300000                 # 视频传完之前 Post 是灰的
 _ME_JS = """() => {
   let user = '';
   for (const a of document.querySelectorAll('a[href^="/@"]')) {
@@ -77,7 +78,9 @@ def publish(drv, fields: dict, post: Post) -> base.Result:
     if not drv.wait_for(MEDIA_READY, 120000):
         raise base.StepFailed("视频没挂上（弹窗里没出现视频预览）")
     drv.type_text(TEXTBOX, fields["caption"], clear=False)
-    drv.click(POST_BUTTON)
+    if not drv.wait_enabled(POST_BUTTON, PROCESS_WAIT_MS):
+        raise base.StepFailed("视频处理超时，发布按钮一直不能点")
+    drv.commit(POST_BUTTON)
     for _ in range(POST_WAIT_S):
         if not drv.visible(DIALOG) and drv.visible(POSTED_LINK):
             href = drv.attr(POSTED_LINK, "href")

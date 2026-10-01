@@ -37,6 +37,7 @@ CAPTION = f'{DIALOG} [role="textbox"][aria-label^="Add a caption"]'
 SHARE = f'{DIALOG} div[role="button"]:text-is("Share")'
 POPUPS = ('button:text-is("Not Now")',)      # 首页「开启通知」弹窗
 POST_WAIT_S = 300                            # Reels 要转码，最长等 5 分钟
+SHARE_ENABLED_WAIT_MS = 60000
 
 
 def heading(text: str) -> str:
@@ -92,9 +93,13 @@ def publish(drv, fields: dict, post: Post) -> base.Result:
     if not drv.wait_for(CAPTION, 30000):
         raise base.StepFailed("没到写说明那一步")
     drv.type_text(CAPTION, fields["caption"], clear=False)
-    drv.click(SHARE)
+    if not drv.wait_enabled(SHARE, SHARE_ENABLED_WAIT_MS):
+        raise base.StepFailed("分享按钮一直不能点")
+    drv.commit(SHARE)
     for _ in range(POST_WAIT_S):
-        text = drv.text(DIALOG).lower()
+        # 还停在写说明页时弹窗文字里有用户自己写的说明（可能就含 shared / couldn't），先把它去掉再判断
+        mine = drv.text(CAPTION) if drv.count(CAPTION) else ""      # 说明框不在了就别等它（text 找不到要等 2 秒）
+        text = drv.text(DIALOG).replace(mine, "").lower()
         if "shared" in text and "couldn" not in text:
             return base.Result("success", message="已发布到 Instagram")
         if "couldn" in text or "try again" in text:

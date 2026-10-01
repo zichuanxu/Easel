@@ -57,7 +57,7 @@ def publish(drv, fields: dict, post: Post) -> base.Result:
     drv.type_text(TEXTBOX, fields["caption"])
     if not drv.wait_enabled(POST_BUTTON, PROCESS_WAIT_MS):
         raise base.StepFailed("视频处理超时，发布按钮一直不能点")
-    drv.click(POST_BUTTON)
+    drv.commit(POST_BUTTON)
     for _ in range(POST_WAIT_S):
         if "sent" in drv.text(TOAST).lower():
             href = drv.attr(TOAST_LINK, "href")

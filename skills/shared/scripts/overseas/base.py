@@ -290,11 +290,15 @@ class Result:
 
 class PageDriver:
     """平台发布流程只通过它操作页面，离线测试里换成按剧本走的假驱动。
-    pace：每个动作后随机停顿的秒数区间（像人一样操作，测试里传 (0, 0)）。"""
+    pace：每个动作后随机停顿的秒数区间（像人一样操作，测试里传 (0, 0)）。
+    block_wait_ms：落到验证页时等用户在窗口里过验证的最长时间；0 = 不等直接抛 Blocked（无头时）。
+    committed：已经点了最终的发布按钮，之后出任何错都可能已经发出去了。"""
 
-    def __init__(self, page, *, pace: tuple[float, float] = (0.25, 0.7)):
+    def __init__(self, page, *, pace: tuple[float, float] = (0.25, 0.7), block_wait_ms: int = 0):
         self.page = page
         self.pace = pace
+        self.block_wait_ms = block_wait_ms
+        self.committed = False
 
     def _rest(self) -> None:
         lo, hi = self.pace
@@ -303,9 +307,27 @@ class PageDriver:
 
     def goto(self, url: str, timeout_ms: int = 60000) -> None:
         self.page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-        now = self.url().lower()
-        if any(m in now for m in BLOCK_MARKERS):
+        if not self._blocked():
+            return
+        if not self._wait_unblocked():
             raise Blocked(f"被带到了验证页：{self.url()}")
+        # 用户在窗口里过了验证：平台多半把人带回首页，重开一次目标页
+        self.page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        if self._blocked():
+            raise Blocked(f"过了验证又被带到验证页：{self.url()}")
+
+    def _blocked(self) -> bool:
+        now = self.url().lower()
+        return any(m in now for m in BLOCK_MARKERS)
+
+    def _wait_unblocked(self, step_ms: int = 2000) -> bool:
+        waited = 0
+        while waited < self.block_wait_ms:
+            self.page.wait_for_timeout(step_ms)
+            waited += step_ms
+            if not self._blocked():
+                return True
+        return False
 
     def url(self) -> str:
         try:
@@ -332,6 +354,11 @@ class PageDriver:
         except Exception as e:  # noqa: BLE001
             raise StepFailed(f"点不到 {sel}：{short_err(e)}") from e
         self._rest()
+
+    def commit(self, sel: str, timeout_ms: int = 15000) -> None:
+        """点最终的发布 / 分享按钮。点之前就记下 committed：点击本身报错也可能已经发出去了。"""
+        self.committed = True
+        self.click(sel, timeout_ms)
 
     def upload(self, sel: str, files, timeout_ms: int = 30000) -> None:
         try:

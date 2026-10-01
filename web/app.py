@@ -3794,18 +3794,27 @@ def _run_publish_bg(platform: str, cmd: list, title: str, body: str, cfg: dict,
             pass
 
 
+_PUBLISH_THREADS: dict[str, threading.Thread] = {}   # 平台 → 正在跑的异步发布线程
+
+
 def _start_async_publish(platform: str, cmd: list, title: str, body: str, cfg: dict,
                          status_file: Path, code_file: Path) -> dict:
     """启动异步发布：清旧码/状态 → 起后台线程 → 立即返回。前端轮询 /api/publish/{p}/status，
-    遇 sms_required 弹输入框、提交到 /api/publish/{p}/sms。"""
+    遇 sms_required 弹输入框、提交到 /api/publish/{p}/sms。
+    同一平台上一条还在发就 409：放第二条进来会盖掉状态文件，还会排队等登录目录锁、在第一条发完后再发一遍。"""
+    running = _PUBLISH_THREADS.get(platform)
+    if running is not None and running.is_alive():
+        raise HTTPException(409, f"{cfg['name']} 正在发布上一条，等它结束再发")
     try:
         code_file.unlink()
     except OSError:
         pass
     _write_publish_status(status_file, 'starting', '发布中…（若触发风控会要求短信验证）')
-    threading.Thread(target=_run_publish_bg,
-                     args=(platform, cmd, title, body, cfg, status_file, code_file),
-                     daemon=True).start()
+    worker = threading.Thread(target=_run_publish_bg,
+                              args=(platform, cmd, title, body, cfg, status_file, code_file),
+                              daemon=True)
+    _PUBLISH_THREADS[platform] = worker
+    worker.start()
     # 关键：**不返回 ok:true**——这只是「已启动」的应答，真正结果要靠轮询 /status。
     # 若这里给 ok:true，旧前端会把它当「已发布」立刻显示成功（假成功 bug，真机踩过）。
     return {'async': True, 'pending': True, 'message': '发布已启动，请稍候…'}

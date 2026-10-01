@@ -18,9 +18,11 @@ from overseas.post import Limits, Post, caption_text  # noqa: E402
 
 
 class FakeDrv:
-    def __init__(self, page):
+    def __init__(self, page, *, block_wait_ms=0):
         self.page = page
         self.world = page.world
+        self.committed = False
+        self.world.block_waits.append(block_wait_ms)
 
     def goto(self, url, timeout_ms=60000):
         if self.world.blocked_headless and not self.page.headed:
@@ -31,10 +33,12 @@ class FakeDrv:
 
 
 class World:
-    def __init__(self, *, logged=True, result=None, raises=None, blocked_headless=False):
+    def __init__(self, *, logged=True, result=None, raises=None, blocked_headless=False, commit_first=False):
         self.logged, self.result, self.raises = logged, result, raises
         self.blocked_headless = blocked_headless
+        self.commit_first = commit_first         # 先点了最终发布按钮再出错
         self.launches: list[bool] = []
+        self.block_waits: list[int] = []
         self.published = 0
 
     @contextmanager
@@ -47,6 +51,8 @@ class World:
 def make_mod(world):
     def publish(drv, fields, post):
         world.published += 1
+        if world.commit_first:
+            drv.committed = True
         if world.raises:
             raise world.raises
         return world.result or base.Result("success", url="https://demo.test/p/1")
@@ -102,6 +108,18 @@ def test_step_failed_is_exit_1_with_hint(env):
     assert rc == 1 and "找不到发布按钮" in status["message"] and "改版" in status["message"]
 
 
+@pytest.mark.parametrize("err", [base.StepFailed("点不到 Post now"),
+                                 RuntimeError("Target page, context or browser has been closed")])
+def test_error_after_post_click_is_unknown_exit_5(env, err):
+    """点了最终发布按钮之后出任何错：可能已经发出去了，只能报待确认、退出码 5，不重试不记日历（Final review 2）。"""
+    tmp_path, video = env
+    world = World(raises=err, commit_first=True)
+    rc, status, recorded = run(world, tmp_path, video)
+    assert rc == op.EXIT_UNKNOWN
+    assert status["state"] == "error" and "不要直接重发" in status["message"]
+    assert world.published == 1 and recorded == [] and world.launches == [False]
+
+
 def test_failed_result_is_exit_1(env):
     tmp_path, video = env
     rc, status, recorded = run(World(result=base.Result("failed", message="平台拒绝")), tmp_path, video)
@@ -137,6 +155,14 @@ def test_blocked_headless_retries_headed_once(env):
     world = World(blocked_headless=True)
     rc, status, _ = run(world, tmp_path, video)
     assert rc == 0 and world.launches == [False, True]
+
+
+def test_headed_retry_gives_user_time_to_verify(env):
+    """无头被拦改开窗口：窗口里的驱动要等用户过验证，无头那次不等（Final review 1）。"""
+    tmp_path, video = env
+    world = World(blocked_headless=True)
+    rc, _, _ = run(world, tmp_path, video)
+    assert rc == 0 and world.block_waits == [0, op.VERIFY_WAIT_MS] and op.VERIFY_WAIT_MS >= 120000
 
 
 def test_blocked_even_when_headed_is_error(env):

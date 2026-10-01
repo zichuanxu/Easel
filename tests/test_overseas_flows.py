@@ -28,6 +28,7 @@ class FakeDriver:
         self.hooks: dict = {}
         self.paused = 0
         self.page = None
+        self.committed = False
 
     def _do(self, act, sel, *extra):
         self.actions.append((act, sel, *extra))
@@ -52,6 +53,11 @@ class FakeDriver:
         if sel not in self.visible_set:
             raise base.StepFailed(f"点不到 {sel}")
         self._do("click", sel)
+
+    def commit(self, sel, timeout_ms=15000):
+        self.committed = True
+        self.actions.append(("commit", sel))
+        self.click(sel, timeout_ms)
 
     def upload(self, sel, files, timeout_ms=30000):
         self._do("upload", sel, tuple(str(f) for f in files))
@@ -160,7 +166,7 @@ TH = PLATFORMS["threads"]
 
 
 def threads_driver():
-    d = FakeDriver(visible={TH.OPEN_COMPOSER})
+    d = FakeDriver(visible={TH.OPEN_COMPOSER}, enabled={TH.POST_BUTTON})
     d.hooks[("click", TH.OPEN_COMPOSER)] = lambda dr: dr.visible_set.update({TH.TEXTBOX, TH.DIALOG})
     d.hooks[("upload", TH.FILE_INPUT)] = lambda dr: dr.visible_set.update({TH.MEDIA_READY, TH.POST_BUTTON})
 
@@ -182,6 +188,16 @@ def test_threads_publishes_video():
     assert TH.READY_KINDS == {"video"}
 
 
+def test_threads_waits_for_post_button_enabled():
+    """视频还没传完、Post 是灰的：等它能点，等不到报处理超时，不去点（Final review 4）。"""
+    d = threads_driver()
+    d.enabled_set.clear()
+    p = post()
+    with pytest.raises(base.StepFailed, match="处理超时"):
+        TH.publish(d, TH.compose(p), p)
+    assert TH.POST_BUTTON not in [a[1] for a in d.acts("click")] and not d.committed
+
+
 def test_threads_dialog_stays_open_is_unknown():
     d = threads_driver()
     d.hooks.pop(("click", TH.POST_BUTTON))
@@ -194,7 +210,7 @@ IG = PLATFORMS["instagram"]
 
 
 def ig_driver(*, reel_notice=True):
-    d = FakeDriver(visible={IG.NEW_POST, IG.POPUPS[0]})
+    d = FakeDriver(visible={IG.NEW_POST, IG.POPUPS[0]}, enabled={IG.SHARE})
 
     def opened(dr):
         dr.visible_set.add(IG.FILE_INPUT)
@@ -245,6 +261,30 @@ def test_instagram_error_text_is_failed():
     assert r.status == "failed" and "couldn't" in r.message
 
 
+def test_instagram_waits_for_share_enabled():
+    """Share 是灰的：等它能点，等不到就报错，不去点（Final review 4）。"""
+    d = ig_driver()
+    d.enabled_set.clear()
+    p = post()
+    with pytest.raises(base.StepFailed, match="分享按钮"):
+        IG.publish(d, IG.compose(p), p)
+    assert IG.SHARE not in [a[1] for a in d.acts("click")] and not d.committed
+
+
+def test_instagram_caption_words_never_count_as_result():
+    """说明里写了 shared / couldn't / try again：弹窗文字里这段是用户自己写的，不能当成平台给的结果（Final review 7）。"""
+    caption = "We shared it — couldn't wait, try again tomorrow"
+    d = ig_driver()
+
+    def typed(dr):
+        dr.texts[IG.CAPTION] = caption
+        dr.texts[IG.DIALOG] = "Create new reel\n" + caption + "\nAdd location"
+    d.hooks[("type", IG.CAPTION)] = typed
+    d.hooks.pop(("click", IG.SHARE))      # 点了 Share，页面还停在写说明那一步
+    p = post()
+    assert IG.publish(d, IG.compose(p), p).status == "unknown"
+
+
 def test_instagram_no_share_confirmation_is_unknown():
     d = ig_driver()
     d.hooks.pop(("click", IG.SHARE))
@@ -292,6 +332,23 @@ def test_tiktok_confirms_post_now_when_content_check_pending():
     p = post()
     assert TT.publish(d, TT.compose(p), p).status == "success"
     assert d.acts("click")[-1][1] == TT.POST_NOW
+
+
+def test_tiktok_post_now_vanishing_keeps_waiting():
+    """「Post now」确认框在点下去之前自己消失（内容检查刚好跑完）：不算失败，接着等跳转（Final review 2）。"""
+    d = tiktok_driver()
+    d.hooks[("click", TT.POST_BUTTON)] = lambda dr: dr.visible_set.add(TT.POST_NOW)
+    real_click = d.click
+
+    def click(sel, timeout_ms=15000):
+        if sel == TT.POST_NOW:
+            d.visible_set.discard(TT.POST_NOW)
+            d._url = "https://www.tiktok.com/tiktokstudio/content"
+            raise base.StepFailed("点不到 Post now")
+        real_click(sel, timeout_ms)
+    d.click = click
+    p = post()
+    assert TT.publish(d, TT.compose(p), p).status == "success"
 
 
 def test_tiktok_stays_on_upload_page_is_unknown():
@@ -344,3 +401,14 @@ def test_threads_post_button_matches_nested_label():
     """真机：Threads 的「Post」按钮是 div[role=button] > div > 文字，Playwright 的 :text-is 只匹配直接装着文字的
     最小元素，外层按钮匹配不上（2026-10-01 真发时点不到）。要用 :has(:text-is("Post"))，且不能误中「Post Options」。"""
     assert TH.POST_BUTTON == '[role="dialog"] div[role="button"]:has(:text-is("Post"))'
+
+
+@pytest.mark.parametrize("mod,make,button", [
+    (X, x_driver, X.POST_BUTTON), (TH, threads_driver, TH.POST_BUTTON), (IG, ig_driver, IG.SHARE),
+    (TT, tiktok_driver, TT.POST_BUTTON), (YT, youtube_driver, YT.DONE)])
+def test_final_button_is_clicked_through_commit(mod, make, button):
+    """最终的发布 / 分享按钮一律走 commit：点下去之后出任何错都只能报待确认（Final review 2）。"""
+    d = make()
+    p = post(title="My Short")
+    assert mod.publish(d, mod.compose(p), p).status == "success"
+    assert d.acts("commit") == [("commit", button)] and d.committed
