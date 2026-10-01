@@ -45,4 +45,41 @@ describe('AccountsPage', () => {
     const row = (await screen.findByText('B站')).closest('.account-row') as HTMLElement;
     expect(row.querySelector('.account-who')?.textContent).toBe('已登录');
   });
+
+  it('国内、海外分两组；海外平台的登录按钮叫「登录」', async () => {
+    vi.mocked(api.fetchAccounts).mockResolvedValue([
+      { platform: 'zhihu', name: '知乎', backend: 'web', region: 'domestic', supported: true, loggedIn: false, note: '' },
+      { platform: 'youtube', name: 'YouTube', backend: 'overseas', region: 'overseas', supported: true, loggedIn: false, note: '' },
+    ]);
+    render(<AccountsPage />);
+    const overseas = await screen.findByRole('region', { name: '海外' });
+    const domestic = screen.getByRole('region', { name: '国内' });
+    expect(within(overseas).getByText('YouTube')).toBeTruthy();
+    expect(within(domestic).getByText('知乎')).toBeTruthy();
+    expect(within(overseas).getByRole('heading', { level: 2, name: '海外' })).toBeTruthy();
+    expect(within(overseas).getByRole('button', { name: '登录' })).toBeTruthy();
+    expect(within(domestic).getByRole('button', { name: '扫码登录' })).toBeTruthy();
+  });
+
+  it('只有国内平台时不显示分组标题', async () => {
+    vi.mocked(api.fetchAccounts).mockResolvedValue([
+      { platform: 'zhihu', name: '知乎', backend: 'web', supported: true, loggedIn: false, note: '' },
+    ]);
+    render(<AccountsPage />);
+    await screen.findByText('知乎');
+    expect(screen.queryByRole('heading', { level: 2 })).toBeNull();
+  });
+
+  it('没桌面时海外平台显示「不可用」和原因，登录按钮置灰', async () => {
+    vi.mocked(api.fetchAccounts).mockResolvedValue([
+      { platform: 'zhihu', name: '知乎', backend: 'web', region: 'domestic', supported: true, loggedIn: false, note: '' },
+      { platform: 'x', name: 'X', backend: 'overseas', region: 'overseas', supported: false, loggedIn: false,
+        note: '需要在有桌面的本机登录（会弹出 Chrome 窗口）' },
+    ]);
+    render(<AccountsPage />);
+    const row = (await screen.findByText('X')).closest('.account-row') as HTMLElement;
+    expect(within(row).getByText('不可用')).toBeTruthy();
+    expect(within(row).getByText(/有桌面的本机/)).toBeTruthy();
+    expect((within(row).getByRole('button', { name: '登录' }) as HTMLButtonElement).disabled).toBe(true);
+  });
 });

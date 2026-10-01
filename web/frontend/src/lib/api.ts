@@ -370,7 +370,9 @@ export function deleteSession(sessionKey: string): Promise<{ deleted: boolean }>
 export interface AccountItem {
   platform: string;
   name: string;
-  backend: string;      // xhs | web | biliup | unsupported
+  backend: string;      // xhs | web | biliup | douyin | wechat-oa | overseas | unsupported
+  /** 账号页分组：国内平台扫码登录；海外平台在本机弹出的 Chrome 窗口里登录。旧后端没有这个字段，按国内处理。 */
+  region?: 'domestic' | 'overseas';
   supported: boolean;
   loggedIn: boolean;
   /** 登录标记指纹（outputs/_login/<平台>.json 的 mtime 秒，无标记为 null）。只用来比相等：
