@@ -56,3 +56,5 @@
   .publish-editor { width: 100%; max-width: none; min-width: 0; overflow: visible; scrollbar-gutter: auto; border-right: none; border-bottom: 1px solid var(--c-rule); }
   .publish-previews { overflow: visible; scrollbar-gutter: auto; }
 }
+.publish-group-label { font-size: var(--fs-12); color: var(--c-ink-3); margin-right: var(--sp-1); align-self: center; }
+.pv-visibility { font-size: var(--fs-12); border: 1px solid var(--c-rule); border-radius: var(--r-control); background: var(--c-surface); padding: 2px 6px; }

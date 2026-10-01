@@ -16,13 +16,16 @@ import Modal from './ui/Modal';
 import EmptyState from './ui/EmptyState';
 import { Input, Textarea } from './ui/Field';
 import { isSubmitEnter } from '../lib/ime';
+import { OVERSEAS_PLATFORMS, VISIBILITY_OPTIONS, isOverseas, overseasPayload, overseasAdaptRule } from '../lib/overseasPublish';
 
 interface PublishPageProps {
   persona: string;
 }
 
+type PlatformMeta = { key: string; label: string; titleLimit?: number; bodyLimit: number; hint: string; region?: 'overseas' };
+
 // 平台列表须与后端 LOGIN_RUNNERS 对齐（有登录/发布链路的才列）
-const PLATFORMS: { key: string; label: string; titleLimit?: number; bodyLimit: number; hint: string }[] = [
+const DOMESTIC_PLATFORMS: PlatformMeta[] = [
   { key: 'xiaohongshu', label: '小红书', titleLimit: 20, bodyLimit: 1000, hint: '标题≤20，正文≤1000，重情绪+话题标签' },
   { key: 'douyin', label: '抖音', titleLimit: 55, bodyLimit: 55, hint: '文案≤55，前几字是钩子' },
   { key: 'kuaishou', label: '快手', titleLimit: 30, bodyLimit: 1000, hint: '视频或图片(图文)，标题≤30，需附媒体' },
@@ -31,14 +34,16 @@ const PLATFORMS: { key: string; label: string; titleLimit?: number; bodyLimit: n
   { key: 'bilibili', label: 'B站', titleLimit: 80, bodyLimit: 2000, hint: '需附视频，标题≤80、简介≤2000，默认投「知识」分区' },
   { key: 'wechat-oa', label: '公众号', titleLimit: 64, bodyLimit: 20000, hint: '图文文章，正文用 Markdown，首图作封面，发到草稿箱；需先在账号页「登录公众号后台」扫码' },
 ];
+const PLATFORMS: PlatformMeta[] = [...DOMESTIC_PLATFORMS, ...OVERSEAS_PLATFORMS];
 const LABEL2KEY = Object.fromEntries(PLATFORMS.map((p) => [p.label, p.key]));
 
+const OVERSEAS_KEYS = OVERSEAS_PLATFORMS.map((p) => p.key);
 // 能一键发布的平台（有后端 publisher）
-const PUBLISHABLE = new Set(['xiaohongshu', 'douyin', 'kuaishou', 'weixin-channels', 'zhihu', 'bilibili', 'wechat-oa']);
+const PUBLISHABLE = new Set(['xiaohongshu', 'douyin', 'kuaishou', 'weixin-channels', 'zhihu', 'bilibili', 'wechat-oa', ...OVERSEAS_KEYS]);
 // 必须附带媒体的平台（无媒体发不了）——公众号需要一张封面图，也计入
-const MEDIA_REQUIRED = new Set(['xiaohongshu', 'douyin', 'kuaishou', 'weixin-channels', 'bilibili', 'wechat-oa']);
-// 只能发视频的平台（抖音/视频号/B站：图文不走此链路，必须视频）
-const VIDEO_ONLY = new Set(['douyin', 'weixin-channels', 'bilibili']);
+const MEDIA_REQUIRED = new Set(['xiaohongshu', 'douyin', 'kuaishou', 'weixin-channels', 'bilibili', 'wechat-oa', ...OVERSEAS_KEYS]);
+// 只能发视频的平台（抖音/视频号/B站必须视频；海外平台的图文 / 纯文字在下一期接通，现在也只收视频）
+const VIDEO_ONLY = new Set(['douyin', 'weixin-channels', 'bilibili', ...OVERSEAS_KEYS]);
 const VIDEO_RE = /\.(mp4|mov|webm|mkv|avi|m4v|flv|ts)$/i;
 
 function parseSections(text: string): Record<string, string> {
@@ -76,6 +81,8 @@ export default function PublishPage({ persona }: PublishPageProps) {
   const [pubSms, setPubSms] = useState<{ platform: string; name: string; state: string; message: string } | null>(null);
   const [pubSmsCode, setPubSmsCode] = useState('');
   const [pubSmsBusy, setPubSmsBusy] = useState(false);
+  // 海外平台可见范围（YouTube / TikTok）；空 = 用平台默认（公开 / 所有人）
+  const [visibility, setVisibility] = useState<Record<string, string>>({});
 
   // 草稿持久化：任何改动即写 localStorage，切页/刷新回来都在
   useEffect(() => {
@@ -128,6 +135,7 @@ export default function PublishPage({ persona }: PublishPageProps) {
       `务必参考该 SKILL 的 platform-specs 与改写配方，贴合各平台原生格式、语气与字数。\n` +
       `【硬性要求】输出各平台“可直接复制发布的纯文本正文”，禁止任何 Markdown 语法：不要 **加粗**、# 标题、---、表格、代码块、编号列表符号；` +
       `小红书可用 emoji 和 #话题标签，按平台习惯自然分行即可。\n` +
+      overseasAdaptRule(sel.map((p) => p.key)) +
       `严格只按下面格式输出、每个平台之间用分隔线，不要任何额外说明：\n` +
       sel.map((p) => `===${p.label}===\n<该平台纯文本正文>`).join('\n') +
       `\n\n原始内容：\n标题：${title}\n正文：${body}`;
@@ -220,7 +228,10 @@ export default function PublishPage({ persona }: PublishPageProps) {
       }
       setPub((r) => ({ ...r, [t.key]: { status: 'publishing', msg: '发布中…可能需 1-2 分钟' } }));
       try {
-        const res = await publishNow(t.key, { title, body: effective(t.key), media: selectedMedia, tags });
+        const payload = isOverseas(t.key)
+          ? { ...overseasPayload(t.key, effective(t.key)), media: selectedMedia, visibility: visibility[t.key] || '' }
+          : { title, body: effective(t.key), media: selectedMedia, tags };
+        const res = await publishNow(t.key, payload);
         if (res.async) {
           // 抖音：异步发布，轮询状态；风控触发短信墙时弹输入框（条件触发，没触发就直接跑完）
           await pollAsyncPublish(t.key, t.label);
@@ -325,17 +336,23 @@ export default function PublishPage({ persona }: PublishPageProps) {
           onChange={(e) => setTags(e.target.value)} />
 
         <label className="field-label">发布平台</label>
-        <div className="publish-platforms">
-          {PLATFORMS.map((p) => (
-            <button key={p.key} type="button" className={`chip ${platforms.includes(p.key) ? 'active' : ''}`}
-              aria-pressed={platforms.includes(p.key)}
-              onClick={() => toggle(p.key)}>{p.label}</button>
-          ))}
-        </div>
+        {[
+          { name: '国内平台', items: PLATFORMS.filter((p) => !p.region) },
+          { name: '海外平台', items: PLATFORMS.filter((p) => p.region === 'overseas') },
+        ].map((g) => (
+          <div key={g.name} className="publish-platforms" role="group" aria-label={g.name}>
+            <span className="publish-group-label">{g.name.replace('平台', '')}</span>
+            {g.items.map((p) => (
+              <button key={p.key} type="button" className={`chip ${platforms.includes(p.key) ? 'active' : ''}`}
+                aria-pressed={platforms.includes(p.key)}
+                onClick={() => toggle(p.key)}>{p.label}</button>
+            ))}
+          </div>
+        ))}
 
         <label className="field-label publish-media-label">
           媒体附件 {selectedMedia.length > 0 && <Tag>{selectedMedia.length} 个</Tag>}
-          <span className="publish-label-hint">（小红书/抖音/快手/微信视频号/B站必需，从内容库选；抖音、视频号、B站须为视频）</span>
+          <span className="publish-label-hint">（小红书/抖音/快手/微信视频号/B站/海外平台必需，从内容库选；抖音、视频号、B站、海外平台须为视频）</span>
         </label>
         <div className="publish-media-row">
           <Button size="sm" icon={<IconSkills size={13} />} onClick={() => setShowPicker((v) => !v)}>
@@ -438,6 +455,14 @@ export default function PublishPage({ persona }: PublishPageProps) {
               )}
               <div className="pv-foot">
                 <span className="pv-hint">{p.hint}{over ? ' · 已超字数' : ''}</span>
+                {VISIBILITY_OPTIONS[p.key] && (
+                  <select className="pv-visibility" aria-label={`${p.label} 可见范围`}
+                    value={visibility[p.key] || ''}
+                    onChange={(e) => setVisibility((v) => ({ ...v, [p.key]: e.target.value }))}>
+                    <option value="">默认（公开）</option>
+                    {VISIBILITY_OPTIONS[p.key].map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                )}
                 <div className="pv-foot-actions">
                   <Button size="sm" variant="ghost" icon={<IconEdit size={13} />} onClick={() => setEditing(isEdit ? null : p.key)}>
                     {isEdit ? '完成' : '编辑'}
