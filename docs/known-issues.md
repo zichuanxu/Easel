@@ -86,3 +86,11 @@ bash setup.sh
 ```
 
 升级后 `easel doctor` 会校验 OpenClaw ≥ 2026.6.11。不升级时安装不再报错，但请求超时受旧版默认超时限制；请确认模型名带 provider 前缀（如 `anthropic/claude-sonnet-4-6`），具体卡在哪一步可看 `easel gateway logs`。
+
+## 海外平台登录：要在有桌面的本机，最好装 Google Chrome
+
+- **影响范围**：账号页的 TikTok / YouTube / Instagram / X / Threads。
+- **表现**：点「登录」会在运行 Easel 的这台电脑上弹出 Chrome 窗口，需要在窗口里亲手登录（含两步验证），最长 10 分钟。没有桌面的环境（Linux 服务器、无 `DISPLAY`）弹不出窗口，账号页的登录按钮会置灰。
+- **Google 登录**：Google 会拦截自动化用的 Chromium（「此浏览器或应用可能不安全」）。Easel 优先用本机安装的 Google Chrome；没装时退回 Playwright 自带的 Chromium，YouTube 登录大概率失败。解决：安装 Google Chrome 后重新点登录。
+- **网络**：海外平台不强制直连。配了 `EASEL_PROXY` 就走该代理，否则用系统网络设置。国内平台照旧直连。
+- **登录目录**：`~/.easel-browser-profiles/<平台>Profile`（如 `YouTubeProfile`）。账号页「退出」会删掉它。

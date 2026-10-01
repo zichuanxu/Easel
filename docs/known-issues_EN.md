@@ -64,3 +64,11 @@ The fix uses a four-layer strategy: unique full-content match, required terminal
   ```
 
 - Easel installs the OpenClaw global CLI (a prebuilt artifact), so we **do not vendor the patch inside the Easel repo**; instead we track the latest upstream release, and we plan to add an OpenClaw minimum-version check to `easel doctor`.
+
+## Overseas platform login needs a local desktop, ideally with Google Chrome
+
+- **Affects**: TikTok / YouTube / Instagram / X / Threads on the Accounts page.
+- **Behavior**: "登录" opens a Chrome window on the machine running Easel; you sign in there yourself (2FA included), within 10 minutes. Machines without a desktop (Linux servers, no `DISPLAY`) cannot show the window, so the button is disabled.
+- **Google sign-in**: Google blocks automation Chromium ("This browser or app may not be secure"). Easel prefers the locally installed Google Chrome and falls back to Playwright's bundled Chromium, where YouTube sign-in will likely fail. Fix: install Google Chrome and sign in again.
+- **Network**: overseas platforms are not forced to connect directly. `EASEL_PROXY` is used when set; otherwise the system network settings apply. Domestic platforms still connect directly.
+- **Profiles**: `~/.easel-browser-profiles/<Platform>Profile` (e.g. `YouTubeProfile`). "退出" on the Accounts page deletes it.

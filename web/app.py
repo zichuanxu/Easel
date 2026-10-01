@@ -215,6 +215,9 @@ SESSIONS_DIR = OUTPUTS_DIR / "_sessions"   # 每会话最近一轮的完整结�
 # 非 _ 前缀的历史系统目录（归因层数据），内容库不展示（真产物一律在项目目录内）
 SYSTEM_TOPLEVEL_DIRS = {"analytics"}
 LOGIN_TIMEOUT = 240
+# 海外平台在本机弹出的 Chrome 窗口里亲手登录（输密码、两步验证），比扫码慢
+OVERSEAS_LOGIN_TIMEOUT = 600
+OVERSEAS_NO_DESKTOP_NOTE = '需要在有桌面的本机登录（会弹出 Chrome 窗口）'
 LOGIN_PROCESSES: dict[str, subprocess.Popen] = {}
 # runner 写完终态（success/expired/error）后还要关浏览器才退出；whoami 最多等它这么久（秒），
 # 让登录态先落盘再起校验浏览器。
@@ -227,14 +230,26 @@ _WHOAMI_CACHE: dict[str, tuple[float, dict, int | None]] = {}
 _WHOAMI_LOCK = threading.Lock()
 
 LOGIN_RUNNERS: dict[str, dict] = {
-    "xiaohongshu": {"name": "小红书", "backend": "xhs", "profile": "XiaohongshuProfile"},
-    "kuaishou": {"name": "快手", "backend": "web", "wp": "kuaishou", "profile": "KuaishouProfile"},
-    "weixin-channels": {"name": "微信视频号", "backend": "web", "wp": "weixin-channels", "profile": "ChannelsProfile"},
-    "zhihu": {"name": "知乎", "backend": "web", "wp": "zhihu", "profile": "ZhihuProfile"},
-    "bilibili": {"name": "B站", "backend": "biliup"},
-    "douyin": {"name": "抖音", "backend": "douyin", "profile": "DouyinProfile"},
+    "xiaohongshu": {"name": "小红书", "backend": "xhs", "profile": "XiaohongshuProfile", "region": "domestic"},
+    "kuaishou": {"name": "快手", "backend": "web", "wp": "kuaishou", "profile": "KuaishouProfile", "region": "domestic"},
+    "weixin-channels": {"name": "微信视频号", "backend": "web", "wp": "weixin-channels", "profile": "ChannelsProfile",
+                        "region": "domestic"},
+    "zhihu": {"name": "知乎", "backend": "web", "wp": "zhihu", "profile": "ZhihuProfile", "region": "domestic"},
+    "bilibili": {"name": "B站", "backend": "biliup", "region": "domestic"},
+    "douyin": {"name": "抖音", "backend": "douyin", "profile": "DouyinProfile", "region": "domestic"},
     # 微信公众号：扫码登录后台会话（发布+数据都走它），backend=='wechat-oa' 在各处单独分支处理。
-    "wechat-oa": {"name": "微信公众号", "backend": "wechat-oa"},
+    "wechat-oa": {"name": "微信公众号", "backend": "wechat-oa", "region": "domestic"},
+    # 海外平台：本机弹 Chrome 窗口亲手登录。op = overseas_publisher.py 的平台码，
+    # profile 必须与 skills/shared/scripts/overseas/<平台>.py 的 PROFILE 一致（退出时按它删登录目录）。
+    "tiktok": {"name": "TikTok", "backend": "overseas", "op": "tiktok", "profile": "TikTokProfile",
+               "region": "overseas"},
+    "youtube": {"name": "YouTube", "backend": "overseas", "op": "youtube", "profile": "YouTubeProfile",
+                "region": "overseas"},
+    "instagram": {"name": "Instagram", "backend": "overseas", "op": "instagram", "profile": "InstagramProfile",
+                  "region": "overseas"},
+    "x": {"name": "X", "backend": "overseas", "op": "x", "profile": "XProfile", "region": "overseas"},
+    "threads": {"name": "Threads", "backend": "overseas", "op": "threads", "profile": "ThreadsProfile",
+                "region": "overseas"},
 }
 
 # ---- 微信公众号（wechat-oa）凭证式接入 ----
@@ -3099,18 +3114,43 @@ def _login_status(platform: str) -> dict:
     return data
 
 
+def _runner_available(cfg: dict) -> tuple[bool, str]:
+    """(账号页能不能登录这个平台, 给用户看的说明)。海外平台要弹 Chrome 窗口，没桌面就不可用。"""
+    if cfg['backend'] == 'unsupported':
+        return False, cfg.get('note', '')
+    if cfg['backend'] == 'overseas' and not _can_open_window():
+        return False, OVERSEAS_NO_DESKTOP_NOTE
+    return True, cfg.get('note', '')
+
+
 @app.get("/api/accounts")
 async def api_accounts():
-    return [
-        {'platform': pf, 'name': cfg['name'], 'backend': cfg['backend'],
-         'supported': cfg['backend'] != 'unsupported',
-         'loggedIn': _account_logged_in(pf, cfg),
-         # 登录标记指纹：前端 whoami 缓存记着校验那一刻的值，不相等 = 之后有人登录/退出过
-         # （CLI 直跑 login 等），缓存作废重新校验——否则缓存的「未登录」要顶满 10 分钟 TTL。
-         'loginTs': _login_marker_ts(pf),
-         'note': cfg.get('note', '')}
-        for pf, cfg in LOGIN_RUNNERS.items()
-    ]
+    rows = []
+    for pf, cfg in LOGIN_RUNNERS.items():
+        ok, note = _runner_available(cfg)
+        rows.append({
+            'platform': pf, 'name': cfg['name'], 'backend': cfg['backend'],
+            'region': cfg.get('region', 'domestic'),   # 账号页按国内 / 海外分组
+            'supported': ok,
+            'loggedIn': _account_logged_in(pf, cfg),
+            # 登录标记指纹：前端 whoami 缓存记着校验那一刻的值，不相等 = 之后有人登录/退出过
+            # （CLI 直跑 login 等），缓存作废重新校验——否则缓存的「未登录」要顶满 10 分钟 TTL。
+            'loginTs': _login_marker_ts(pf),
+            'note': note,
+        })
+    return rows
+
+
+def _can_open_window(platform: str | None = None, env: dict | None = None,
+                     os_name: str | None = None) -> bool:
+    """本机能不能弹出浏览器窗口：macOS / Windows 能；Linux 要有 DISPLAY 或 WAYLAND_DISPLAY。
+    参数只为测试注入，默认取真实环境。"""
+    env = os.environ if env is None else env
+    platform = sys.platform if platform is None else platform
+    os_name = os.name if os_name is None else os_name
+    if platform == "darwin" or os_name == "nt":
+        return True
+    return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
 
 
 def _xhs_headed_fallback_available(platform: str | None = None, env: dict | None = None,
@@ -3127,11 +3167,7 @@ def _xhs_headed_fallback_available(platform: str | None = None, env: dict | None
         return True
     if override in ("0", "false", "no", "off"):
         return False
-    platform = sys.platform if platform is None else platform
-    os_name = os.name if os_name is None else os_name
-    if platform == "darwin" or os_name == "nt":
-        return True
-    return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
+    return _can_open_window(platform, env, os_name)
 
 
 @app.post("/api/login/{platform}")
@@ -3143,6 +3179,8 @@ async def api_login_start(platform: str):
     backend = cfg['backend']
     if backend == 'unsupported':
         raise HTTPException(400, f"{cfg['name']} 暂不可用：{cfg.get('note', '')}")
+    if backend == 'overseas' and not _can_open_window():
+        raise HTTPException(400, f"{cfg['name']}：{OVERSEAS_NO_DESKTOP_NOTE}")
     if backend == 'wechat-oa':
         # 公众号不走扫码：前端应改用凭证表单提交到 /api/accounts/{platform}/credentials。
         return {'mode': 'credentials', 'configured': _wechat_has_credentials(),
@@ -3179,6 +3217,11 @@ async def api_login_start(platform: str):
         cmd = [sys.executable, str(SHARED_SCRIPTS / 'douyin_publish.py'), 'login',
                '--qr-out', str(qr), '--status-file', str(status),
                '--sms-code-file', str(code_file), '--timeout', str(LOGIN_TIMEOUT)]
+    elif backend == 'overseas':
+        # 海外平台：本机弹出 Chrome 窗口，用户亲手登录（含两步验证），比扫码慢，给 10 分钟
+        cmd = [sys.executable, str(SHARED_SCRIPTS / 'overseas_publisher.py'), 'login',
+               '--platform', cfg['op'], '--status-file', str(status),
+               '--timeout', str(OVERSEAS_LOGIN_TIMEOUT)]
     else:
         cmd = [sys.executable, str(SHARED_SCRIPTS / 'web_publisher.py'), 'login-qr',
                '--platform', cfg['wp'], '--qr-out', str(qr), '--status-file', str(status),
@@ -3440,6 +3483,9 @@ async def _account_whoami(platform: str) -> dict:
         cmd = [sys.executable, str(SHARED_SCRIPTS / 'xhs_publish.py'), 'whoami', '--no-proxy']
     elif backend == 'douyin':
         cmd = [sys.executable, str(SHARED_SCRIPTS / 'douyin_publish.py'), 'whoami']
+    elif backend == 'overseas':
+        cmd = [sys.executable, str(SHARED_SCRIPTS / 'overseas_publisher.py'), 'whoami',
+               '--platform', cfg['op']]
     else:
         cmd = [sys.executable, str(SHARED_SCRIPTS / 'web_publisher.py'), 'whoami',
                '--platform', cfg['wp']]
