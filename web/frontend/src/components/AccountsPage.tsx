@@ -287,69 +287,83 @@ export default function AccountsPage() {
   };
 
   const status = (a: AccountItem) => {
-    if (!a.supported) return <StatusDot tone="idle">待重写</StatusDot>;
+    if (!a.supported) return <StatusDot tone="idle">{a.region === 'overseas' ? '不可用' : '待重写'}</StatusDot>;
     if (whoami[a.platform] === 'loading') return <StatusDot tone="idle">校验中…</StatusDot>;
     if (effLoggedIn(a)) return <StatusDot tone="ok">已登录</StatusDot>;
     return <StatusDot tone="idle">未登录</StatusDot>;
   };
 
   const busyFor = (a: AccountItem) => busy === a.platform || busy === a.platform + ':mp';
+  // 海外平台不是扫码，是在本机弹出的 Chrome 窗口里登录
+  const loginLabel = (a: AccountItem) => (a.region === 'overseas' ? '登录' : '扫码登录');
+
+  const renderRow = (a: AccountItem) => {
+    const w = whoami[a.platform];
+    const info = w && w !== 'loading' ? w : null;
+    const logged = effLoggedIn(a);
+    return (
+      <div key={a.platform} className={`account-row${a.supported ? '' : ' is-unsupported'}`}>
+        <span className="account-platform">{a.name}</span>
+        <span className="account-who">
+          {logged && info ? (
+            <>
+              <Avatar url={info.avatar} name={info.name || a.name} />
+              <span className="account-nick" title={info.name || ''}>{info.name || '已登录'}</span>
+            </>
+          ) : (
+            // 已登录但还没有 whoami 结果（B站 不自动校验、其他平台校验中）也要占住这一栏，不能留空
+            <span className="account-note">{logged ? '已登录' : (a.note || '未登录')}</span>
+          )}
+        </span>
+        {status(a)}
+        <span className="account-actions">
+          {logged ? (
+            <>
+              <Button size="sm" disabled={busyFor(a) || w === 'loading'} onClick={() => runWhoami(a.platform)}>
+                {w === 'loading' ? '校验中…' : '校验'}
+              </Button>
+              <Button size="sm" disabled={logoutBusy === a.platform} onClick={() => handleLogout(a)}>
+                {logoutBusy === a.platform ? '退出中…' : '退出'}
+              </Button>
+            </>
+          ) : (
+            // 公众号与其它平台统一：都走扫码登录（公众号扫的是后台会话，用于发布+数据）；海外平台弹窗口登录
+            <Button size="sm" variant={a.supported ? 'primary' : 'secondary'}
+              disabled={!a.supported || busyFor(a)}
+              onClick={() => (a.backend === 'wechat-oa' ? handleMpLogin(a) : handleLogin(a))}>
+              {busyFor(a) ? '启动中…' : loginLabel(a)}
+            </Button>
+          )}
+        </span>
+      </div>
+    );
+  };
+
+  // 国内 / 海外分组；只有一组时不显示组标题（和以前一样是一整张列表）
+  const groups = [
+    { key: 'domestic', title: '国内', items: accounts.filter((a) => a.region !== 'overseas') },
+    { key: 'overseas', title: '海外', items: accounts.filter((a) => a.region === 'overseas') },
+  ].filter((g) => g.items.length > 0);
+  const grouped = groups.length > 1;
 
   return (
     <div className="page-scroll accounts-page">
       <PageHeader
         layer="publish"
         title="账号"
-        description="用手机 App 扫码登录。登录状态保存在本机，之后发布不用再登。"
+        description="国内平台用手机 App 扫码登录，海外平台在本机弹出的 Chrome 窗口里登录。登录状态保存在本机，之后发布不用再登。"
         actions={<Button size="sm" onClick={load}>刷新状态</Button>}
       />
 
       {err && <p className="accounts-error" role="alert">{err}</p>}
       {terminalMsg && <div className="accounts-notice">{terminalMsg}</div>}
 
-      <div className="accounts-list">
-        {accounts.map((a) => {
-          const w = whoami[a.platform];
-          const info = w && w !== 'loading' ? w : null;
-          const logged = effLoggedIn(a);
-          return (
-            <div key={a.platform} className={`account-row${a.supported ? '' : ' is-unsupported'}`}>
-              <span className="account-platform">{a.name}</span>
-              <span className="account-who">
-                {logged && info ? (
-                  <>
-                    <Avatar url={info.avatar} name={info.name || a.name} />
-                    <span className="account-nick" title={info.name || ''}>{info.name || '已登录'}</span>
-                  </>
-                ) : (
-                  // 已登录但还没有 whoami 结果（B站 不自动校验、其他平台校验中）也要占住这一栏，不能留空
-                  <span className="account-note">{logged ? '已登录' : (a.note || '未登录')}</span>
-                )}
-              </span>
-              {status(a)}
-              <span className="account-actions">
-                {logged ? (
-                  <>
-                    <Button size="sm" disabled={busyFor(a) || w === 'loading'} onClick={() => runWhoami(a.platform)}>
-                      {w === 'loading' ? '校验中…' : '校验'}
-                    </Button>
-                    <Button size="sm" disabled={logoutBusy === a.platform} onClick={() => handleLogout(a)}>
-                      {logoutBusy === a.platform ? '退出中…' : '退出'}
-                    </Button>
-                  </>
-                ) : (
-                  // 公众号与其它平台统一：都走扫码登录（公众号扫的是后台会话，用于发布+数据）
-                  <Button size="sm" variant={a.supported ? 'primary' : 'secondary'}
-                    disabled={!a.supported || busyFor(a)}
-                    onClick={() => (a.backend === 'wechat-oa' ? handleMpLogin(a) : handleLogin(a))}>
-                    {busyFor(a) ? '启动中…' : '扫码登录'}
-                  </Button>
-                )}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+      {groups.map((g) => (
+        <section key={g.key} className="accounts-group" aria-label={grouped ? g.title : undefined}>
+          {grouped && <h2 className="accounts-group-title">{g.title}</h2>}
+          <div className="accounts-list">{g.items.map(renderRow)}</div>
+        </section>
+      ))}
 
       <p className="accounts-warn">
         机房或代理 IP 可能被平台判为风险，二维码会弹不出来。遇到这种情况，换干净的家宽网络，或者在能正常登录的机器上登好，再把登录目录拷过来。

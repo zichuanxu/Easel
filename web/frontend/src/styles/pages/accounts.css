@@ -1,5 +1,7 @@
 .accounts-page { padding: 26px 34px 40px; }
 .accounts-list { background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: var(--r-panel); }
+.accounts-group + .accounts-group { margin-top: var(--sp-6); }
+.accounts-group-title { margin: 0 0 var(--sp-2); font-family: var(--font-serif); font-size: var(--fs-14); font-weight: 600; color: var(--c-ink-2); }
 .account-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) 110px auto; align-items: center; gap: var(--sp-4); padding: 12px 20px; border-bottom: 1px solid var(--c-rule); }
 .account-row:last-child { border-bottom: 0; }
 .account-row.is-unsupported { opacity: 0.6; }
