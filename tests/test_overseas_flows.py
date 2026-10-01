@@ -379,7 +379,36 @@ def test_tiktok_publishes_with_visibility():
     clicks = [a[1] for a in d.acts("click")]
     assert clicks == [TT.VISIBILITY_BUTTON, TT.option("Only you"), TT.POST_BUTTON]
     assert d.acts("type")[0][1] == TT.CAPTION      # 清掉预填的文件名再写
-    assert TT.READY_KINDS == {"video"}
+
+
+def tiktok_photo_driver(n=2):
+    d = FakeDriver(visible={TT.PHOTO_INPUT, TT.CAPTION, TT.VISIBILITY_BUTTON, TT.PHOTO_POST_BUTTON},
+                   enabled={TT.PHOTO_POST_BUTTON})
+    d.hooks[("upload", TT.PHOTO_INPUT)] = lambda dr: dr.counts.__setitem__(TT.PHOTO_READY, n)
+    d.hooks[("click", TT.VISIBILITY_BUTTON)] = lambda dr: dr.visible_set.update(
+        {TT.option(v) for v in TT.VISIBILITY_LABEL.values()})
+    d.hooks[("click", TT.PHOTO_POST_BUTTON)] = lambda dr: setattr(
+        dr, "_url", "https://www.tiktok.com/tiktokstudio/content")
+    return d
+
+
+def test_tiktok_publishes_photos_on_photo_tab():
+    d = tiktok_photo_driver()
+    p = Post(media=[IMG, IMG2], desc="Hello", visibility="only_me")
+    assert TT.publish(d, TT.compose(p), p).status == "success"
+    assert d.acts("goto")[0][1] == TT.PHOTO_URL
+    assert d.acts("commit") == [("commit", TT.PHOTO_POST_BUTTON)]
+    assert TT.option("Only you") in [a[1] for a in d.acts("click")]
+    assert TT.READY_KINDS == {"video", "image"}
+
+
+def test_tiktok_photos_not_all_uploaded_never_posts():
+    """2 张图只上传完 1 张：不去点发布（Review Focus 3）。"""
+    d = tiktok_photo_driver(n=1)
+    p = Post(media=[IMG, IMG2], desc="Hello")
+    with pytest.raises(base.StepFailed, match="图片上传超时"):
+        TT.publish(d, TT.compose(p), p)
+    assert not d.committed
 
 
 def test_tiktok_upload_never_finishes_is_step_failed():
