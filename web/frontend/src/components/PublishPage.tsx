@@ -16,7 +16,10 @@ import Modal from './ui/Modal';
 import EmptyState from './ui/EmptyState';
 import { Input, Textarea } from './ui/Field';
 import { isSubmitEnter } from '../lib/ime';
-import { OVERSEAS_PLATFORMS, VISIBILITY_OPTIONS, isOverseas, overseasPayload, overseasAdaptRule } from '../lib/overseasPublish';
+import {
+  OVERSEAS_PLATFORMS, OVERSEAS_MEDIA_REQUIRED, OVERSEAS_VIDEO_ONLY, VISIBILITY_OPTIONS,
+  isOverseas, overseasPayload, overseasAdaptRule,
+} from '../lib/overseasPublish';
 
 interface PublishPageProps {
   persona: string;
@@ -40,10 +43,10 @@ const LABEL2KEY = Object.fromEntries(PLATFORMS.map((p) => [p.label, p.key]));
 const OVERSEAS_KEYS = OVERSEAS_PLATFORMS.map((p) => p.key);
 // 能一键发布的平台（有后端 publisher）
 const PUBLISHABLE = new Set(['xiaohongshu', 'douyin', 'kuaishou', 'weixin-channels', 'zhihu', 'bilibili', 'wechat-oa', ...OVERSEAS_KEYS]);
-// 必须附带媒体的平台（无媒体发不了）——公众号需要一张封面图，也计入
-const MEDIA_REQUIRED = new Set(['xiaohongshu', 'douyin', 'kuaishou', 'weixin-channels', 'bilibili', 'wechat-oa', ...OVERSEAS_KEYS]);
-// 只能发视频的平台（抖音/视频号/B站必须视频；海外平台的图文 / 纯文字在下一期接通，现在也只收视频）
-const VIDEO_ONLY = new Set(['douyin', 'weixin-channels', 'bilibili', ...OVERSEAS_KEYS]);
+// 必须附带媒体的平台（无媒体发不了）——公众号需要一张封面图，也计入；海外的 X / Threads 可以纯文字
+const MEDIA_REQUIRED = new Set(['xiaohongshu', 'douyin', 'kuaishou', 'weixin-channels', 'bilibili', 'wechat-oa', ...OVERSEAS_MEDIA_REQUIRED]);
+// 只能发视频的平台（抖音/视频号/B站必须视频；海外只有 YouTube）
+const VIDEO_ONLY = new Set(['douyin', 'weixin-channels', 'bilibili', ...OVERSEAS_VIDEO_ONLY]);
 const VIDEO_RE = /\.(mp4|mov|webm|mkv|avi|m4v|flv|ts)$/i;
 
 function parseSections(text: string): Record<string, string> {
@@ -352,7 +355,7 @@ export default function PublishPage({ persona }: PublishPageProps) {
 
         <label className="field-label publish-media-label">
           媒体附件 {selectedMedia.length > 0 && <Tag>{selectedMedia.length} 个</Tag>}
-          <span className="publish-label-hint">（小红书/抖音/快手/微信视频号/B站/海外平台必需，从内容库选；抖音、视频号、B站、海外平台须为视频）</span>
+          <span className="publish-label-hint">（小红书/抖音/快手/微信视频号/B站/TikTok/Instagram/YouTube 必需，从内容库选；抖音、视频号、B站、YouTube 须为视频；X、Threads 可纯文字）</span>
         </label>
         <div className="publish-media-row">
           <Button size="sm" icon={<IconSkills size={13} />} onClick={() => setShowPicker((v) => !v)}>
