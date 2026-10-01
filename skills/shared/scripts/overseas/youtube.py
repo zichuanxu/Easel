@@ -24,6 +24,8 @@ VISIBILITY = ("public", "unlisted", "private")
 VISIBILITY_DEFAULT = "public"
 NAME_SELECTORS = ""        # 频道名在 Studio 里，要等账号有频道后再校准
 AVATAR_SELECTORS = "#avatar-btn img"
+PUBLISH_URL = "https://studio.youtube.com/"
+READY_KINDS: frozenset[str] = frozenset()
 
 
 def compose(post: Post) -> dict:
@@ -37,3 +39,7 @@ def is_logged_in(page) -> bool:
 
 def read_identity(page) -> dict:
     return base.read_identity(page, NAME_SELECTORS, AVATAR_SELECTORS)
+
+
+def publish(drv, fields: dict, post: Post) -> base.Result:
+    raise base.StepFailed(f"{NAME} 发布还没接通")

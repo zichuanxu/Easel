@@ -21,6 +21,8 @@ VISIBILITY = ("everyone", "friends", "only_me")
 VISIBILITY_DEFAULT = "everyone"
 NAME_SELECTORS = '[data-tt="NewHome_UserInfo_a"]'
 AVATAR_SELECTORS = '[data-tt="Header_NewHeader_Clickable"] img, [data-tt="components_Avatar_AvatarContainer"] img'
+PUBLISH_URL = "https://www.tiktok.com/tiktokstudio/upload"
+READY_KINDS: frozenset[str] = frozenset()
 
 
 def compose(post: Post) -> dict:
@@ -33,3 +35,7 @@ def is_logged_in(page) -> bool:
 
 def read_identity(page) -> dict:
     return base.read_identity(page, NAME_SELECTORS, AVATAR_SELECTORS)
+
+
+def publish(drv, fields: dict, post: Post) -> base.Result:
+    raise base.StepFailed(f"{NAME} 发布还没接通")

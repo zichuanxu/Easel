@@ -23,6 +23,8 @@ VISIBILITY: tuple[str, ...] = ()
 VISIBILITY_DEFAULT = ""
 NAME_SELECTORS = ""        # 不用选择器，见 read_identity
 AVATAR_SELECTORS = ""
+PUBLISH_URL = HOME_URL
+READY_KINDS: frozenset[str] = frozenset()
 _ME_JS = """() => {
   let user = '';
   for (const a of document.querySelectorAll('a[href^="/@"]')) {
@@ -52,3 +54,7 @@ def read_identity(page) -> dict:
         return {"name": "", "avatar": ""}
     avatar = me.get("avatar") or ""
     return {"name": (me.get("name") or "")[:40], "avatar": avatar if avatar.startswith("http") else ""}
+
+
+def publish(drv, fields: dict, post: Post) -> base.Result:
+    raise base.StepFailed(f"{NAME} 发布还没接通")
