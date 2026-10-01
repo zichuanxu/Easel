@@ -66,6 +66,7 @@ export const SKILL_DISPLAY_NAMES: Record<string, string> = {
   'skill-event-calendar': '节日 / 节点',
   'skill-hook-generator': '开头钩子',
   'skill-kuaishou-upload': '快手',
+  'skill-overseas-publish': '海外平台',
   'skill-livestream': '直播方案',
   'skill-my-account': '账号查询',
   'skill-news-intelligence': '行业情报',
