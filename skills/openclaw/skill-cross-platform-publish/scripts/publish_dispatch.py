@@ -48,21 +48,21 @@ PLATFORMS: dict[str, dict] = {
               "title": 100, "body": 0, "tags": 5, "aspect": "-",
               "note": "文章/回答；专业排版；话题标签"},
     # 海外平台：浏览器自动化发到自己的账号（skill-overseas-publish）；文案由 LLM 改写成英文
-    "tiktok": {"publisher": "skill-overseas-publish", "types": ["video"],
+    "tiktok": {"publisher": "skill-overseas-publish", "types": ["video", "image"],
                "title": 0, "body": 2200, "tags": 0, "aspect": "9:16",
-               "note": "英文说明≤2200；竖版；可见范围 everyone/friends/only_me"},
+               "note": "英文说明≤2200；竖版视频，或 ≤35 张图；可见范围 everyone/friends/only_me"},
     "youtube": {"publisher": "skill-overseas-publish", "types": ["video"],
                 "title": 100, "body": 5000, "tags": 0, "aspect": "9:16/16:9",
                 "note": "英文标题≤100、描述≤5000；竖版≤3 分钟自动成 Shorts；账号要先有频道"},
-    "instagram": {"publisher": "skill-overseas-publish", "types": ["video"],
+    "instagram": {"publisher": "skill-overseas-publish", "types": ["video", "image"],
                   "title": 0, "body": 2200, "tags": 30, "aspect": "9:16",
-                  "note": "视频发成 Reels；英文说明≤2200、话题≤30"},
-    "x": {"publisher": "skill-overseas-publish", "types": ["video"],
+                  "note": "视频发成 Reels，或 ≤10 张图；英文说明≤2200、话题≤30"},
+    "x": {"publisher": "skill-overseas-publish", "types": ["video", "image", "text"],
           "title": 0, "body": 280, "tags": 0, "aspect": "16:9/9:16",
-          "note": "英文≤280（中日韩文字算 2、链接算 23）"},
-    "threads": {"publisher": "skill-overseas-publish", "types": ["video"],
+          "note": "英文≤280（中日韩文字算 2、链接算 23）；1 个视频或 ≤4 张图，也可纯文字"},
+    "threads": {"publisher": "skill-overseas-publish", "types": ["video", "image", "text"],
                 "title": 0, "body": 500, "tags": 1, "aspect": "9:16",
-                "note": "英文≤500；话题只能 1 个"},
+                "note": "英文≤500；话题只能 1 个；1 个视频或 ≤10 张图，也可纯文字"},
 }
 
 
@@ -143,6 +143,10 @@ def cmd_selftest(_a) -> int:
     for k in ("tiktok", "youtube", "instagram", "x", "threads"):
         assert PLATFORMS[k]["publisher"] == "skill-overseas-publish", f"{k} 应路由到 skill-overseas-publish"
     assert PLATFORMS["youtube"]["title"] == 100 and PLATFORMS["x"]["body"] == 280
+    # 与 overseas/<平台>.py 的 READY_KINDS 一致：X / Threads 可纯文字，YouTube 只收视频
+    assert PLATFORMS["x"]["types"] == ["video", "image", "text"] and PLATFORMS["threads"]["types"] == ["video", "image", "text"]
+    assert PLATFORMS["tiktok"]["types"] == ["video", "image"] and PLATFORMS["instagram"]["types"] == ["video", "image"]
+    assert PLATFORMS["youtube"]["types"] == ["video"]
     # 约束检查：超长标题应告警
     r = _check_platform("xiaohongshu", {"title": "一" * 30, "tags": list(range(12)),
                                         "media_type": "article"})
