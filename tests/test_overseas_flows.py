@@ -153,3 +153,100 @@ def test_registry_publish_contract():
         assert m.READY_KINDS <= m.KINDS, key
         assert m.PUBLISH_URL.startswith("https://"), key
     assert PLATFORMS["x"].READY_KINDS == {"video"}
+
+
+# ---------------------------------------------------------------- Threads
+TH = PLATFORMS["threads"]
+
+
+def threads_driver():
+    d = FakeDriver(visible={TH.OPEN_COMPOSER})
+    d.hooks[("click", TH.OPEN_COMPOSER)] = lambda dr: dr.visible_set.update({TH.TEXTBOX, TH.DIALOG})
+    d.hooks[("upload", TH.FILE_INPUT)] = lambda dr: dr.visible_set.update({TH.MEDIA_READY, TH.POST_BUTTON})
+
+    def posted(dr):
+        dr.visible_set.discard(TH.DIALOG)
+        dr.visible_set.add(TH.POSTED_LINK)
+        dr.attrs[(TH.POSTED_LINK, "href")] = "/@demo/post/ABC"
+    d.hooks[("click", TH.POST_BUTTON)] = posted
+    return d
+
+
+def test_threads_publishes_video():
+    d = threads_driver()
+    p = post()
+    r = TH.publish(d, TH.compose(p), p)
+    assert r.status == "success" and r.url == "https://www.threads.com/@demo/post/ABC"
+    kinds = [a[0] + ":" + str(a[1]) for a in d.actions]
+    assert kinds.index(f"click:{TH.OPEN_COMPOSER}") < kinds.index(f"upload:{TH.FILE_INPUT}")
+    assert TH.READY_KINDS == {"video"}
+
+
+def test_threads_dialog_stays_open_is_unknown():
+    d = threads_driver()
+    d.hooks.pop(("click", TH.POST_BUTTON))
+    p = post()
+    assert TH.publish(d, TH.compose(p), p).status == "unknown"
+
+
+# ---------------------------------------------------------------- Instagram
+IG = PLATFORMS["instagram"]
+
+
+def ig_driver(*, reel_notice=True):
+    d = FakeDriver(visible={IG.NEW_POST, IG.POPUPS[0]})
+
+    def opened(dr):
+        dr.visible_set.add(IG.FILE_INPUT)
+    d.hooks[("click", IG.NEW_POST)] = opened
+
+    def uploaded(dr):
+        dr.visible_set.add(IG.heading("Crop"))
+        dr.visible_set.add(IG.NEXT)
+        if reel_notice:
+            dr.visible_set.add(IG.REEL_OK)
+    d.hooks[("upload", IG.FILE_INPUT)] = uploaded
+    steps = iter(["Edit", "caption"])
+
+    def next_page(dr):
+        step = next(steps)
+        if step == "Edit":
+            dr.visible_set.add(IG.heading("Edit"))
+        else:
+            dr.visible_set.update({IG.CAPTION, IG.SHARE})
+    d.hooks[("click", IG.NEXT)] = next_page
+    d.hooks[("click", IG.SHARE)] = lambda dr: dr.texts.__setitem__(IG.DIALOG, "Reel shared\nYour reel has been shared.")
+    return d
+
+
+def test_instagram_publishes_reel_through_crop_and_edit():
+    d = ig_driver()
+    p = post()
+    r = IG.publish(d, IG.compose(p), p)
+    assert r.status == "success"
+    clicks = [a[1] for a in d.acts("click")]
+    assert clicks == [IG.NEW_POST, IG.REEL_OK, IG.NEXT, IG.NEXT, IG.SHARE]
+    assert d.acts("type")[0][1] == IG.CAPTION
+    assert d.acts("dismiss")[0][1] == IG.POPUPS
+    assert IG.READY_KINDS == {"video"}
+
+
+def test_instagram_without_reel_notice_still_works():
+    d = ig_driver(reel_notice=False)
+    p = post()
+    assert IG.publish(d, IG.compose(p), p).status == "success"
+
+
+def test_instagram_error_text_is_failed():
+    d = ig_driver()
+    d.hooks[("click", IG.SHARE)] = lambda dr: dr.texts.__setitem__(IG.DIALOG, "Your reel couldn't be shared.")
+    p = post()
+    r = IG.publish(d, IG.compose(p), p)
+    assert r.status == "failed" and "couldn't" in r.message
+
+
+def test_instagram_no_share_confirmation_is_unknown():
+    d = ig_driver()
+    d.hooks.pop(("click", IG.SHARE))
+    p = post()
+    assert IG.publish(d, IG.compose(p), p).status == "unknown"
