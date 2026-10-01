@@ -250,3 +250,91 @@ def test_instagram_no_share_confirmation_is_unknown():
     d.hooks.pop(("click", IG.SHARE))
     p = post()
     assert IG.publish(d, IG.compose(p), p).status == "unknown"
+
+
+# ---------------------------------------------------------------- TikTok
+TT = PLATFORMS["tiktok"]
+
+
+def tiktok_driver():
+    d = FakeDriver(visible={TT.FILE_INPUT, TT.CAPTION, TT.VISIBILITY_BUTTON}, enabled={TT.POST_BUTTON})
+    d.hooks[("upload", TT.FILE_INPUT)] = lambda dr: dr.texts.__setitem__(TT.UPLOADED, "clip.mp4 1080P Uploaded")
+    d.hooks[("click", TT.VISIBILITY_BUTTON)] = lambda dr: dr.visible_set.update(
+        {TT.option(v) for v in TT.VISIBILITY_LABEL.values()})
+    d.visible_set.add(TT.POST_BUTTON)
+    d.hooks[("click", TT.POST_BUTTON)] = lambda dr: setattr(dr, "_url", "https://www.tiktok.com/tiktokstudio/content")
+    return d
+
+
+def test_tiktok_publishes_with_visibility():
+    d = tiktok_driver()
+    p = post(visibility="only_me")
+    r = TT.publish(d, TT.compose(p), p)
+    assert r.status == "success"
+    clicks = [a[1] for a in d.acts("click")]
+    assert clicks == [TT.VISIBILITY_BUTTON, TT.option("Only you"), TT.POST_BUTTON]
+    assert d.acts("type")[0][1] == TT.CAPTION      # 清掉预填的文件名再写
+    assert TT.READY_KINDS == {"video"}
+
+
+def test_tiktok_upload_never_finishes_is_step_failed():
+    d = tiktok_driver()
+    d.hooks.pop(("upload", TT.FILE_INPUT))
+    p = post()
+    with pytest.raises(base.StepFailed, match="上传超时"):
+        TT.publish(d, TT.compose(p), p)
+
+
+def test_tiktok_confirms_post_now_when_content_check_pending():
+    d = tiktok_driver()
+    d.hooks[("click", TT.POST_BUTTON)] = lambda dr: dr.visible_set.add(TT.POST_NOW)
+    d.hooks[("click", TT.POST_NOW)] = lambda dr: setattr(dr, "_url", "https://www.tiktok.com/tiktokstudio/content")
+    p = post()
+    assert TT.publish(d, TT.compose(p), p).status == "success"
+    assert d.acts("click")[-1][1] == TT.POST_NOW
+
+
+def test_tiktok_stays_on_upload_page_is_unknown():
+    d = tiktok_driver()
+    d.hooks.pop(("click", TT.POST_BUTTON))
+    p = post()
+    assert TT.publish(d, TT.compose(p), p).status == "unknown"
+
+
+# ---------------------------------------------------------------- YouTube
+YT = PLATFORMS["youtube"]
+
+
+def youtube_driver():
+    d = FakeDriver(visible={YT.CREATE}, url=YT.PUBLISH_URL)
+    d.hooks[("click", YT.CREATE)] = lambda dr: dr.visible_set.add(YT.UPLOAD_ITEM)
+    d.hooks[("click", YT.UPLOAD_ITEM)] = lambda dr: dr.visible_set.add(YT.FILE_INPUT)
+    d.hooks[("upload", YT.FILE_INPUT)] = lambda dr: dr.visible_set.update(
+        {YT.TITLE, YT.DESCRIPTION, YT.NOT_FOR_KIDS, YT.NEXT, *YT.VISIBILITY_RADIO.values(), YT.DONE})
+
+    def done(dr):
+        dr.visible_set.add(YT.PUBLISHED_LINK)
+        dr.attrs[(YT.PUBLISHED_LINK, "href")] = "https://youtu.be/abc123"
+    d.hooks[("click", YT.DONE)] = done
+    return d
+
+
+def test_youtube_flow_sets_title_description_visibility():
+    d = youtube_driver()
+    p = post(title="My Short", visibility="private")
+    r = YT.publish(d, YT.compose(p), p)
+    assert r.status == "success" and r.url == "https://youtu.be/abc123"
+    typed = {a[1]: a[2] for a in d.acts("type")}
+    assert typed[YT.TITLE] == "My Short" and typed[YT.DESCRIPTION] == "Hello world\n\n#ai"
+    clicks = [a[1] for a in d.acts("click")]
+    assert clicks.count(YT.NEXT) == 3
+    assert YT.VISIBILITY_RADIO["private"] in clicks and clicks[-1] == YT.DONE
+    assert YT.READY_KINDS == frozenset()        # 没频道、未真机校准：先不开放
+
+
+def test_youtube_without_channel_says_so():
+    d = youtube_driver()
+    d.hooks[("goto", YT.PUBLISH_URL)] = lambda dr: setattr(dr, "_url", "https://www.youtube.com/?channel_creation_token=x")
+    p = post(title="T")
+    with pytest.raises(base.StepFailed, match="频道"):
+        YT.publish(d, YT.compose(p), p)
