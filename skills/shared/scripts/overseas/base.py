@@ -273,6 +273,7 @@ class ProfileLock:
 
 # 话题 / @ 联想框：X、Threads 是 listbox（Instagram、TikTok 的列表打空格就收，不用认）
 SUGGESTIONS = '[role="listbox"]'
+SUGGESTION_WAIT_MS = 800        # Threads 的话题框是异步弹出的，补完空格等它这么久再判断
 
 # 落到这些页面 = 平台要人工验证（验证码 / 安全检查），无头浏览器过不去，调用方改开有头窗口
 BLOCK_MARKERS = ("captcha", "/challenge", "checkpoint", "/account/access", "/suspended")
@@ -393,9 +394,12 @@ class PageDriver:
             # 行尾是话题 / @ 时联想框开着，这时回车会选中联想项（X 默认选第一项）：先补空格收掉
             if TAG_AT_LINE_END.search(line):
                 kb.type(" ")
+                self.wait_for(SUGGESTIONS, SUGGESTION_WAIT_MS)   # 等不到就算了（X / Instagram / TikTok 已经收了）
             # Threads 的话题框打空格不收；Esc 只收联想框、不关发帖弹窗（真机校准）。没联想框时绝不按 Esc
             if self.visible(SUGGESTIONS):
                 kb.press("Escape")
+                # 等联想框真的收起来再回车：Threads 上 Esc 后立刻回车，回车会被正在关的联想框吞掉（真机校准）
+                self.wait_for(SUGGESTIONS, SUGGESTION_WAIT_MS, state="hidden")
         self._rest()
 
     def press(self, key: str) -> None:
