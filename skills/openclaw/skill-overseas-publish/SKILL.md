@@ -1,7 +1,7 @@
 ---
 name: skill-overseas-publish
 description: >-
-  海外平台发布：把视频发到 TikTok、YouTube、Instagram（Reels）、X、Threads 上自己的账号。
+  海外平台发布：把视频、图文和纯文字发到 TikTok、YouTube、Instagram、X、Threads 上自己的账号。
   当用户说"发 TikTok""发 YouTube / Shorts""发 Instagram / Reels""发推 / 发 X""发 Threads""发海外平台"
   "出海发布"时使用。本机浏览器自动化（登录态在账号页窗口登录），不经第三方服务。国内平台用各自的发布 SKILL。
 layer: publish
@@ -10,7 +10,8 @@ layer: publish
 # 海外平台发布
 
 > 走 `skills/shared/scripts/overseas_publisher.py`（CWD=项目根）。登录在 Web「账号」页「海外」分组点「登录」，
-> 本机弹 Chrome 窗口亲手登录。目前只接通**视频**；图文 / 纯文字在下一期。YouTube 要账号先有频道。
+> 本机弹 Chrome 窗口亲手登录。**视频**：TikTok / Instagram（Reels）/ X / Threads；**图文**：TikTok ≤35 张、
+> Instagram ≤10、X ≤4、Threads ≤10；**纯文字**：X / Threads。YouTube 要账号先有频道（暂未开放）。
 
 ## 流程
 
@@ -30,10 +31,12 @@ layer: publish
 python skills/shared/scripts/overseas_publisher.py platforms
 python skills/shared/scripts/overseas_publisher.py whoami --platform tiktok
 python skills/shared/scripts/overseas_publisher.py publish --platform tiktok --media outputs/项目/成片.mp4 --desc "English caption" --tags "ai,productivity" --visibility only_me
+python skills/shared/scripts/overseas_publisher.py publish --platform instagram --media outputs/项目/1.jpg --media outputs/项目/2.jpg --desc "English caption"
+python skills/shared/scripts/overseas_publisher.py publish --platform x --desc "English text post #ai"
 python skills/shared/scripts/overseas_publisher.py publish --platform youtube --media outputs/项目/成片.mp4 --title "English title" --desc "Description" --visibility private --exec
 ```
 
-平台码：`tiktok` / `youtube` / `instagram` / `x` / `threads`。`--visibility` 只有 YouTube（public / unlisted / private）
+平台码：`tiktok` / `youtube` / `instagram` / `x` / `threads`。图文就是 `--media` 重复传多张图；不传 `--media` 是纯文字（只有 X / Threads）。`--visibility` 只有 YouTube（public / unlisted / private）
 和 TikTok（everyone / friends / only_me）有；不传用平台默认（公开 / 所有人）。
 
 ## 规则

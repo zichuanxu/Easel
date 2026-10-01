@@ -13,17 +13,20 @@ from overseas import PLATFORMS, base  # noqa: E402
 from overseas.post import Post  # noqa: E402
 
 VIDEO = Path("/tmp/clip.mp4")
+IMG = Path("/tmp/easel-flow-a.jpg")     # 流程测试不读文件
+IMG2 = Path("/tmp/easel-flow-b.png")
 
 
 class FakeDriver:
     """记录动作；visible / enabled / text / attr 读剧本，hooks[(动作, 选择器)] 在动作后改剧本。"""
 
-    def __init__(self, *, visible=(), enabled=(), texts=None, attrs=None, url="https://example.test/"):
+    def __init__(self, *, visible=(), enabled=(), texts=None, attrs=None, counts=None, url="https://example.test/"):
         self.actions: list[tuple] = []
         self.visible_set = set(visible)
         self.enabled_set = set(enabled)
         self.texts = dict(texts or {})
         self.attrs = dict(attrs or {})
+        self.counts = dict(counts or {})
         self._url = url
         self.hooks: dict = {}
         self.paused = 0
@@ -44,7 +47,11 @@ class FakeDriver:
         return self._url
 
     def count(self, sel):
-        return 1 if sel in self.visible_set else 0
+        return self.counts.get(sel, 1 if sel in self.visible_set else 0)
+
+    def wait_count(self, sel, n, timeout_ms=120000):
+        self._do("wait_count", sel, n)
+        return self.count(sel) >= n
 
     def visible(self, sel):
         return sel in self.visible_set
@@ -153,12 +160,37 @@ def test_x_no_toast_is_unknown():
     assert d.paused >= X.POST_WAIT_S * 1000 - 1000
 
 
+def test_x_publishes_images_after_every_preview_attached():
+    d = x_driver()
+    d.hooks[("upload", X.FILE_INPUT)] = lambda dr: dr.counts.__setitem__(X.MEDIA_READY, 2)
+    p = Post(media=[IMG, IMG2], desc="Hello")
+    assert X.publish(d, X.compose(p), p).status == "success"
+    assert ("wait_count", X.MEDIA_READY, 2) in d.actions
+
+
+def test_x_partial_image_attach_never_posts():
+    """2 张图只挂上 1 张：不去点发布（Review Focus 3）。"""
+    d = x_driver()
+    d.hooks[("upload", X.FILE_INPUT)] = lambda dr: dr.counts.__setitem__(X.MEDIA_READY, 1)
+    p = Post(media=[IMG, IMG2], desc="Hello")
+    with pytest.raises(base.StepFailed, match="图片没全挂上"):
+        X.publish(d, X.compose(p), p)
+    assert not d.committed
+
+
+def test_x_text_only_post_skips_upload():
+    d = x_driver()
+    p = Post(desc="Just text #ai")
+    assert X.publish(d, X.compose(p), p).status == "success"
+    assert not d.acts("upload") and d.acts("type")[0][2] == "Just text #ai"
+    assert X.READY_KINDS == {"video", "image", "text"}
+
+
 def test_registry_publish_contract():
     for key, m in PLATFORMS.items():
         assert callable(m.publish), key
         assert m.READY_KINDS <= m.KINDS, key
         assert m.PUBLISH_URL.startswith("https://"), key
-    assert PLATFORMS["x"].READY_KINDS == {"video"}
 
 
 # ---------------------------------------------------------------- Threads
@@ -167,8 +199,8 @@ TH = PLATFORMS["threads"]
 
 def threads_driver():
     d = FakeDriver(visible={TH.OPEN_COMPOSER}, enabled={TH.POST_BUTTON})
-    d.hooks[("click", TH.OPEN_COMPOSER)] = lambda dr: dr.visible_set.update({TH.TEXTBOX, TH.DIALOG})
-    d.hooks[("upload", TH.FILE_INPUT)] = lambda dr: dr.visible_set.update({TH.MEDIA_READY, TH.POST_BUTTON})
+    d.hooks[("click", TH.OPEN_COMPOSER)] = lambda dr: dr.visible_set.update({TH.TEXTBOX, TH.DIALOG, TH.POST_BUTTON})
+    d.hooks[("upload", TH.FILE_INPUT)] = lambda dr: dr.visible_set.add(TH.MEDIA_READY["video"])
 
     def posted(dr):
         dr.visible_set.discard(TH.DIALOG)
@@ -185,7 +217,6 @@ def test_threads_publishes_video():
     assert r.status == "success" and r.url == "https://www.threads.com/@demo/post/ABC"
     kinds = [a[0] + ":" + str(a[1]) for a in d.actions]
     assert kinds.index(f"click:{TH.OPEN_COMPOSER}") < kinds.index(f"upload:{TH.FILE_INPUT}")
-    assert TH.READY_KINDS == {"video"}
 
 
 def test_threads_waits_for_post_button_enabled():
@@ -196,6 +227,31 @@ def test_threads_waits_for_post_button_enabled():
     with pytest.raises(base.StepFailed, match="处理超时"):
         TH.publish(d, TH.compose(p), p)
     assert TH.POST_BUTTON not in [a[1] for a in d.acts("click")] and not d.committed
+
+
+def test_threads_publishes_images():
+    d = threads_driver()
+    d.hooks[("upload", TH.FILE_INPUT)] = lambda dr: dr.counts.__setitem__(TH.MEDIA_READY["image"], 2)
+    p = Post(media=[IMG, IMG2], desc="Hello")
+    assert TH.publish(d, TH.compose(p), p).status == "success"
+    assert ("wait_count", TH.MEDIA_READY["image"], 2) in d.actions
+
+
+def test_threads_partial_image_attach_never_posts():
+    """2 张图只挂上 1 张：不去点发布（Review Focus 3）。"""
+    d = threads_driver()
+    d.hooks[("upload", TH.FILE_INPUT)] = lambda dr: dr.counts.__setitem__(TH.MEDIA_READY["image"], 1)
+    p = Post(media=[IMG, IMG2], desc="Hello")
+    with pytest.raises(base.StepFailed, match="图片没全挂上"):
+        TH.publish(d, TH.compose(p), p)
+    assert not d.committed
+
+
+def test_threads_text_only_post():
+    d = threads_driver()
+    p = Post(desc="Just text")
+    assert TH.publish(d, TH.compose(p), p).status == "success"
+    assert not d.acts("upload") and TH.READY_KINDS == {"video", "image", "text"}
 
 
 def test_threads_dialog_stays_open_is_unknown():
@@ -244,7 +300,16 @@ def test_instagram_publishes_reel_through_crop_and_edit():
     assert clicks == [IG.NEW_POST, IG.REEL_OK, IG.NEXT, IG.NEXT, IG.SHARE]
     assert d.acts("type")[0][1] == IG.CAPTION
     assert d.acts("dismiss")[0][1] == IG.POPUPS
-    assert IG.READY_KINDS == {"video"}
+
+
+def test_instagram_publishes_carousel_without_reel_notice():
+    d = ig_driver(reel_notice=False)
+    d.hooks[("click", IG.SHARE)] = lambda dr: dr.texts.__setitem__(IG.DIALOG, "Post shared\nYour post has been shared.")
+    p = Post(media=[IMG, IMG2], desc="Hello")
+    assert IG.publish(d, IG.compose(p), p).status == "success"
+    assert ("wait_for", IG.REEL_OK) not in d.actions       # 图片没有 Reels 提示，别白等 8 秒
+    assert d.acts("upload")[0][2] == (str(IMG), str(IMG2))
+    assert IG.READY_KINDS == {"video", "image"}
 
 
 def test_instagram_without_reel_notice_still_works():
@@ -314,7 +379,36 @@ def test_tiktok_publishes_with_visibility():
     clicks = [a[1] for a in d.acts("click")]
     assert clicks == [TT.VISIBILITY_BUTTON, TT.option("Only you"), TT.POST_BUTTON]
     assert d.acts("type")[0][1] == TT.CAPTION      # 清掉预填的文件名再写
-    assert TT.READY_KINDS == {"video"}
+
+
+def tiktok_photo_driver(n=2):
+    d = FakeDriver(visible={TT.PHOTO_INPUT, TT.CAPTION, TT.VISIBILITY_BUTTON, TT.PHOTO_POST_BUTTON},
+                   enabled={TT.PHOTO_POST_BUTTON})
+    d.hooks[("upload", TT.PHOTO_INPUT)] = lambda dr: dr.counts.__setitem__(TT.PHOTO_READY, n)
+    d.hooks[("click", TT.VISIBILITY_BUTTON)] = lambda dr: dr.visible_set.update(
+        {TT.option(v) for v in TT.VISIBILITY_LABEL.values()})
+    d.hooks[("click", TT.PHOTO_POST_BUTTON)] = lambda dr: setattr(
+        dr, "_url", "https://www.tiktok.com/tiktokstudio/content")
+    return d
+
+
+def test_tiktok_publishes_photos_on_photo_tab():
+    d = tiktok_photo_driver()
+    p = Post(media=[IMG, IMG2], desc="Hello", visibility="only_me")
+    assert TT.publish(d, TT.compose(p), p).status == "success"
+    assert d.acts("goto")[0][1] == TT.PHOTO_URL
+    assert d.acts("commit") == [("commit", TT.PHOTO_POST_BUTTON)]
+    assert TT.option("Only you") in [a[1] for a in d.acts("click")]
+    assert TT.READY_KINDS == {"video", "image"}
+
+
+def test_tiktok_photos_not_all_uploaded_never_posts():
+    """2 张图只上传完 1 张：不去点发布（Review Focus 3）。"""
+    d = tiktok_photo_driver(n=1)
+    p = Post(media=[IMG, IMG2], desc="Hello")
+    with pytest.raises(base.StepFailed, match="图片上传超时"):
+        TT.publish(d, TT.compose(p), p)
+    assert not d.committed
 
 
 def test_tiktok_upload_never_finishes_is_step_failed():

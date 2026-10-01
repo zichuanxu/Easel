@@ -407,7 +407,7 @@ export const CAPABILITY_MENU: { meta?: unknown; tabs: CapabilityTab[] } = {
       {
        "skill": "skill-overseas-publish",
        "label": "海外平台",
-       "desc": "海外平台发布：把视频发到 TikTok、YouTube、Instagram（Reels）、X、Threads 上自己的账号。本机浏览器自动化，不经第三方服务。",
+       "desc": "海外平台发布：把视频、图文和纯文字发到 TikTok、YouTube、Instagram、X、Threads 上自己的账号。本机浏览器自动化，不经第三方服务。",
        "status": "ready"
       },
       {

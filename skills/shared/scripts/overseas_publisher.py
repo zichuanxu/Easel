@@ -163,7 +163,7 @@ def check_publishable(mod, post: Post) -> None:
     if post.kind not in mod.READY_KINDS:
         if not mod.READY_KINDS:
             raise PostError(f"{mod.NAME} 发布还没接通（YouTube 需要账号先有频道并完成真机校准）")
-        raise PostError(f"{mod.NAME} 的{KIND_LABEL[post.kind]}发布还没接通，目前只能发视频")
+        raise PostError(f"{mod.NAME} 的{KIND_LABEL[post.kind]}发布还没接通")
 
 
 def _pub_fail(sf, msg: str, rc: int) -> int:

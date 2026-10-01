@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { OVERSEAS_PLATFORMS, VISIBILITY_OPTIONS, isOverseas, overseasPayload, overseasAdaptRule } from './overseasPublish';
+import {
+  OVERSEAS_PLATFORMS, OVERSEAS_MEDIA_REQUIRED, OVERSEAS_VIDEO_ONLY, VISIBILITY_OPTIONS,
+  isOverseas, overseasPayload, overseasAdaptRule,
+} from './overseasPublish';
 
 describe('overseasPublish', () => {
   it('五个海外平台，限额与后端一致', () => {
@@ -9,6 +12,13 @@ describe('overseasPublish', () => {
     expect(OVERSEAS_PLATFORMS.find((p) => p.key === 'x')!.bodyLimit).toBe(280);
     expect(isOverseas('x')).toBe(true);
     expect(isOverseas('douyin')).toBe(false);
+  });
+
+  it('媒体要求与后端一致：X / Threads 可纯文字，只有 YouTube 只收视频', () => {
+    expect(OVERSEAS_MEDIA_REQUIRED).toEqual(['tiktok', 'youtube', 'instagram']);
+    expect(OVERSEAS_VIDEO_ONLY).toEqual(['youtube']);
+    expect(OVERSEAS_PLATFORMS.find((p) => p.key === 'x')!.hint).toContain('纯文字');
+    expect(OVERSEAS_PLATFORMS.find((p) => p.key === 'instagram')!.hint).toContain('≤10 张图');
   });
 
   it('非 YouTube 平台：整段卡片文字作正文，标题和母版标签留空（Review Focus 3）', () => {

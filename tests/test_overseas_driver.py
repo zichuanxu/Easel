@@ -13,12 +13,20 @@ sys.path.insert(0, str(PROJECT_ROOT / "skills" / "shared" / "scripts"))
 from overseas import base  # noqa: E402
 
 
+SUGGESTIONS = '[role="listbox"]'
+
+
 class FakeKeyboard:
-    def __init__(self):
+    """events 也当时间线用：等联想框消失（wait_hidden）也记在这里，好核对先后顺序。"""
+
+    def __init__(self, page=None):
         self.events: list[tuple[str, str]] = []
+        self.page = page
 
     def press(self, key):
         self.events.append(("press", key))
+        if key == "Escape" and self.page is not None:
+            self.page.present.discard(SUGGESTIONS)     # 真机：Esc 收起联想框
 
     def type(self, text, delay=0):
         self.events.append(("type", text))
@@ -36,7 +44,7 @@ class FakeLocator:
         return self
 
     def count(self):
-        return 1 if self.sel in self.page.present else 0
+        return self.page.counts.get(self.sel, 1 if self.sel in self.page.present else 0)
 
     def is_visible(self):
         return self.sel in self.page.present
@@ -59,6 +67,14 @@ class FakeLocator:
         self.page.uploads.append((self.sel, list(files)))
 
     def wait_for(self, state="visible", timeout=None):
+        if state == "hidden":
+            self.page.keyboard.events.append(("wait_hidden", self.sel))
+            if self.sel in self.page.present:
+                raise RuntimeError("Timeout")
+            return
+        if self.sel in self.page.appear_on_wait:      # 异步弹出：等一下就出现（只出现一次）
+            self.page.appear_on_wait.discard(self.sel)
+            self.page.present.add(self.sel)
         if self.sel not in self.page.present:
             raise RuntimeError("Timeout")
 
@@ -67,13 +83,15 @@ class FakePWPage:
     def __init__(self, url="https://example.test/home"):
         self.url = url
         self.present: set[str] = set()
+        self.counts: dict = {}
+        self.appear_on_wait: set[str] = set()
         self.enabled: set[str] = set()
         self.attrs: dict = {}
         self.texts: dict = {}
         self.clicks: list[str] = []
         self.uploads: list = []
         self.waited = 0
-        self.keyboard = FakeKeyboard()
+        self.keyboard = FakeKeyboard(self)
         self.after_goto = None
 
     def locator(self, sel):
@@ -97,7 +115,42 @@ def test_type_text_clears_then_types_lines_with_enter():
     sel_all = "Meta+A" if sys.platform == "darwin" else "Control+A"
     assert page.clicks == ["#box"]
     assert page.keyboard.events == [("press", sel_all), ("press", "Backspace"), ("type", "Hello"),
-                                    ("press", "Enter"), ("press", "Enter"), ("type", "#ai")]
+                                    ("press", "Enter"), ("press", "Enter"), ("type", "#ai"), ("type", " ")]
+
+
+def test_type_text_closes_tag_suggestions_before_next_line():
+    """以话题结尾的行：先补空格（X / Instagram / TikTok 的联想框就收了），联想框还开着（Threads）再按 Esc，
+    等它真的收起来才回车——真机上 Esc 后立刻回车，回车会被正在关的联想框吞掉、换行丢了（Review Focus 1）。"""
+    page = FakePWPage()
+    page.present.update({"#box", '[role="listbox"]'})
+    drv_for(page).type_text("#box", "Hi #ai\nBye", clear=False)
+    assert page.keyboard.events == [("type", "Hi #ai"), ("type", " "), ("press", "Escape"),
+                                    ("wait_hidden", SUGGESTIONS), ("press", "Enter"), ("type", "Bye")]
+
+
+def test_type_text_waits_for_late_suggestion_box_after_tag_line():
+    """Threads 的话题框是异步弹出的：补完空格先等一下再看，别在框出来之前就回车，把标签变成话题（Final review 1）。"""
+    page = FakePWPage()
+    page.present.add("#box")
+    page.appear_on_wait.add('[role="listbox"]')
+    drv_for(page).type_text("#box", "Hi #ai\nBye", clear=False)
+    assert page.keyboard.events[:5] == [("type", "Hi #ai"), ("type", " "), ("press", "Escape"),
+                                        ("wait_hidden", SUGGESTIONS), ("press", "Enter")]
+
+
+def test_type_text_never_presses_escape_without_suggestions():
+    page = FakePWPage()
+    page.present.add("#box")
+    drv_for(page).type_text("#box", "Hi #ai", clear=False)
+    assert page.keyboard.events == [("type", "Hi #ai"), ("type", " ")]
+
+
+def test_wait_count_waits_for_n_matches():
+    page = FakePWPage()
+    page.counts = {"img.preview": 1}
+    assert drv_for(page).wait_count("img.preview", 2, timeout_ms=1500) is False
+    page.counts["img.preview"] = 2
+    assert drv_for(page).wait_count("img.preview", 2, timeout_ms=1500) is True
 
 
 def test_type_text_without_clear_keeps_existing_text():

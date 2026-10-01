@@ -8,16 +8,27 @@ export interface OverseasPlatform {
   bodyLimit: number;
   hint: string;
   region: 'overseas';
+  mediaRequired: boolean;   // 要带图片或视频（X / Threads 可以纯文字）
+  videoOnly: boolean;       // 只收视频（目前只有 YouTube）
 }
 
 export const OVERSEAS_PLATFORMS: OverseasPlatform[] = [
-  { key: 'tiktok', label: 'TikTok', bodyLimit: 2200, hint: '英文说明≤2200，需附视频', region: 'overseas' },
+  { key: 'tiktok', label: 'TikTok', bodyLimit: 2200, hint: '英文说明≤2200，附 1 个视频或 ≤35 张图',
+    region: 'overseas', mediaRequired: true, videoOnly: false },
   { key: 'youtube', label: 'YouTube', titleLimit: 100, bodyLimit: 5000,
-    hint: '第一行是英文标题（≤100），空一行后写描述；需附视频；账号要先有频道', region: 'overseas' },
-  { key: 'instagram', label: 'Instagram', bodyLimit: 2200, hint: '英文说明≤2200、话题≤30，视频发成 Reels', region: 'overseas' },
-  { key: 'x', label: 'X', bodyLimit: 280, hint: '英文≤280（中日韩文字算 2），需附视频', region: 'overseas' },
-  { key: 'threads', label: 'Threads', bodyLimit: 500, hint: '英文≤500，话题只能 1 个，需附视频', region: 'overseas' },
+    hint: '第一行是英文标题（≤100），空一行后写描述；需附视频；账号要先有频道',
+    region: 'overseas', mediaRequired: true, videoOnly: true },
+  { key: 'instagram', label: 'Instagram', bodyLimit: 2200, hint: '英文说明≤2200、话题≤30，视频发成 Reels，或 ≤10 张图',
+    region: 'overseas', mediaRequired: true, videoOnly: false },
+  { key: 'x', label: 'X', bodyLimit: 280, hint: '英文≤280（中日韩文字算 2），可附 1 个视频或 ≤4 张图，也可纯文字',
+    region: 'overseas', mediaRequired: false, videoOnly: false },
+  { key: 'threads', label: 'Threads', bodyLimit: 500, hint: '英文≤500，话题只能 1 个，可附 1 个视频或 ≤10 张图，也可纯文字',
+    region: 'overseas', mediaRequired: false, videoOnly: false },
 ];
+
+// 与后端 web/app.py 的 MEDIA_REQUIRED / VIDEO_ONLY_PUBLISH 的海外部分一致
+export const OVERSEAS_MEDIA_REQUIRED = OVERSEAS_PLATFORMS.filter((p) => p.mediaRequired).map((p) => p.key);
+export const OVERSEAS_VIDEO_ONLY = OVERSEAS_PLATFORMS.filter((p) => p.videoOnly).map((p) => p.key);
 
 const KEYS = new Set(OVERSEAS_PLATFORMS.map((p) => p.key));
 

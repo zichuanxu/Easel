@@ -22,7 +22,7 @@ VISIBILITY_DEFAULT = "everyone"
 NAME_SELECTORS = '[data-tt="NewHome_UserInfo_a"]'
 AVATAR_SELECTORS = '[data-tt="Header_NewHeader_Clickable"] img, [data-tt="components_Avatar_AvatarContainer"] img'
 PUBLISH_URL = "https://www.tiktok.com/tiktokstudio/upload"
-READY_KINDS = frozenset({"video"})       # 图片轮播在 PR 3 视网页版能力接通
+READY_KINDS = frozenset({"video", "image"})
 # TikTok Studio 上传页；真机校准于 2026-10-01
 FILE_INPUT = 'input[type="file"][accept^="video"]'
 UPLOADED = '[data-e2e="upload_status_container"]'           # 上传完显示「Uploaded」
@@ -35,6 +35,11 @@ POPUPS = ('.react-joyride__tooltip button:has-text("Got it")',
           '.TUXModal-overlay button:has-text("Cancel")',
           '.TUXModal-overlay button:has-text("Got it")')
 POST_NOW = '.TUXModal-overlay button:has-text("Post now")'  # 内容检查没跑完时的确认
+# 图文：上传页的 Photos 标签（真机校准于 2026-10-01）。说明框、可见范围与视频页相同
+PHOTO_URL = "https://www.tiktok.com/tiktokstudio/upload?tab=photo"
+PHOTO_INPUT = 'input[type="file"][accept*="image"]'
+PHOTO_READY = 'button[aria-label="Delete photo"]'          # 每张图一个
+PHOTO_POST_BUTTON = 'button:has(:text-is("Post"))'          # 图文页的 Post 没有 data-e2e；页面上唯一
 UPLOAD_WAIT_S = 300
 POST_WAIT_S = 180
 
@@ -56,6 +61,8 @@ def read_identity(page) -> dict:
 
 
 def publish(drv, fields: dict, post: Post) -> base.Result:
+    if post.kind == "image":
+        return _publish_photos(drv, fields, post)
     drv.goto(PUBLISH_URL)
     if not drv.wait_for(FILE_INPUT, 30000, state="attached"):
         raise base.StepFailed("上传页没打开（找不到选择视频）")
@@ -67,14 +74,34 @@ def publish(drv, fields: dict, post: Post) -> base.Result:
         drv.pause(1000)
     else:
         raise base.StepFailed("视频上传超时")
+    _fill_and_post(drv, fields, POST_BUTTON)
+    return _await_posted(drv)
+
+
+def _publish_photos(drv, fields: dict, post: Post) -> base.Result:
+    drv.goto(PHOTO_URL)
+    if not drv.wait_for(PHOTO_INPUT, 30000, state="attached"):
+        raise base.StepFailed("图文上传页没打开（找不到选择图片）")
+    drv.upload(PHOTO_INPUT, post.media)
+    if not drv.wait_count(PHOTO_READY, len(post.media), UPLOAD_WAIT_S * 1000):
+        raise base.StepFailed("图片上传超时（不是每张都出现了删除按钮）")
+    _fill_and_post(drv, fields, PHOTO_POST_BUTTON)
+    return _await_posted(drv)
+
+
+def _fill_and_post(drv, fields: dict, button: str) -> None:
+    """写说明（视频页预填了文件名，先清空）→ 选可见范围 → 等发布按钮能点 → 点发布。"""
     drv.dismiss(POPUPS)
     drv.type_text(CAPTION, fields["caption"], clear=True)
     drv.dismiss(POPUPS)
     drv.click(VISIBILITY_BUTTON)
     drv.click(option(VISIBILITY_LABEL[fields["visibility"]]))
-    if not drv.wait_enabled(POST_BUTTON, 120000):
+    if not drv.wait_enabled(button, 120000):
         raise base.StepFailed("发布按钮一直不能点")
-    drv.commit(POST_BUTTON)
+    drv.commit(button)
+
+
+def _await_posted(drv) -> base.Result:
     for _ in range(POST_WAIT_S):
         if "/tiktokstudio/content" in drv.url():
             return base.Result("success", message="已发布到 TikTok")

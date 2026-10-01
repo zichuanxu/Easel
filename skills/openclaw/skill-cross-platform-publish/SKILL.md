@@ -25,7 +25,7 @@ layer: publish
 | kuaishou | skill-kuaishou-upload ✅ |
 | weixin-channels（视频号）| skill-channels-upload ✅ |
 | zhihu | skill-zhihu-publisher ✅ |
-| tiktok / youtube / instagram / x / threads（海外）| skill-overseas-publish ✅（目前只发视频；文案改写成英文）|
+| tiktok / youtube / instagram / x / threads（海外）| skill-overseas-publish ✅（视频；TikTok / Instagram / X / Threads 也能发图文，X / Threads 能发纯文字；文案改写成英文）|
 
 `python <skill>/scripts/publish_dispatch.py platforms` 看全部平台及约束。
 
