@@ -186,9 +186,21 @@ def test_second_publish_same_platform_while_running_is_409(monkeypatch, tmp_path
     assert runs.count("x") == 2
 
 
-def test_publish_overseas_requires_video_for_now(monkeypatch, tmp_path):
+def test_publish_overseas_media_rules(monkeypatch, tmp_path):
+    """X / Threads 可纯文字；TikTok / Instagram / YouTube 要媒体；只有 YouTube 只收视频（Review Focus 4、5）。"""
     _outputs_with(tmp_path, monkeypatch, "a.png", b"\x89PNG")
-    for platform in OVERSEAS:
+    started = []
+    monkeypatch.setattr(web, "_start_async_publish",
+                        lambda platform, cmd, *a: started.append((platform, cmd)) or {"async": True})
+    for platform in ("x", "threads"):
+        asyncio.run(web.api_publish(platform, web.PublishRequest(body="hi")))
+    assert [p for p, _ in started] == ["x", "threads"] and all("--media" not in c for _, c in started)
+    for platform in ("tiktok", "instagram", "youtube"):
         with pytest.raises(web.HTTPException) as ei:
-            asyncio.run(web.api_publish(platform, web.PublishRequest(body="hi", media=["proj/a.png"])))
+            asyncio.run(web.api_publish(platform, web.PublishRequest(body="hi")))
         assert ei.value.status_code == 400
+    asyncio.run(web.api_publish("instagram", web.PublishRequest(body="hi", media=["proj/a.png"])))
+    assert started[-1][0] == "instagram" and "--media" in started[-1][1]
+    with pytest.raises(web.HTTPException) as ei:
+        asyncio.run(web.api_publish("youtube", web.PublishRequest(title="T", body="hi", media=["proj/a.png"])))
+    assert ei.value.status_code == 400

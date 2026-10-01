@@ -14,7 +14,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "skills" / "shared" / "scripts"))
 
 import overseas_publisher as op  # noqa: E402
 from overseas import base  # noqa: E402
-from overseas.post import Limits, Post, caption_text  # noqa: E402
+from overseas.post import Limits, Post, PostError, caption_text  # noqa: E402
 
 
 class FakeDrv:
@@ -218,9 +218,18 @@ def test_invalid_content_is_exit_2(monkeypatch, capsys, tmp_path):
     assert rc == op.EXIT_INVALID == 2
 
 
-def test_kind_not_ready_yet_is_exit_2(monkeypatch, capsys):
-    rc = cli(monkeypatch, "--platform", "x", "--desc", "just text", "--exec")
-    assert rc == 2 and "还没接通" in capsys.readouterr().err
+def test_kind_not_ready_yet_is_rejected(tmp_path):
+    img = tmp_path / "a.jpg"
+    img.write_bytes(b"\xff\xd8")
+    mod = SimpleNamespace(NAME="Demo", KINDS=frozenset({"video", "image"}), READY_KINDS=frozenset({"video"}),
+                          LIMITS=Limits(caption=100, images=4), VISIBILITY=())
+    with pytest.raises(PostError, match="^Demo 的图文发布还没接通$"):     # 不再说「目前只能发视频」
+        op.check_publishable(mod, Post(media=[img], desc="hi"))
+
+
+def test_text_only_dry_run_on_x(monkeypatch, capsys):
+    assert cli(monkeypatch, "--platform", "x", "--desc", "just text") == 0
+    assert '"kind": "text"' in capsys.readouterr().out
 
 
 def test_youtube_not_open_until_calibrated(monkeypatch, capsys, tmp_path):
