@@ -216,6 +216,9 @@ SESSIONS_DIR = OUTPUTS_DIR / "_sessions"   # 每会话最近一轮的完整结�
 SYSTEM_TOPLEVEL_DIRS = {"analytics"}
 LOGIN_TIMEOUT = 240
 LOGIN_PROCESSES: dict[str, subprocess.Popen] = {}
+# runner 写完终态（success/expired/error）后还要关浏览器才退出；whoami 最多等它这么久（秒），
+# 让登录态先落盘再起校验浏览器。
+LOGIN_RUNNER_EXIT_WAIT = 15
 
 # whoami 真校验（起 headless 浏览器，数秒）的进程内缓存：避免账号页 + 工作台重复起浏览器。
 WHOAMI_TTL = 600  # 秒
@@ -3383,6 +3386,25 @@ def _browser_lock(platform: str) -> asyncio.Lock:
     return ent[1]
 
 
+def _login_runner_alive(platform: str) -> bool:
+    proc = LOGIN_PROCESSES.get(platform)
+    return proc is not None and proc.poll() is None
+
+
+async def _login_runner_busy(platform: str) -> bool:
+    """这个平台的扫码登录 runner 还占着浏览器 profile 和状态文件吗。
+    已写终态（success/expired/error）的 runner 只差关浏览器：等它退出（最多 LOGIN_RUNNER_EXIT_WAIT 秒），
+    让登录态先落盘；前端一看到 success 就调 whoami，这样拿到的是带昵称的真校验结果。等不到也算占着。"""
+    deadline = time.monotonic() + LOGIN_RUNNER_EXIT_WAIT
+    while _login_runner_alive(platform):
+        if _login_status(platform)['state'] not in LOGIN_TERMINAL_STATES:
+            return True
+        if time.monotonic() >= deadline:
+            return True
+        await asyncio.sleep(0.5)
+    return False
+
+
 async def _account_whoami(platform: str) -> dict:
     cfg = LOGIN_RUNNERS.get(platform)
     if not cfg:
@@ -3395,6 +3417,12 @@ async def _account_whoami(platform: str) -> dict:
         acc = _wechat_web_account()
         return {'loggedIn': _account_logged_in(platform, cfg),
                 'name': acc.get('name', '') or '微信公众号', 'avatar': ''}
+    # 扫码登录进行中：runner 开着同一个浏览器 profile（无头 Chromium 不拦第二个进程），<平台>.json
+    # 也是它的实时状态文件。这时不起校验浏览器、不碰标记 —— 否则还没扫码、确认「未登录」就会删掉
+    # runner 刚写的 qr_ready，弹窗读不到状态，一直卡在「准备二维码…」（视频号实测）。
+    # 登录结束标记一变，前端会重新校验。
+    if await _login_runner_busy(platform):
+        return {'loggedIn': _account_logged_in(platform, cfg), 'name': '', 'avatar': ''}
     # 命中未过期缓存直接返回。但登录标记跟缓存时记下的指纹不一样 = 之后有人登录/退出过（CLI 直跑
     # login、别的进程……），缓存里的「未登录」可能已经过时，重新真校验 —— 否则卡片要顶着「未登录」
     # 等满 TTL。只比相等不比先后，不受时钟影响。
@@ -3413,6 +3441,7 @@ async def _account_whoami(platform: str) -> dict:
     else:
         cmd = [sys.executable, str(SHARED_SCRIPTS / 'web_publisher.py'), 'whoami',
                '--platform', cfg['wp']]
+    marker_before = _login_marker_mtime_ns(platform)
     try:
         if backend == 'biliup':
             # B站走 cookie 调 API、不起浏览器，不占浏览器锁
@@ -3447,6 +3476,10 @@ async def _account_whoami(platform: str) -> dict:
     if not confident:
         # 校验失败/无有效输出 → **不缓存、不删标记**，返回「上次已知」登录态（读标记）。
         # 避免一次校验抖动就把已登录卡片翻成「未登录」并缓存 10 分钟；下次校验(缓存未写)会自动重试恢复。
+        return {'loggedIn': _account_logged_in(platform, cfg), 'name': '', 'avatar': ''}
+    if _login_runner_alive(platform) or _login_marker_mtime_ns(platform) != marker_before:
+        # 校验跑到一半用户点了扫码登录，或别处（CLI 直跑登录等）改了标记：结论可能已过时。
+        # 同样不缓存、不碰标记（删了就是 runner 的实时状态或刚写下的登录成功），回落到标记里的已知状态。
         return {'loggedIn': _account_logged_in(platform, cfg), 'name': '', 'avatar': ''}
     # 回写标记：确认已登录 → 快速路径（/api/accounts、/api/analytics/platforms）此后也正确；
     # biliup 走 cookies.json 判定，不用标记文件。
