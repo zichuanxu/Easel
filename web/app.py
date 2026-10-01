@@ -4131,7 +4131,8 @@ async def api_trends(platforms: str = "weibo,douyin,zhihu", limit: int = 12):
 
 
 SCHEDULE_FILE = OUTPUTS_DIR / "_schedule.json"
-SCHEDULE_STATUSES = {"idea", "draft", "scheduled", "published"}
+# 与 calendar_ops.CONTENT_STATUSES 一致（unknown：海外发布已提交、结果待确认），测试钉住两边不分叉
+SCHEDULE_STATUSES = {"idea", "draft", "scheduled", "published", "unknown"}
 SCHEDULE_KINDS = {"content", "event"}
 
 

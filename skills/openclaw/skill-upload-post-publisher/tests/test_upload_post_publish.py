@@ -20,6 +20,7 @@ def up(monkeypatch, tmp_path):
     monkeypatch.setenv("UPLOAD_POST_USER", "creator")
     monkeypatch.setattr(mod.time, "sleep", lambda _s: None)
     mod.real_http_post = mod.http_post
+    mod.real_http_get = mod.http_get
     monkeypatch.setattr(mod, "http_get", _fail("unexpected GET"))
     monkeypatch.setattr(mod, "http_post", _fail("unexpected POST"))
     recorded: list[tuple] = []
@@ -246,3 +247,52 @@ def test_calendar_unknown_is_recorded_but_not_forwarded_to_publish_log(monkeypat
     items = calendar_ops.load(data)
     assert [i["status"] for i in items] == ["unknown", "published"]
     assert len(forwarded) == 1  # 只有 published 进 publish-log
+
+
+# ── 本仓加固（合并上游 PR #74 后的安全审查）──────────────────────────────────
+
+
+def test_media_symlink_to_non_media_file_is_rejected(up, monkeypatch, tmp_path):
+    """x.png 其实链到 .env 一类的文件：按真实路径判类型，在任何网络请求前拒绝。"""
+    secret = tmp_path / "secrets.env"
+    secret.write_text("TOKEN=abc", encoding="utf-8")
+    link = tmp_path / "x.png"
+    try:
+        link.symlink_to(secret)
+    except OSError:
+        pytest.skip("本机不允许建符号链接（Windows 非开发者模式）")
+    posts = []
+    monkeypatch.setattr(up, "http_post", lambda *a, **k: posts.append(a) or {})
+    rc = run(up, monkeypatch, "publish", "--platforms", "x", "--media", str(link),
+             "--title", "hi", "--exec")
+    assert rc not in (0, None)
+    assert posts == []
+
+
+def test_media_basenames_go_through_content_guard(up, monkeypatch, tmp_path):
+    """multipart 文件名也会发出去：一并过安全闸门。"""
+    img = tmp_path / "sk-ABCDefgh12345678ijkl.png"
+    img.write_bytes(b"\x89PNG")
+    rc = run(up, monkeypatch, "publish", "--platforms", "x", "--media", str(img),
+             "--title", "hi", "--exec")
+    assert rc == 7
+
+
+def test_user_is_escaped_in_api_path(up, monkeypatch, video):
+    paths = []
+    monkeypatch.setattr(up, "http_get", lambda path, key, params=None: paths.append(path) or {})
+    assert run(up, monkeypatch, "publish", "--platforms", "x", "--media", str(video),
+               "--title", "hi", "--user", "../me") == 0
+    assert paths == ["/api/uploadposts/users/..%2Fme"]
+
+
+@pytest.mark.parametrize("base", ["http://api.upload-post.com", "ftp://x", "api.upload-post.com"])
+def test_non_https_api_base_never_sends_key(up, monkeypatch, base):
+    import httpx
+    monkeypatch.setattr(httpx, "get", _fail("key 发到了非 https 地址"))
+    monkeypatch.setattr(httpx, "post", _fail("key 发到了非 https 地址"))
+    monkeypatch.setattr(up, "API_BASE", base)
+    for call in (lambda: up.real_http_get("/api/uploadposts/me", "k"),
+                 lambda: up.real_http_post("/api/upload_text", "k", {}, [], {})):
+        with pytest.raises(SystemExit):
+            call()

@@ -45,6 +45,7 @@ import uuid
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 SHARED_SCRIPTS = Path(__file__).resolve().parents[3] / "shared" / "scripts"
 sys.path.insert(0, str(SHARED_SCRIPTS))
@@ -122,6 +123,13 @@ def _headers(key: str) -> dict:
     return {"Authorization": f"Apikey {key}"}  # 注意是 Apikey，不是 Bearer
 
 
+def _api_base() -> str:
+    """key 只发往 https 地址：UPLOAD_POST_API_BASE 可覆盖，但不许降级成明文 / 别的协议。"""
+    if not API_BASE.lower().startswith("https://"):
+        _die(f"UPLOAD_POST_API_BASE 必须是 https:// 地址（当前：{API_BASE}），已拒绝发送 key")
+    return API_BASE
+
+
 def _json_or_raise(resp) -> dict:
     try:
         body = resp.json()
@@ -137,7 +145,7 @@ def _json_or_raise(resp) -> dict:
 
 def http_get(path: str, key: str, params: dict | None = None) -> dict:
     import httpx
-    resp = httpx.get(f"{API_BASE}{path}", headers=_headers(key), params=params,
+    resp = httpx.get(f"{_api_base()}{path}", headers=_headers(key), params=params,
                      timeout=API_TIMEOUT)
     if resp.status_code == 404 and path.endswith("/status"):
         return {"status": "not_found"}
@@ -147,7 +155,7 @@ def http_get(path: str, key: str, params: dict | None = None) -> dict:
 def http_post(path: str, key: str, data: dict, files: list, headers: dict) -> dict:
     import httpx
     # httpx 的 data 必须是 dict；重复字段（platform[] 等）用 list 值
-    resp = httpx.post(f"{API_BASE}{path}", headers={**_headers(key), **headers},
+    resp = httpx.post(f"{_api_base()}{path}", headers={**_headers(key), **headers},
                       data=data, files=files or None, timeout=UPLOAD_TIMEOUT)
     return _json_or_raise(resp)
 
@@ -222,6 +230,10 @@ def validate(a) -> str:
     for m in media:
         if not Path(m).expanduser().is_file():
             _die(f"媒体文件不存在：{m}")
+        # 按真实路径判类型：x.png 链到 .env / 私钥一类文件时不上传（agent 可能被注入内容诱导传路径）
+        real = Path(m).expanduser().resolve()
+        if real.suffix.lower() not in VIDEO_EXTS | IMAGE_EXTS:
+            _die(f"媒体文件实际指向 {real.name}，不是图片 / 视频")
     kind = media_kind(media)
     bad = [p for p in a.platform_list if kind not in PLATFORMS[p]["types"]]
     if bad:
@@ -395,7 +407,7 @@ def cmd_check(a) -> int:
         if not user:
             print("⚠️ 未配置 UPLOAD_POST_USER；发布时需 --user")
             return 0
-        prof = http_get(f"/api/uploadposts/users/{user}", key)
+        prof = http_get(f"/api/uploadposts/users/{quote(user, safe='')}", key)
     except ApiError as e:
         _die(str(e), 2)
     accounts = (prof.get("profile") or prof).get("social_accounts") or {}
@@ -412,7 +424,7 @@ def cmd_publish(a) -> int:
     kind = validate(a)
     request_id = str(uuid.uuid4())  # 带连字符，与 32 位 hex 的排期 job_id 区分
     form = build_form(a, kind, request_id)
-    guard_parts = [a.title, a.desc, a.tags]
+    guard_parts = [a.title, a.desc, a.tags, *(Path(m).name for m in a.media or [])]  # 文件名也会发出去
     label = "海外平台发布内容"
 
     if not a.exec:
@@ -427,7 +439,7 @@ def cmd_publish(a) -> int:
             print("⚠️ 未配置 UPLOAD_POST_API_KEY，真发前需配置")
             return 0
         try:
-            prof = http_get(f"/api/uploadposts/users/{a.user}", key)
+            prof = http_get(f"/api/uploadposts/users/{quote(a.user, safe='')}", key)
             accounts = (prof.get("profile") or prof).get("social_accounts") or {}
             missing = [p for p in a.platform_list if not accounts.get(p)]
             if missing:
@@ -540,6 +552,13 @@ def cmd_selftest(_a) -> int:
 
 
 def main() -> int:
+    # Windows GBK 控制台打印 ✅ / ❌ 会抛 UnicodeEncodeError —— 而且是在发布成功之后、记日历之前崩，
+    # 诱导重发。统一按 UTF-8 输出（同 video_pipeline.py）。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(
         description="海外平台发布（Upload-Post API：TikTok/Instagram/YouTube/LinkedIn/X 等）",
         formatter_class=argparse.RawDescriptionHelpFormatter)
