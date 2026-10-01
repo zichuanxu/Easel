@@ -81,6 +81,26 @@
 }
 .settings-modal .add-row { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 8px; font-family: inherit; text-align: left; padding: 10px 16px; border: 1px dashed var(--c-rule-strong); border-radius: var(--r-panel); background: var(--c-surface); color: var(--c-ink-2); font-size: var(--fs-13); cursor: pointer; transition: border-color var(--t-fast), color var(--t-fast); }
 .settings-modal .add-row:hover { border-color: var(--c-ink-3); color: var(--c-ink); }
+
+/* 模型列：输入框 + 「拉取」按钮（datalist 补全端点返回的模型名）。flex 贴住按钮，不改 prow 的列结构 */
+.settings-modal .model-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.settings-modal .model-cell .field.mock { flex: 1 1 auto; }
+.settings-modal .model-cell .btn { flex: none; }
+.settings-modal .model-err { flex: none; color: var(--c-warn); font-size: var(--fs-12); cursor: help; }
+
+/* 本机 Agent（对话通道）：装了 CLI agent 时的免 Key 一键接入。列：名称 / 状态 / 模型 / 操作 / 说明 */
+.settings-modal .local-agents { margin-top: 12px; padding: 10px 16px; border: 1px solid var(--c-rule); border-radius: var(--r-panel); background: var(--c-surface); }
+.settings-modal .la-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; font-size: var(--fs-13); font-weight: 600; }
+.settings-modal .la-head .desc { font-weight: 400; color: var(--c-ink-3); font-size: var(--fs-12); }
+.settings-modal .la-row { display: grid; grid-template-columns: minmax(120px, 1.2fr) auto minmax(120px, 180px) auto minmax(0, 1.6fr); gap: 10px; align-items: center; padding: 6px 0; }
+.settings-modal .la-row > * { min-width: 0; }
+.settings-modal .la-name { display: flex; flex-direction: column; font-size: var(--fs-13); }
+.settings-modal .la-name small { color: var(--c-ink-3); font-size: var(--fs-12); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-modal .la-hint { color: var(--c-ink-3); font-size: var(--fs-12); }
+@container (max-width: 640px) {
+  .settings-modal .la-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .settings-modal .la-model, .settings-modal .la-hint { grid-column: 1 / -1; }
+}
 .settings-modal .empty { display: flex; align-items: center; gap: 10px; padding: 16px; color: var(--c-ink-2); font-size: var(--fs-13); }
 .settings-modal .stub-row { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--c-rule); color: var(--c-ink-2); font-size: var(--fs-13); }
 .settings-modal .stub-row:last-child { border-bottom: none; }
