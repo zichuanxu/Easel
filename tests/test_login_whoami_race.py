@@ -83,6 +83,7 @@ def test_whoami_during_login_leaves_runner_alone(env):
     res = _whoami()
     assert calls == []
     assert res["loggedIn"] is False
+    assert res["pending"] is True and res["loginTs"] is None   # 前端缓存记 null，下次比指纹即作废
     s = web._login_status(PF)
     assert s["state"] == "qr_ready"
     assert s["qr"] == f"_login/{PF}.png"
@@ -109,6 +110,8 @@ def test_whoami_keeps_marker_written_during_check(env):
     assert len(calls) == 1
     assert _state(d) == "success"
     assert res["loggedIn"] is True       # 回落到标记里的已知状态
+    assert res["pending"] is True
+    assert res["loginTs"] is None        # 不带指纹：前端不会把这份没昵称的结果顶满 10 分钟
     assert PF not in web._WHOAMI_CACHE
 
 
@@ -122,6 +125,8 @@ def test_whoami_waits_for_runner_finishing_success(env):
     res = _whoami()
     assert len(calls) == 1
     assert res["loggedIn"] is True and res["name"] == "在逃空指针"
+    assert "pending" not in res
+    assert res["loginTs"] == (d / f"{PF}.json").stat().st_mtime_ns / 1e9
     assert _state(d) == "success"
     assert web._WHOAMI_CACHE[PF][1]["name"] == "在逃空指针"
 

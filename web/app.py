@@ -3366,9 +3366,11 @@ async def api_mp_login_status(platform: str):
 async def api_account_whoami(platform: str):
     """真校验登录态 + 读昵称/头像（起 headless 浏览器，数秒）。前端开页后台调用以自愈假阳性。
     带 TTL 进程内缓存（避免账号页+工作台重复起浏览器）；确认已登录则回写标记，令快速路径自愈。
-    结果附带 loginTs（登录标记指纹，见 /api/accounts）：前端缓存记住它，标记再变就知道缓存过时了。"""
+    结果附带 loginTs（登录标记指纹，见 /api/accounts）：前端缓存记住它，标记再变就知道缓存过时了。
+    校验暂缓（pending：登录进行中 / 结论过时）的结果 loginTs 给 null：前端照样会缓存它，但下次
+    /api/accounts 的指纹一比就对不上、作废重验，不会把这份没昵称的已知状态顶满 10 分钟。"""
     data = await _account_whoami(platform)
-    return {**data, 'loginTs': _login_marker_ts(platform)}
+    return {**data, 'loginTs': None if data.get('pending') else _login_marker_ts(platform)}
 
 
 # 每个平台一把浏览器锁：whoami 与创作数据抓取用的是同一个浏览器 profile 目录，
@@ -3422,7 +3424,7 @@ async def _account_whoami(platform: str) -> dict:
     # runner 刚写的 qr_ready，弹窗读不到状态，一直卡在「准备二维码…」（视频号实测）。
     # 登录结束标记一变，前端会重新校验。
     if await _login_runner_busy(platform):
-        return {'loggedIn': _account_logged_in(platform, cfg), 'name': '', 'avatar': ''}
+        return {'loggedIn': _account_logged_in(platform, cfg), 'name': '', 'avatar': '', 'pending': True}
     # 命中未过期缓存直接返回。但登录标记跟缓存时记下的指纹不一样 = 之后有人登录/退出过（CLI 直跑
     # login、别的进程……），缓存里的「未登录」可能已经过时，重新真校验 —— 否则卡片要顶着「未登录」
     # 等满 TTL。只比相等不比先后，不受时钟影响。
@@ -3480,7 +3482,7 @@ async def _account_whoami(platform: str) -> dict:
     if _login_runner_alive(platform) or _login_marker_mtime_ns(platform) != marker_before:
         # 校验跑到一半用户点了扫码登录，或别处（CLI 直跑登录等）改了标记：结论可能已过时。
         # 同样不缓存、不碰标记（删了就是 runner 的实时状态或刚写下的登录成功），回落到标记里的已知状态。
-        return {'loggedIn': _account_logged_in(platform, cfg), 'name': '', 'avatar': ''}
+        return {'loggedIn': _account_logged_in(platform, cfg), 'name': '', 'avatar': '', 'pending': True}
     # 回写标记：确认已登录 → 快速路径（/api/accounts、/api/analytics/platforms）此后也正确；
     # biliup 走 cookies.json 判定，不用标记文件。
     if backend != 'biliup':
