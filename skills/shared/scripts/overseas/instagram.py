@@ -25,8 +25,8 @@ VISIBILITY_DEFAULT = ""
 NAME_SELECTORS = ""        # 不用选择器，见 read_identity
 AVATAR_SELECTORS = ""
 PUBLISH_URL = HOME_URL
-READY_KINDS = frozenset({"video"})       # 图文在 PR 3 接通
-# 新建帖子流程：New post → 选文件 →（Reels 提示 OK）→ Crop → Next → Edit → Next → 写说明 → Share
+READY_KINDS = frozenset({"video", "image"})
+# 新建帖子流程：New post → 选文件（图片可多选）→（视频才有 Reels 提示 OK）→ Crop → Next → Edit → Next → 写说明 → Share
 # 真机校准于 2026-10-01
 DIALOG = '[role="dialog"]'
 NEW_POST = 'svg[aria-label="New post"]'
@@ -84,7 +84,7 @@ def publish(drv, fields: dict, post: Post) -> base.Result:
     if not drv.wait_for(FILE_INPUT, 15000, state="attached"):
         raise base.StepFailed("新建帖子弹窗没打开")
     drv.upload(FILE_INPUT, post.media)
-    if drv.wait_for(REEL_OK, 8000):
+    if post.kind == "video" and drv.wait_for(REEL_OK, 8000):
         drv.click(REEL_OK)
     for step in ("Crop", "Edit"):
         if not drv.wait_for(heading(step), 60000):

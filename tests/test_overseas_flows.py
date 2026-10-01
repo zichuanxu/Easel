@@ -300,7 +300,16 @@ def test_instagram_publishes_reel_through_crop_and_edit():
     assert clicks == [IG.NEW_POST, IG.REEL_OK, IG.NEXT, IG.NEXT, IG.SHARE]
     assert d.acts("type")[0][1] == IG.CAPTION
     assert d.acts("dismiss")[0][1] == IG.POPUPS
-    assert IG.READY_KINDS == {"video"}
+
+
+def test_instagram_publishes_carousel_without_reel_notice():
+    d = ig_driver(reel_notice=False)
+    d.hooks[("click", IG.SHARE)] = lambda dr: dr.texts.__setitem__(IG.DIALOG, "Post shared\nYour post has been shared.")
+    p = Post(media=[IMG, IMG2], desc="Hello")
+    assert IG.publish(d, IG.compose(p), p).status == "success"
+    assert ("wait_for", IG.REEL_OK) not in d.actions       # 图片没有 Reels 提示，别白等 8 秒
+    assert d.acts("upload")[0][2] == (str(IMG), str(IMG2))
+    assert IG.READY_KINDS == {"video", "image"}
 
 
 def test_instagram_without_reel_notice_still_works():
