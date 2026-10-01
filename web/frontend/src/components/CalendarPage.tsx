@@ -13,7 +13,6 @@ const STATUS_META: Record<string, { label: string; color: string }> = {
   draft: { label: '草稿', color: 'var(--layer-plan)' },
   scheduled: { label: '待发', color: 'var(--layer-discover)' },
   published: { label: '已发', color: 'var(--c-ok)' },
-  unknown: { label: '待确认', color: 'var(--c-warn)' },   // 已提交但发布结果待确认（海外发布超时 / 5xx）
 };
 const EVENT_COLOR = 'var(--layer-plan)';
 const EVENT_TYPES = ['节日', '电商', '平台活动', '行业'];
