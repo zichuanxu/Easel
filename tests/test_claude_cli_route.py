@@ -33,6 +33,7 @@ def test_normalize_model_matches_setup_sh(raw, expected):
     ("", os.path.join(HOME, ".claude-easel")),            # 默认隔离目录
     ("shared", ""),                                       # 不隔离：个人 ~/.claude
     ("~/agents/claude/", os.path.join(HOME, "agents/claude")),
+    ("~//agents", os.path.join(HOME, "agents")),          # bash 拼成 $HOME//agents，不是根目录下的 /agents
     ("/opt/claude-easel//", "/opt/claude-easel"),
 ])
 def test_resolve_config_dir(raw, expected):

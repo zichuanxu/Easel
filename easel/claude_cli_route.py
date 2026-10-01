@@ -36,25 +36,33 @@ def resolve_config_dir(raw: str, home: str | os.PathLike) -> tuple[str, str]:
 
     OpenClaw 把 env.vars 原样交给 claude，两边都不展开 ~ / $VAR，所以这里展开并要求绝对路径；
     末尾的 / 不算改目录；整个家目录当配置目录会把 .claude.json 之类直接铺进 ~，不行。"""
-    home_s = _strip_slash(str(home))
+    home_s = strip_slash(str(home))
     v = (raw or "").strip()
     if not v:
         d = os.path.join(home_s, DEFAULT_CONFIG_DIR_NAME)
     elif v == "shared":
         return "", ""
     elif v.startswith("~/") and len(v) > 2:
-        d = os.path.join(home_s, v[2:])
+        d = os.path.join(home_s, v[2:].lstrip("/\\"))     # ~//x 是家目录下的 x（bash 拼成 $HOME//x），不是 /x
     elif os.path.isabs(v):
         d = v
     else:
         return "", _CONFIG_DIR_ERROR.format(raw=v)
-    d = _strip_slash(d)
+    d = strip_slash(d)
     if d == home_s:
         return "", _CONFIG_DIR_ERROR.format(raw=v)
     return d, ""
 
 
-def _strip_slash(value: object) -> str:
+def unquote(value: str) -> str:
+    """.env 里带引号的值：setup.sh 是 source 进来的，shell 会去掉成对的引号，这里照做。"""
+    v = (value or "").strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+        return v[1:-1]
+    return v
+
+
+def strip_slash(value: object) -> str:
     s = value if isinstance(value, str) else ""
     while len(s) > 1 and s.endswith(("/", "\\")):
         s = s[:-1]
@@ -74,12 +82,25 @@ def apply_route(cfg: dict, model_ref: str, config_dir: str) -> bool:
 
     env_block = cfg.get("env") if isinstance(cfg.get("env"), dict) else None
     env_vars = env_block.get("vars") if env_block is not None and isinstance(env_block.get("vars"), dict) else None
-    previous = _strip_slash(env_vars.get("CLAUDE_CONFIG_DIR")) if env_vars is not None else ""
+    previous = strip_slash(env_vars.get("CLAUDE_CONFIG_DIR")) if env_vars is not None else ""
     if config_dir:
         cfg.setdefault("env", {}).setdefault("vars", {})["CLAUDE_CONFIG_DIR"] = config_dir
     elif env_vars is not None:
         env_vars.pop("CLAUDE_CONFIG_DIR", None)
     return previous != config_dir
+
+
+def drop_claude_cli_runtime(cfg: dict, model_ref: str) -> bool:
+    """主模型改选 API 供应商时，摘掉同名模型条目上的 agentRuntime=claude-cli（setup.sh 的 API 路线同样摘掉），
+    否则选了 API Key 实际仍走 Claude CLI。返回是否改了。"""
+    defaults = (cfg.get("agents") or {}).get("defaults") if isinstance(cfg.get("agents"), dict) else None
+    models = defaults.get("models") if isinstance(defaults, dict) else None
+    entry = models.get(model_ref) if isinstance(models, dict) else None
+    runtime = entry.get("agentRuntime") if isinstance(entry, dict) else None
+    if isinstance(runtime, dict) and runtime.get("id") == CLAUDE_CLI_RUNTIME:
+        entry.pop("agentRuntime")
+        return True
+    return False
 
 
 def login_problem(cfg: dict) -> str:
