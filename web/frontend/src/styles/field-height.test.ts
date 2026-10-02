@@ -22,3 +22,12 @@ describe('控件定高不压过单类覆盖，弹窗不留多余滚动槽', () =
     expect(settingsCss).toMatch(/\.settings-modal\s*\{[^}]*scrollbar-gutter: auto/);
   });
 });
+
+describe('对话列表长标题', () => {
+  it('标题是块级元素才能截成省略号，不压到右侧操作按钮上', () => {
+    const title = /\.session-item-title\s*\{[^}]*\}/.exec(chatCss)![0];
+    expect(title).toMatch(/display: block/);
+    expect(title).toMatch(/text-overflow: ellipsis/);
+    expect(chatCss).toMatch(/\.session-item-main\s*\{[^}]*overflow: hidden/);
+  });
+});

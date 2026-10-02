@@ -17,14 +17,15 @@
   transition: background var(--t-fast), color var(--t-fast);
 }
 .session-item-main {
-  flex: 1; min-width: 0; display: block; margin: 0; padding: 7px 0 7px 10px;
+  flex: 1; min-width: 0; display: block; overflow: hidden; margin: 0; padding: 7px 0 7px 10px;
   border: 0; border-radius: var(--r-control); background: none;
   font: inherit; color: inherit; text-align: left; cursor: pointer;
 }
 .session-item-main:focus-visible { outline-offset: -2px; }
 .session-item:hover { background: var(--c-hover); color: var(--c-ink); }
 .session-item.active { background: var(--c-surface); color: var(--c-ink); font-weight: 600; box-shadow: 0 1px 0 var(--c-rule); }
-.session-item-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 必须是块级：行内 span 上的 overflow/ellipsis 不生效，长标题会伸到右侧操作按钮底下 */
+.session-item-title { display: block; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session-actions { display: flex; gap: 2px; flex: none; opacity: 0; transition: opacity var(--t-fast); }
 .session-item:hover .session-actions, .session-item:focus-within .session-actions { opacity: 1; }
 @media (hover: none) { .session-actions { opacity: 1; } }
