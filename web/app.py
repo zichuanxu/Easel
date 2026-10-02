@@ -43,7 +43,8 @@ from easel.gateway_endpoint import chat_completions_url, healthz_url, port_sourc
 from easel.openclaw_cmd import openclaw_base_cmd
 from easel.openclaw_workspace import config_path as openclaw_config_path, state_dir as openclaw_state_dir
 from easel.persona import load_profile_text, persona_prefix, chat_turn_message, profile_exists, _FILE_ORDER
-from easel.timeouts import TIMEOUT_CHAT, TIMEOUT_DIRECT, TIMEOUT_PRODUCE
+from easel.timeouts import (TIMEOUT_CHAT, TIMEOUT_DIRECT, TIMEOUT_PRODUCE, TIMEOUT_PUBLISH,
+                            TIMEOUT_XHS_PUBLISH)
 try:
     from easel.gateway_questions import (
         GatewayClient, GatewayQuestionError, GatewayUnsupportedError,
@@ -3799,6 +3800,19 @@ async def _login_runner_busy(platform: str) -> bool:
     return False
 
 
+def _xhs_cached_nickname() -> str:
+    """上次创作数据抓到的小红书昵称（没有就空）。之后又登录过（可能换了号）就不认这份旧昵称。"""
+    path = _analytics_latest_path('xiaohongshu')
+    try:
+        marker = LOGIN_DIR / 'xiaohongshu.json'
+        if marker.is_file() and marker.stat().st_mtime > path.stat().st_mtime:
+            return ''
+        d = json.loads(path.read_text(encoding='utf-8'))
+        return str(d.get('nickname') or '')[:40] if isinstance(d, dict) else ''
+    except (OSError, ValueError):
+        return ''
+
+
 async def _account_whoami(platform: str) -> dict:
     cfg = LOGIN_RUNNERS.get(platform)
     if not cfg:
@@ -3817,6 +3831,10 @@ async def _account_whoami(platform: str) -> dict:
     # 登录结束标记一变，前端会重新校验。
     if await _login_runner_busy(platform):
         return {'loggedIn': _account_logged_in(platform, cfg), 'name': '', 'avatar': '', 'pending': True}
+    if backend == 'xhs':
+        # 小红书不在后台开浏览器校验：每次校验都是一次自动化登录访问，2026-10 账号就是因为
+        # 「第三方脚本」被封的。只读登录标记，昵称取上次手动刷新创作数据时抓到的。
+        return {'loggedIn': _account_logged_in(platform, cfg), 'name': _xhs_cached_nickname(), 'avatar': ''}
     # 命中未过期缓存直接返回。但登录标记跟缓存时记下的指纹不一样 = 之后有人登录/退出过（CLI 直跑
     # login、别的进程……），缓存里的「未登录」可能已经过时，重新真校验 —— 否则卡片要顶着「未登录」
     # 等满 TTL。只比相等不比先后，不受时钟影响。
@@ -3828,8 +3846,6 @@ async def _account_whoami(platform: str) -> dict:
     if backend == 'biliup':
         cmd = [sys.executable, str(SHARED_SCRIPTS / 'bili_login.py'), 'whoami',
                '--cookie', str(PROJECT_ROOT / 'cookies.json')]
-    elif backend == 'xhs':
-        cmd = [sys.executable, str(SHARED_SCRIPTS / 'xhs_publish.py'), 'whoami', '--no-proxy']
     elif backend == 'douyin':
         cmd = [sys.executable, str(SHARED_SCRIPTS / 'douyin_publish.py'), 'whoami']
     elif backend == 'overseas':
@@ -4041,7 +4057,8 @@ async def _run_analytics(platform: str) -> dict:
 
 @app.get("/api/analytics/{platform}")
 async def api_analytics(platform: str, cached: int = 0):
-    """抓取某平台已登录账号的创作数据（粉丝/获赞/作品 + 与上次快照的增长）。起 headless 浏览器，数秒。
+    """抓取某平台已登录账号的创作数据（粉丝/获赞/作品 + 与上次快照的增长）。起浏览器，数秒
+    （小红书开 Chrome 窗口，且前端只在用户点「刷新数据」时才调用）。
 
     `?cached=1` 只读落盘的最近一次成功结果（毫秒级，不起子进程）；没有则 404。
     同平台并发抓取共享同一次子进程（single-flight）。"""
@@ -4292,9 +4309,10 @@ async def api_publish(platform: str, req: PublishRequest):
             cmd += ['--media', media]
     # 公众号走后台会话（Playwright，脚本自带 --proxy，默认直连）；其余平台走 _publish_env
     pub_env = _proxy_env() if platform == 'wechat-oa' else _publish_env()
+    pub_timeout = TIMEOUT_XHS_PUBLISH if platform == 'xiaohongshu' else TIMEOUT_PUBLISH
     try:
         proc = await asyncio.to_thread(subprocess.run, cmd, cwd=str(PROJECT_ROOT), env=pub_env,
-                                       capture_output=True, text=True, timeout=600)
+                                       capture_output=True, text=True, timeout=pub_timeout)
     except subprocess.TimeoutExpired:
         raise HTTPException(504, '发布超时（媒体处理慢或流程卡住）')
     ok = proc.returncode == 0

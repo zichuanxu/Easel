@@ -31,6 +31,28 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('useAnalyticsData', () => {
+  it('小红书只读缓存：过期也不自动抓，点刷新才抓', async () => {
+    seed({ xiaohongshu: mk('xiaohongshu', ANALYTICS_TTL_MS + 60_000, 3) });
+    fetchA.mockReturnValue(new Promise(() => {}));
+    const { result } = renderHook(() => useAnalyticsData());
+    act(() => result.current.ensure('xiaohongshu', true));
+    act(() => result.current.ensure('xiaohongshu', true, true));
+    expect(result.current.entry('xiaohongshu').data?.followers).toBe(3);
+    expect(result.current.entry('xiaohongshu').updating).toBe(false);
+    expect(fetchA).not.toHaveBeenCalled();
+    act(() => result.current.refresh('xiaohongshu'));
+    expect(fetchA).toHaveBeenCalledTimes(1);
+  });
+
+  it('小红书本地没有：只读后端落盘结果，没有也不抓', async () => {
+    const { result } = renderHook(() => useAnalyticsData());
+    act(() => result.current.ensure('xiaohongshu', true));
+    await waitFor(() => expect(fetchC).toHaveBeenCalledWith('xiaohongshu'));
+    await act(async () => {});
+    expect(fetchA).not.toHaveBeenCalled();
+    expect(result.current.entry('xiaohongshu').updating).toBe(false);
+  });
+
   it('新鲜缓存：立即有数据，不抓取', () => {
     seed({ douyin: mk('douyin', 60_000) });
     const { result } = renderHook(() => useAnalyticsData());

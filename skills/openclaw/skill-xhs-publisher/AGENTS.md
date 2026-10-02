@@ -5,6 +5,7 @@
 本 SKILL 的小红书发布已从旧的 **CDP-to-真实Chrome** Python 栈（`cdp_publish.py` 等，需桌面
 Chrome、headless 环境不可用）**整体重写为 Playwright 版**，流程与选择器移植自成熟开源实现
 [xpzouying/xiaohongshu-mcp](https://github.com/xpzouying/xiaohongshu-mcp)。旧 CDP 脚本已删除。
+2026-10 起所有小红书操作开本机 Chrome 窗口（不再无头），见 references/commands.md。
 
 - 执行入口：`../../shared/scripts/xhs_publish.py`（不在本目录，属跨 SKILL 共享脚本层）。
 - 本目录只保留：`SKILL.md`（流程/约束）、`references/commands.md`（命令样例）、

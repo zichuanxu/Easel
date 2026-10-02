@@ -1,9 +1,10 @@
 ---
 name: skill-xhs-publisher
 description: |
-  将图文/视频内容发布到小红书（XHS）。基于 Playwright + 持久化登录态，headless 即可运行，
+  将图文/视频内容发布到小红书（XHS）。Playwright 驱动本机 Chrome 窗口 + 持久化登录态，
   流程与选择器移植自成熟开源实现 xiaohongshu-mcp（含发布成功校验、上传完成等待、话题联想绑定、
-  新旧发布按钮兼容、反检测）。适用场景：发布图文笔记、发布视频、扫码登录、发布前预检。
+  新旧发布按钮兼容）；鼠标移过去点、按词组输入，默认勾「笔记含AI合成内容」声明，带发帖频率闸门。
+  适用场景：发布图文笔记、发布视频、扫码登录、发布前预检。
 layer: publish
 ---
 
@@ -11,15 +12,15 @@ layer: publish
 
 你是"小红书发布助手"。目标是在用户确认后，调用 `xhs_publish.py` 完成**图文/视频发布**。
 
-## 运行方式（Playwright，headless 可用）
+## 运行方式（Playwright 驱动本机 Chrome 窗口）
 
-统一走确定性脚本 **`../../shared/scripts/xhs_publish.py`**（CWD=项目根）。它用 Playwright +
-持久化登录态驱动小红书创作者后台，headless 即可发布——**替代了旧的 CDP-to-真实Chrome 死栈**
-（那套需桌面 Chrome，本环境跑不了，已删除）。
+统一走确定性脚本 **`../../shared/scripts/xhs_publish.py`**（CWD=项目根）。它用 Playwright 打开
+**本机正式版 Chrome（没有就 Edge）的窗口**，带持久化登录态驱动小红书创作者后台。**不再无头运行**：
+2026-10 用户账号因「第三方脚本 / AI 托管发文」被封 30 天，当时用的是自带内核的无头浏览器。
 
 | 依赖 | 说明 |
 |------|------|
-| playwright + chromium 内核 | 本环境已装（`xhs_publish.py check` 验证） |
+| playwright + 本机 Google Chrome | `xhs_publish.py check` 验证；没装 Chrome 会退回自带 Chromium 并警告（更易被识别） |
 | 已扫码登录 | `login` 把二维码抠成 PNG（默认 `outputs/_login/xhs-login-qrcode.png`，Web UI 可看）→ 扫码 → cookie 持久化到 `~/.easel-browser-profiles/XiaohongshuProfile` |
 | 干净网络 IP | 小红书对机房/代理出口报「安全限制·IP存在风险」拦在登录前；需家宽/干净 IP 代理，或在正常网络登录后拷贝登录态目录复用 |
 
@@ -39,9 +40,10 @@ layer: publish
 
 ## 风险提示（重要）
 
-**小红书自动化发布存在被平台风控、限流、封号的风险。** 默认提醒用户优先用测试号、小流量运行，
-最终内容人工复核。脚本已内置反检测（`--disable-blink-features=AutomationControlled` + 逐字符
-输入 + zh-CN 语言 + 登录态持久化），但风险不可完全消除，使用者自行评估承担。
+**小红书自动化发布存在被平台风控、限流、封号的风险**（2026-10 已被封过 30 天）。脚本开本机 Chrome 窗口、
+鼠标沿曲线移过去点、按词组输入，默认勾「笔记含AI合成内容」（勾不上就不发，退出码 6），并有频率闸门：
+两条笔记之间 ≥60 分钟、24 小时 ≤3 条（超限退出码 5，按提示时间再发，不要调大上限）。风险仍不可完全
+消除；每条内容都要用户看过再发，不要替用户批量排着发。
 
 ## 输入判断（按顺序）
 
@@ -59,7 +61,7 @@ check（环境就绪？）
   → 未登录 → login（有头扫码，一次即可）
   → plan（dry-run 预检：标题长度/媒体路径/步骤）— 给用户确认最终标题、正文、图片/视频
   → 发布前人设检查（见下）
-  → publish / publish-video --exec（首次建议加 --headed 校验选择器，OK 后 headless 复跑）
+  → publish / publish-video --exec（会开 Chrome 窗口，提醒用户发布过程中别动那个窗口）
   → 成功校验（脚本内置：URL 离开 /publish/publish 才算成功）
   → 发布后留痕（见下）
 ```
@@ -85,7 +87,7 @@ python skills/openclaw/skill-publish-log/scripts/log.py record --platform 小红
 - 图文发布必须有图片，视频发布必须有视频；图片与视频不可混用（二选一）。
 - 标题 ≤ 20 全角字（脚本 `calc_title_length` 按小红书口径校验，超限直接拦下）。
 - 文件路径必须为**绝对路径**（脚本会解析并校验存在）。
-- 首次发布或疑似平台改版：先加 `--headed` 观察，校验通过再 headless 批量。
+- AI 声明：Easel 生成/合成的图、视频、文案默认要声明；只有用户确认内容是自己拍、自己写的，才加 `--no-ai-declare`。
 - 发布页结构异常时，改 `xhs_publish.py` 顶部的 **`SELECTORS` 字典**（选择器单点集中维护，
   每条标注了参考源），不要散改流程。
 

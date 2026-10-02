@@ -11,3 +11,5 @@
 TIMEOUT_PRODUCE = 7200   # 制作层：生视频 / 多镜合成给足时间
 TIMEOUT_DIRECT = 300     # 轻量直接执行层
 TIMEOUT_CHAT = TIMEOUT_PRODUCE   # chat 可能中途触发制作任务，按制作层预算
+TIMEOUT_PUBLISH = 600     # Web 发布页同步发布（媒体上传 + 平台处理）
+TIMEOUT_XHS_PUBLISH = 1500   # 小红书按真人节奏输入（正文上千字要几分钟）+ 视频处理最长 10 分钟

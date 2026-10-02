@@ -3,6 +3,10 @@
 脚本：`skills/shared/scripts/xhs_comment.py`（CWD=项目根）。所有命令用 `python` 直接调。
 小红书对代理出口常判风险，**评论抓取/回复建议 `--no-proxy` 直连**。
 
+所有命令都会开**本机 Chrome 窗口**（与 xhs_publish 同一套，不再无头），鼠标移过去点、按词组输入、
+滚轮翻页。回复/评论受频率闸门约束（见 skill-xhs-publisher 的 references/commands.md「频率闸门」）：
+回复每条间隔 ≥20s 且 24 小时最多 30 条；超出的这次不发，dry-run 会提前提示。
+
 ## 定位笔记（不用手动拆 token）
 
 用户说"这条/某条笔记"时，**别自己写脚本捞 token**。两条顺滑路径：
@@ -69,13 +73,12 @@ python skills/shared/scripts/xhs_comment.py reply \
 python skills/shared/scripts/xhs_comment.py reply \
   --note-id <id> --xsec-token '<token>' --no-proxy --exec \
   --replied-file outputs/<主题>/replied.json \
-  --gap 5 \
   --replies-json '[...同上...]'
 ```
 
 - `--replied-file`：记录已成功回复的 comment id，**重跑自动跳过**已回复的，避免重复打扰。
-- `--gap`：每条回复之间间隔秒数（默认 4，防风控）。
-- 首次或疑似改版：加 `--headed` 观察一遍再 headless 批量。
+- `--gap`：每条回复之间至少间隔秒数（默认且最少 20，实际再随机多等 0~100%）。
+- 回复要一条条看过、语气各不相同；不要一次批量回几十条（闸门 24 小时 30 条）。
 - 排错：`EASEL_COMMENT_DEBUG=1 python ... reply ...` 会把点击后/输入后截图存到
   `outputs/_login/comment-*.png`。
 
@@ -96,7 +99,7 @@ python skills/shared/scripts/xhs_comment.py delete \
 
 # ② 用户看过清单、明确确认后才真删
 python skills/shared/scripts/xhs_comment.py delete \
-  --url '<笔记链接>' --no-proxy --exec --gap 5 \
+  --url '<笔记链接>' --no-proxy --exec \
   --targets-json '[{"nickname":"麦克不叫麦","content":"催更"}]'
 ```
 

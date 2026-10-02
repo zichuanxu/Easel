@@ -19,7 +19,7 @@
 ## 实现重写（2026-07 参考 xiaohongshu-mcp）
 
 发布实现从旧 **CDP-to-真实Chrome** 栈（`cdp_publish.py` 7000+ 行，headless 环境不可用，已删除）
-**整体重写为 Playwright 版** `../../shared/scripts/xhs_publish.py`（headless 可用）。
+**整体重写为 Playwright 版** `../../shared/scripts/xhs_publish.py`。2026-10 账号因「第三方脚本」被封后，改为开本机 Chrome 窗口 + 真人节奏鼠标/键盘（`human_input.py`），不再无头运行。
 
 - **参考来源**：[xpzouying/xiaohongshu-mcp](https://github.com/xpzouying/xiaohongshu-mcp)（Go/go-rod，作者称跑一年未封号）——**仅参考其实现代码**，未引入 Docker/MCP 依赖。
 - **移植的健壮技巧**：发布成功校验（URL 离开 /publish/publish）、逐图上传等预览、视频等处理完成、话题联想真绑定、新旧发布按钮兼容、遮挡检测+移弹层、DOM 长度校验、逐字符输入反检测。

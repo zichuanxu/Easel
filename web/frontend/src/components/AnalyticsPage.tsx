@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Page } from '../lib/layers';
 import { useAnalyticsPlatforms } from '../lib/useAnalyticsPlatforms';
-import { useAnalyticsData } from '../lib/useAnalyticsData';
+import { MANUAL_ONLY_ANALYTICS, useAnalyticsData } from '../lib/useAnalyticsData';
 import { fmtAgo } from '../lib/fmtAgo';
 import PageHeader from './ui/PageHeader';
 import Panel from './ui/Panel';
@@ -106,7 +106,12 @@ export default function AnalyticsPage({ onNavigate }: { onNavigate: (page: Page)
             <div className="ana-skel-note">首次拉取这个平台的数据，需要启动浏览器，约十几秒。</div>
           )}
           <div className="analytics-body">
-            {!d && !updating && !failed && <EmptyState text="点上方的平台，拉取这个账号的数据。" />}
+            {!d && !updating && !failed && (MANUAL_ONLY_ANALYTICS.has(anaSel)
+              ? <EmptyState
+                  text="小红书的数据只在你点「刷新数据」时抓取，会打开一个 Chrome 窗口，不要关掉它。不会在后台自动抓。"
+                  action={{ label: '刷新数据', onClick: () => refresh(anaSel) }}
+                />
+              : <EmptyState text="点上方的平台，拉取这个账号的数据。" />)}
             {!d && updating && ['main', 'metrics', 'notes'].map((k) => (
               <div key={k} className={`ana-col ana-col-${k}`} aria-hidden="true">
                 <Panel title={k === 'main' ? '概览' : k === 'metrics' ? '近 7 日环比' : '最新作品'}>

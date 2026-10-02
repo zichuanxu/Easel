@@ -4,7 +4,7 @@
 |------|-----|
 | **SKILL 名称** | skill-xhs-comment-reply |
 | **所属层** | publish（互动运营） |
-| **实现** | `../../shared/scripts/xhs_comment.py`（Playwright，headless 可用） |
+| **实现** | `../../shared/scripts/xhs_comment.py`（Playwright 驱动本机 Chrome 窗口） |
 | **原型来源** | 本项目自研原型 `/tmp/xhs_reply.py`（async 版）+ `/tmp/xhs_get_comments.py`（响应拦截抓评论） |
 | **自研** | ✅ Easel 自研 |
 | **自包含** | 需小红书登录态（与 skill-xhs-publisher 共用持久化目录） |

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""account_stats.py — 归因层：抓取已登录账号的创作数据（Playwright，headless 可用）。
+"""account_stats.py — 归因层：抓取已登录账号的创作数据（Playwright；小红书开本机 Chrome 窗口，其余平台无头）。
 
 复用各平台**持久化登录态**（同 xhs_publish/web_publisher 的 <Platform>Profile）；登录一次两处通用。
 抓取按「正文分行 + 标签就近取数」——不同平台概览区数字在标签前/后不一，故按平台配 direction，避免
