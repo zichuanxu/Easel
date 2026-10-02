@@ -1405,9 +1405,25 @@ def cmd_publish_video(a) -> int:
     return _publish(a, "video")
 
 
+def _marker_logged_in() -> bool:
+    """本地登录记录（outputs/_login/xiaohongshu.json，Web 账号页看的那份）是不是「已登录」。"""
+    path = _web_login_marker_path(argparse.Namespace(status_file=None, profile_base=None))
+    try:
+        return bool(path) and json.loads(path.read_text(encoding="utf-8")).get("state") == "success"
+    except (OSError, ValueError):
+        return False
+
+
 def cmd_whoami(a) -> int:
-    """真校验登录态 + 读账号昵称/头像，输出单行 JSON（供 Web 后端解析）。
-    xhs 须直连（--no-proxy），走代理会被判风险。抽不到昵称时 name 空但 loggedIn 仍准。"""
+    """读登录态 + 昵称/头像，输出单行 JSON（供 Web 后端 / agent 解析）。
+
+    默认**不开浏览器**，只读本地登录记录：每次校验都开一个小红书窗口，既打扰人、又是一次自动化
+    登录访问。2026-10 合并后没重启的旧 Web 后端还在定时调本命令，结果隔一会儿就弹一个窗口。
+    --live 才真开浏览器校验（用户明确要求时用）。xhs 须直连（--no-proxy），走代理会被判风险。"""
+    if not getattr(a, "live", False):
+        print(json.dumps({"loggedIn": _marker_logged_in(), "name": "", "avatar": "", "passive": True},
+                         ensure_ascii=False))
+        return 0
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
@@ -1576,8 +1592,10 @@ def main() -> int:
     add_common(p); add_content(p)
     p.set_defaults(func=cmd_publish_video)
 
-    p = sub.add_parser("whoami", help="开 Chrome 窗口真校验登录态 + 读昵称/头像（输出 JSON；Web 不再调用）")
+    p = sub.add_parser("whoami", help="读登录态（输出 JSON）；默认只读本地登录记录，不开浏览器")
     add_common(p)
+    p.add_argument("--live", action="store_true",
+                   help="真开浏览器窗口校验 + 读昵称/头像（只在用户明确要求时用）")
     p.set_defaults(func=cmd_whoami)
 
     sub.add_parser("selftest", help="离线自检").set_defaults(func=cmd_selftest)

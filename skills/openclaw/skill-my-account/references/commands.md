@@ -17,7 +17,8 @@ python skills/shared/scripts/account_stats.py check
 输出单行 JSON：`{"loggedIn": true/false, "name": "昵称", "avatar": "头像URL"}`。
 
 ```bash
-# 小红书（必须直连，走代理常被判风险）
+# 小红书（必须直连，走代理常被判风险）。默认只读本地登录记录、不开浏览器；
+# 用户明确要求「真去检查一下登录」才加 --live（会弹出浏览器窗口）
 python skills/shared/scripts/xhs_publish.py whoami --no-proxy
 
 # 抖音（走代理，默认取 env，勿加 --no-proxy）
@@ -51,8 +52,9 @@ python skills/shared/scripts/web_publisher.py whoami --platform weixin-channels
 > 想接着看某条笔记的**评论**时，把它的 `url` 直接喂给 **skill-xhs-comment-reply** 的 `fetch --url`，不用再手动拆 token。
 
 ```bash
-# 小红书：粉丝/获赞/关注 + 笔记列表（带 explore 链接、封面、每条数据）
-python skills/shared/scripts/account_stats.py fetch --platform xiaohongshu
+# 小红书：粉丝/获赞/关注 + 笔记列表（带 explore 链接、封面、每条数据）。
+# 必须带 --manual：会开浏览器窗口登录账号，只在用户这次明确要看小红书数据时跑，不要顺手、不要定时
+python skills/shared/scripts/account_stats.py fetch --platform xiaohongshu --manual
 
 # 抖音 / 快手 / 知乎 / 视频号
 python skills/shared/scripts/account_stats.py fetch --platform douyin

@@ -790,9 +790,19 @@ def cmd_check(_a) -> int:
     return 0 if ok else 3
 
 
+# 只在用户明确要求时才抓的平台：每抓一次都是开浏览器窗口登录一次账号。没带 --manual 的调用
+# （定时刷新、合并后没重启的旧 Web 后端……）直接拒绝，不开窗口。
+MANUAL_ONLY = {"xiaohongshu"}
+
+
 def cmd_fetch(a) -> int:
     if a.platform not in PLATFORMS:
         _die(f"未知平台：{a.platform}（支持：{', '.join(PLATFORMS)}）")
+    if a.platform in MANUAL_ONLY and not getattr(a, "manual", False):
+        print(json.dumps({"platform": a.platform, "loggedIn": False,
+                          "error": "manual-only：小红书数据只在用户明确要求时抓取（加 --manual）"},
+                         ensure_ascii=False))
+        return 2
     try:
         import playwright.sync_api  # noqa: F401
     except Exception as e:
@@ -932,6 +942,8 @@ def main() -> int:
     pf.add_argument("--proxy", help="外网代理（默认按平台：xhs 直连、其它走 env）")
     pf.add_argument("--no-proxy", action="store_true", help="强制直连")
     pf.add_argument("--headed", action="store_true", help="有头模式（首次校准）")
+    pf.add_argument("--manual", action="store_true",
+                    help="用户明确要求现在抓（小红书必须带：会开浏览器窗口登录账号）")
     pf.set_defaults(func=cmd_fetch)
     sub.add_parser("selftest", help="离线自检").set_defaults(func=cmd_selftest)
     a = ap.parse_args()
