@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""xhs_comment.py — 小红书评论抓取 + 回复（Playwright 驱动本机 Chrome 窗口）。
+"""xhs_comment.py — 小红书评论抓取 + 回复（Playwright 驱动 CloakBrowser / 本机 Chrome 窗口）。
 
 与 xhs_publish.py **共用同一持久化登录态**（XiaohongshuProfile）；登录用 xhs_publish.py login。
 确定性 IO（抓评论/定位回复框/发送）在本脚本；回复文案由上层（agent 结合画像）给定，脚本不编内容。
@@ -7,9 +7,9 @@
 子命令：check / fetch / reply / plan / selftest
   - fetch：拦截 comment/page 接口响应 → 输出评论 JSON（含子评论）。
   - reply：按 [{id,nickname,reply}] 逐条回评；**默认 dry-run，加 --exec 才真发**；--replied-file 去重。
-真实抓取/回复需：playwright + 本机 Chrome + 已登录 + 干净网络（小红书对代理出口常判风险，建议 --no-proxy）。
+真实抓取/回复需：playwright + CloakBrowser（或本机 Chrome）+ 已登录 + 干净网络（小红书对代理出口常判风险，建议 --no-proxy）。
 
-浏览器与 xhs_publish 同一套（_launch：本机 Chrome 窗口，不再无头）；点击、输入、翻页都走
+浏览器与 xhs_publish 同一套（_launch：Cloak 优先、账号固定指纹，其次本机 Chrome，不再无头）；点击、输入、翻页都走
 human_input（真实鼠标事件，不用 JS 合成的 click()）；回复/评论受 xhs_publish 的频率闸门约束。
 """
 from __future__ import annotations
@@ -469,17 +469,9 @@ def _resolve_note(a) -> tuple[str, str]:
 
 
 def cmd_check(_a) -> int:
-    ok = True
-    try:
-        from playwright.sync_api import sync_playwright
-        print("✅ playwright 已安装")
-        with sync_playwright() as p:
-            path = p.chromium.executable_path
-            print(f"✅ chromium 内核：{path}" if path and Path(path).exists()
-                  else "❌ 未安装浏览器内核（playwright install chromium）")
-            ok = bool(path and Path(path).exists())
-    except Exception as e:
-        print(f"❌ playwright/内核不可用：{e}"); ok = False
+    ok, lines = xhs_publish.browser_report()   # 和发布同一个浏览器
+    for ln in lines:
+        print(ln)
     pd = _profile_dir(None)
     print(f"登录态目录：{pd}（{'存在' if pd.is_dir() else '不存在，先用 xhs_publish.py login 登录'}）")
     return 0 if ok else 3

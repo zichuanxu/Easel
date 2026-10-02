@@ -362,14 +362,13 @@ def _scrape(platform: str, headed: bool, base: str | None, proxy: str | None) ->
         # 互斥（见其模块注释：并发打开会把内核打成 exit 21）；看数据这条路径也走同一个目录，
         # 必须一起遵守，否则就是那个锁没堵住的后门。锁在起 playwright 之前拿，确保启动失败
         # 也不会漏放（finally 包住整段，不只是 ctx 的生命周期）。
-        from xhs_publish import _launch as _xhs_launch, _clear_stale_chrome_locks, _ProfileLock
+        from xhs_publish import _launch as _xhs_launch, _ProfileLock
         xhs_lock = _ProfileLock(profile)
         xhs_lock.acquire(20)
     try:
         with sync_playwright() as p:
             if platform == "xiaohongshu":
-                # 与发布/登录共用 Cloak + 同一套启动参数；禁图版 Chromium 会把创作中心打回登录页。
-                _clear_stale_chrome_locks(profile)
+                # 与发布/登录共用同一个浏览器（Cloak / 本机 Chrome）和启动参数；残留锁由 _launch 自己按实际数据目录清。
                 ctx = _xhs_launch(p, headed, base, proxy)
             else:
                 kwargs = dict(headless=not headed, locale="zh-CN", args=LAUNCH_ARGS)

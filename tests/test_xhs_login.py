@@ -736,10 +736,10 @@ class _RecordingChromium:
 
 
 @pytest.mark.parametrize("headed", [False, True])
-def test_launch_defaults_to_real_chrome_window(monkeypatch, tmp_path, headed):
+def test_launch_falls_back_to_real_chrome_window(monkeypatch, tmp_path, headed):
     monkeypatch.delenv("EASEL_XHS_HEADLESS", raising=False)
     monkeypatch.setattr(xhs, "_browser_channel", lambda: "chrome")
-    monkeypatch.setattr(xhs, "_cloak_executable", lambda: (_ for _ in ()).throw(AssertionError("有 Chrome 就不该找 Cloak")))
+    monkeypatch.setattr(xhs, "_cloak_executable", lambda: None)      # 没装 Cloak：退回本机 Chrome
     pw = _RecordingChromium()
     xhs._launch(pw, headed=headed, base=str(tmp_path), proxy=None)
     kw = pw.calls[0]
@@ -787,3 +787,147 @@ def test_xhs_whoami_never_launches_browser(whoami_env, monkeypatch, tmp_path):
     assert res["loggedIn"] is True and res["name"] == "小红薯A"
     assert calls == []
     assert xhs_marker.is_file()          # 也不会因为「没校验」去删标记
+
+
+# ── 优先 CloakBrowser：账号固定指纹 + 独立数据目录 ───────────────────────────────
+
+
+@pytest.fixture
+def cloak_bin(monkeypatch, tmp_path):
+    exe = tmp_path / "Chromium"
+    exe.write_text("", encoding="utf-8")
+    monkeypatch.delenv("EASEL_XHS_HEADLESS", raising=False)
+    monkeypatch.delenv("EASEL_XHS_BROWSER", raising=False)
+    monkeypatch.setattr(xhs, "_cloak_executable", lambda: exe)
+    monkeypatch.setattr(xhs, "_browser_channel",
+                        lambda: (_ for _ in ()).throw(AssertionError("有 Cloak 就不该找 Chrome")))
+    monkeypatch.setattr(xhs, "_host_fingerprint_platform", lambda: "macos")
+    return exe
+
+
+def test_cloak_preferred_with_fixed_fingerprint(cloak_bin, tmp_path):
+    pw = _RecordingChromium()
+    base = str(tmp_path / "profiles")
+    xhs._launch(pw, headed=False, base=base, proxy=None)
+    xhs._launch(pw, headed=False, base=base, proxy=None)
+    first, second = pw.calls
+    assert first["executable_path"] == str(cloak_bin) and "channel" not in first
+    assert first["headless"] is False and first["no_viewport"] is True
+    seeds = [a for a in first["args"] if a.startswith("--fingerprint=")]
+    assert len(seeds) == 1 and seeds == [a for a in second["args"] if a.startswith("--fingerprint=")]
+    assert "--fingerprint-platform=macos" in first["args"]
+    assert "--lang=zh-CN" in first["args"] and "locale" not in first   # 不走 Playwright 的 CDP 语言模拟
+    assert {"--enable-automation", "--enable-unsafe-swiftshader"} <= set(first["ignore_default_args"])
+    assert "--no-sandbox" not in first["args"]
+    fp = json.loads((Path(base) / xhs.PROFILE_NAME / xhs.FINGERPRINT_FILE).read_text(encoding="utf-8"))
+    assert seeds == [f"--fingerprint={fp['seed']}"] and fp["platform"] == "macos"
+
+
+def test_cloak_uses_own_data_dir_inside_account_dir(cloak_bin, tmp_path):
+    seen = []
+
+    class Rec(_RecordingChromium):
+        def launch_persistent_context(self, profile, **kwargs):
+            seen.append(profile)
+            return object()
+
+    xhs._launch(Rec(), headed=False, base=str(tmp_path / "profiles"), proxy=None)
+    assert seen == [str(tmp_path / "profiles" / xhs.PROFILE_NAME / xhs.CLOAK_DATA_DIR)]
+
+
+@pytest.mark.parametrize("content", ["{oops", '{"seed": "x", "platform": "macos"}', '{"seed": 5, "platform": "macos"}',
+                                     '{"seed": 12345, "platform": "linux"}'])
+def test_bad_fingerprint_file_is_regenerated(cloak_bin, tmp_path, content):
+    path = tmp_path / "profiles" / xhs.PROFILE_NAME / xhs.FINGERPRINT_FILE
+    path.parent.mkdir(parents=True)
+    path.write_text(content, encoding="utf-8")
+    fp = xhs._account_fingerprint(str(tmp_path / "profiles"))
+    assert 10000 <= fp["seed"] <= 99999 and fp["platform"] == "macos"
+    assert json.loads(path.read_text(encoding="utf-8"))["seed"] == fp["seed"]
+
+
+def test_existing_fingerprint_is_kept(cloak_bin, tmp_path):
+    path = tmp_path / "profiles" / xhs.PROFILE_NAME / xhs.FINGERPRINT_FILE
+    path.parent.mkdir(parents=True)
+    path.write_text('{"seed": 54321, "platform": "macos"}', encoding="utf-8")
+    pw = _RecordingChromium()
+    xhs._launch(pw, headed=False, base=str(tmp_path / "profiles"), proxy=None)
+    assert "--fingerprint=54321" in pw.calls[0]["args"]
+
+
+def test_env_can_force_chrome(cloak_bin, tmp_path, monkeypatch):
+    monkeypatch.setenv("EASEL_XHS_BROWSER", "chrome")
+    monkeypatch.setattr(xhs, "_browser_channel", lambda: "chrome")
+    pw = _RecordingChromium()
+    xhs._launch(pw, headed=False, base=str(tmp_path / "profiles"), proxy=None)
+    assert pw.calls[0]["channel"] == "chrome" and "executable_path" not in pw.calls[0]
+    assert not (tmp_path / "profiles" / xhs.PROFILE_NAME / xhs.FINGERPRINT_FILE).exists()
+
+
+def test_cloak_executable_finds_newest_mac_build(monkeypatch, tmp_path):
+    monkeypatch.delenv("EASEL_CLOAK_BROWSER", raising=False)
+    monkeypatch.setenv("CLOAKBROWSER_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(xhs.sys, "platform", "darwin")
+    exes = []
+    for i, v in enumerate(("145.0.7632.109.2", "152.0.1.1")):
+        exe = tmp_path / f"chromium-{v}" / "Chromium.app" / "Contents" / "MacOS" / "Chromium"
+        exe.parent.mkdir(parents=True)
+        exe.write_text("", encoding="utf-8")
+        os.utime(exe, (1000 + i, 1000 + i))
+        exes.append(exe)
+    assert xhs._cloak_executable() == exes[1]
+    (tmp_path / "chromium-9.0.0.0" / "chrome.exe").parent.mkdir()
+    (tmp_path / "chromium-9.0.0.0" / "chrome.exe").write_text("", encoding="utf-8")
+    assert xhs._cloak_executable() == exes[1]          # Mac 上不认 Windows 的 chrome.exe
+
+
+def test_cloak_executable_none_without_cache(monkeypatch, tmp_path):
+    monkeypatch.delenv("EASEL_CLOAK_BROWSER", raising=False)
+    monkeypatch.setenv("CLOAKBROWSER_CACHE_DIR", str(tmp_path / "nope"))
+    assert xhs._cloak_executable() is None
+
+
+def test_fingerprint_from_other_platform_is_regenerated(cloak_bin, tmp_path, capsys):
+    path = tmp_path / "profiles" / xhs.PROFILE_NAME / xhs.FINGERPRINT_FILE
+    path.parent.mkdir(parents=True)
+    path.write_text('{"seed": 12345, "platform": "windows"}', encoding="utf-8")
+    fp = xhs._account_fingerprint(str(tmp_path / "profiles"))
+    assert fp["platform"] == "macos"
+    assert "和本机不符" in capsys.readouterr().err
+
+
+def test_fingerprint_creation_keeps_first_writer(cloak_bin, tmp_path, monkeypatch):
+    """两个进程同时第一次打开：后到的不能覆盖先到的 seed，读先到的那份。"""
+    base = str(tmp_path / "profiles")
+    path = tmp_path / "profiles" / xhs.PROFILE_NAME / xhs.FINGERPRINT_FILE
+    path.parent.mkdir(parents=True)
+    real_link = os.link
+
+    def racing_link(src, dst):
+        Path(dst).write_text('{"seed": 22222, "platform": "macos"}', encoding="utf-8")   # 别人抢先落盘
+        return real_link(src, dst)
+
+    monkeypatch.setattr(xhs.os, "link", racing_link)
+    monkeypatch.setattr(xhs.time, "sleep", lambda _s: None)
+    assert xhs._account_fingerprint(base)["seed"] == 22222
+    assert not list(path.parent.glob("*.tmp"))
+
+
+def test_check_does_not_require_bundled_chromium_with_cloak(cloak_bin):
+    ok, lines = xhs.browser_report()
+    assert ok and any("CloakBrowser" in ln for ln in lines)
+
+
+def test_logout_keeps_fingerprint_and_rate_limit_files(login_dir, monkeypatch, tmp_path):
+    profiles = tmp_path / "profiles"
+    pdir = profiles / xhs.PROFILE_NAME
+    (pdir / xhs.CLOAK_DATA_DIR / "Default").mkdir(parents=True)
+    (pdir / "Default").mkdir()
+    (pdir / "Cookies").write_text("x", encoding="utf-8")
+    (pdir / xhs.FINGERPRINT_FILE).write_text('{"seed": 12345, "platform": "macos"}', encoding="utf-8")
+    (pdir / xhs.ACTIVITY_FILE).write_text('{"publish": [1]}', encoding="utf-8")
+    monkeypatch.setattr(web, "BROWSER_PROFILES", profiles)
+    assert set(web.PROFILE_KEEP_ON_LOGOUT) == {xhs.FINGERPRINT_FILE, xhs.ACTIVITY_FILE}
+    res = asyncio.run(web.api_logout("xiaohongshu"))
+    assert xhs.PROFILE_NAME in res["deleted"]
+    assert sorted(c.name for c in pdir.iterdir()) == sorted([xhs.ACTIVITY_FILE, xhs.FINGERPRINT_FILE])

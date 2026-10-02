@@ -4,8 +4,9 @@
 流程与选择器移植自 xpzouying/xiaohongshu-mcp（Go/go-rod）。确定性 IO 固化在脚本，
 文案/策略仍由上层 LLM 决定。
 
-浏览器：默认开**本机正式版 Chrome（找不到用 Edge）的窗口**，鼠标沿曲线移过去点、按词组输入
-（human_input.py）。2026-10 账号因「第三方脚本 / AI 托管发文」被封 30 天：当时用的是 Playwright
+浏览器：默认开 **CloakBrowser**（源码级抹掉自动化痕迹的 Chromium，`~/.cloakbrowser`）的窗口，
+每个账号一套固定指纹（存在登录目录 .easel-fingerprint.json，macOS 上是 macOS 身份）；没装 Cloak 再开
+**本机正式版 Chrome（找不到用 Edge）**。鼠标沿曲线移过去点、按词组输入（human_input.py）。2026-10 账号因「第三方脚本 / AI 托管发文」被封 30 天：当时用的是 Playwright
 自带内核的无头模式，UA 直接写着 HeadlessChrome。所以小红书这条链不再无头运行
 （EASEL_XHS_HEADLESS=1 可强开，仅限没有桌面的机器，很容易被识别）。
 另有发帖频率闸门（_activity_check）和「笔记含 AI 合成内容」声明（_declare_ai）。
@@ -91,6 +92,12 @@ LAUNCH_ARGS = [
     "--no-first-run", "--no-default-browser-check",
 ]
 IGNORE_DEFAULT_ARGS = ["--enable-automation"]
+# Cloak 另外要去掉 --enable-unsafe-swiftshader（软件渲染 WebGL，显卡串是真机不会有的）。同 cloakbrowser 包装库。
+CLOAK_IGNORE_DEFAULT_ARGS = IGNORE_DEFAULT_ARGS + ["--enable-unsafe-swiftshader"]
+# Cloak 的浏览器数据放在登录目录下单独一个子目录：Cloak 内核版本（如 145）比 Chrome 旧，旧内核打不开
+# 新版本写过的数据目录；两种内核的指纹也不同，混用同一份登录态像同一个号在两台设备间来回切。
+CLOAK_DATA_DIR = "cloak-browser"
+FINGERPRINT_FILE = ".easel-fingerprint.json"
 
 
 # --------------------------------------------------------------------------- #
@@ -134,7 +141,9 @@ def _profile_dir(base: str | None) -> Path:
 
 
 def _cloak_executable() -> Path | None:
-    """本机已装的 CloakBrowser 内核。只用 ~/.cloakbrowser，不用调研 profile / 9344 / 9345。
+    """本机已装的 CloakBrowser 内核（`pip install cloakbrowser && python -m cloakbrowser install`
+    装到 ~/.cloakbrowser，CLOAKBROWSER_CACHE_DIR 可改）。有多个版本取最新装的。
+    EASEL_CLOAK_BROWSER 直接指定可执行文件。
 
     无头 Playwright Chromium 会被小红书 300012；同一出口下 Cloak 无头已实测能出码。
     """
@@ -142,11 +151,90 @@ def _cloak_executable() -> Path | None:
     if override:
         p = Path(override).expanduser()
         return p if p.is_file() else None
-    root = Path.home() / ".cloakbrowser"
+    root = Path(os.environ.get("CLOAKBROWSER_CACHE_DIR") or (Path.home() / ".cloakbrowser")).expanduser()
     if not root.is_dir():
         return None
-    choices = sorted(root.glob("chromium-*/chrome.exe"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if sys.platform == "darwin":
+        pattern = "chromium-*/Chromium.app/Contents/MacOS/Chromium"
+    elif os.name == "nt":
+        pattern = "chromium-*/chrome.exe"
+    else:
+        pattern = "chromium-*/chrome"
+    choices = sorted((c for c in root.glob(pattern) if c.is_file()),
+                     key=lambda c: c.stat().st_mtime, reverse=True)
     return choices[0] if choices else None
+
+
+def _host_fingerprint_platform() -> str:
+    """Cloak 指纹的平台身份：Mac 上就是 macOS（和真机字体、显卡一致）；其它系统用 Cloak 默认的 Windows。"""
+    return "macos" if sys.platform == "darwin" else "windows"
+
+
+def _read_fingerprint(path: Path) -> dict | None:
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if (isinstance(d, dict) and isinstance(d.get("seed"), int) and 10000 <= d["seed"] <= 99999
+            and d.get("platform") in ("macos", "windows")):
+        return d
+    return None
+
+
+def _account_fingerprint(base: str | None) -> dict:
+    """这个账号固定用的 Cloak 指纹（seed + 平台），存在登录目录里；第一次用时生成。
+    指纹固定 = 每次打开都像同一台设备；Cloak 默认每次启动随机换一套，对同一个号反而可疑。
+    平台和本机对不上（登录目录从别的系统拷过来）就重新生成——Mac 上顶着 Windows 指纹，字体/显卡会露馅。
+    并发安全：新文件用硬链接原子落盘，两个进程同时第一次打开时只有一个的 seed 生效，另一个读它的。"""
+    import secrets
+    path = _profile_dir(base) / FINGERPRINT_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    host = _host_fingerprint_platform()
+    for _ in range(5):
+        cur = _read_fingerprint(path)
+        if cur and cur["platform"] == host:
+            return cur
+        if cur:
+            print(f"⚠️ 登录目录里的指纹是 {cur['platform']} 身份，和本机不符，重新生成一套 {host} 指纹",
+                  file=sys.stderr)
+        d = {"seed": 10000 + secrets.randbelow(90000), "platform": host,
+             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+        tmp = path.with_name(f"{FINGERPRINT_FILE}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+        tmp.write_text(json.dumps(d), encoding="utf-8")
+        try:
+            if path.exists():
+                os.replace(tmp, path)          # 坏文件 / 平台不符：直接覆盖
+            else:
+                try:
+                    os.link(tmp, path)         # 不存在：原子创建，别人抢先了就读别人的
+                except FileExistsError:
+                    time.sleep(0.2)
+                    continue
+                except OSError:
+                    os.replace(tmp, path)      # 不支持硬链接的文件系统
+        finally:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        print(f"已为这个小红书账号生成固定指纹（{host} 身份），之后每次都用它：{path}", file=sys.stderr)
+        return d
+    raise RuntimeError(f"读写指纹文件失败：{path}")
+
+
+def browser_engine() -> tuple[str, str]:
+    """小红书实际会用哪个浏览器：("cloak", 可执行文件) / ("chrome"|"msedge", "") / ("bundled", "")。"""
+    if _browser_choice() != "chrome":
+        cloak = _cloak_executable()
+        if cloak:
+            return "cloak", str(cloak)
+    channel = _browser_channel()
+    return (channel, "") if channel else ("bundled", "")
+
+
+def _browser_choice() -> str:
+    """EASEL_XHS_BROWSER=chrome 跳过 Cloak 直接用本机 Chrome；默认 auto（Cloak 优先）。"""
+    return (os.environ.get("EASEL_XHS_BROWSER") or "auto").strip().lower()
 
 
 class _ProfileLock:
@@ -645,33 +733,51 @@ def _allow_headless() -> bool:
 
 def _launch(p, headed: bool, base: str | None, proxy: str | None):
     """开小红书用的浏览器。默认一律开窗口（headed 参数只在允许无头时才有意义）；
-    内核优先本机正式版 Chrome / Edge，其次 Cloak，最后才是 Playwright 自带的 Chromium。"""
-    profile = _profile_dir(base)
-    profile.mkdir(parents=True, exist_ok=True)
-    args = list(LAUNCH_ARGS)
+    内核优先 CloakBrowser（账号固定指纹、数据在登录目录的 cloak-browser/ 子目录），
+    其次本机正式版 Chrome / Edge，最后才是 Playwright 自带的 Chromium。"""
+    account = _profile_dir(base)
+    account.mkdir(parents=True, exist_ok=True)
     headless = not headed and _allow_headless()
-    kwargs = dict(headless=headless,
-                  locale="zh-CN",
-                  args=args,
-                  ignore_default_args=list(IGNORE_DEFAULT_ARGS))
+    engine, cloak = browser_engine()
+    if engine == "cloak":
+        fp = _account_fingerprint(base)
+        profile = account / CLOAK_DATA_DIR
+        if not profile.exists() and (account / "Default").is_dir():
+            print("ℹ️ 第一次用 CloakBrowser 打开这个账号：之前的登录在 Chrome 的数据里，"
+                  "Cloak 里要重新扫码登录一次（xhs_publish.py login 或 Web 账号页「登录」）", file=sys.stderr)
+        profile.mkdir(parents=True, exist_ok=True)
+        # 同 cloakbrowser 包装库：指纹、语言都用内核开关，不用 Playwright 的 locale 模拟（那是 CDP 注入）
+        args = ["--no-first-run", "--no-default-browser-check",
+                f"--fingerprint={fp['seed']}", f"--fingerprint-platform={fp['platform']}",
+                "--lang=zh-CN", "--fingerprint-locale=zh-CN"]
+        if not headless:
+            args.append("--ignore-gpu-blocklist")
+        if sys.platform.startswith("linux"):
+            args.append("--no-sandbox")    # 同包装库：容器 / 关了 user namespace 的发行版上沙箱起不来
+        kwargs = dict(headless=headless, args=args, executable_path=cloak,
+                      ignore_default_args=list(CLOAK_IGNORE_DEFAULT_ARGS))
+    else:
+        profile = account
+        args = list(LAUNCH_ARGS)
+        kwargs = dict(headless=headless,
+                      locale="zh-CN",
+                      args=args,
+                      ignore_default_args=list(IGNORE_DEFAULT_ARGS))
     if not headless:
         kwargs["no_viewport"] = True   # 用真实窗口大小，不让页面尺寸和窗口对不上
-    if sys.platform.startswith("linux") and hasattr(os, "geteuid") and os.geteuid() == 0:
+    if (sys.platform.startswith("linux") and hasattr(os, "geteuid") and os.geteuid() == 0
+            and "--no-sandbox" not in args):
         args.append("--no-sandbox")    # root 下 Chromium 不开沙箱起不来
     if proxy:
         kwargs["proxy"] = {"server": proxy}
     else:
         # 显式直连：Chromium 级屏蔽系统/环境代理（开 VPN 也能用）——同抖音链兜底
         args.append("--no-proxy-server")
-    channel = _browser_channel()
-    cloak = None if channel else _cloak_executable()
-    if channel:
-        kwargs["channel"] = channel
-    elif cloak:
-        kwargs["executable_path"] = str(cloak)
-    else:
-        print("⚠️ 没找到本机 Chrome / Edge，改用 Playwright 自带的 Chromium，更容易被小红书识别成脚本。"
-              "建议安装 Google Chrome。", file=sys.stderr)
+    if engine in ("chrome", "msedge"):
+        kwargs["channel"] = engine
+    elif engine == "bundled":
+        print("⚠️ 没找到 CloakBrowser 和本机 Chrome / Edge，改用 Playwright 自带的 Chromium，"
+              "更容易被小红书识别成脚本。建议安装 CloakBrowser 或 Google Chrome。", file=sys.stderr)
     last: Exception | None = None
     for attempt in range(2):
         try:
@@ -686,27 +792,41 @@ def _launch(p, headed: bool, base: str | None, proxy: str | None):
     raise last  # pragma: no cover
 
 
-def cmd_check(_a) -> int:
-    ok = True
+def browser_report(base: str | None = None) -> tuple[bool, list[str]]:
+    """check 用：小红书会用哪个浏览器、能不能用。Cloak / 本机 Chrome 能用时不要求 Playwright 自带内核。"""
+    lines: list[str] = []
     try:
         from playwright.sync_api import sync_playwright
-        print("✅ playwright 已安装")
+        lines.append("✅ playwright 已安装")
+    except Exception as e:
+        return False, [f"❌ playwright 不可用：{e}"]
+    engine, exe = browser_engine()
+    fp_path = _profile_dir(base) / FINGERPRINT_FILE
+    if engine == "cloak":
+        lines.append(f"✅ CloakBrowser：{exe}（小红书操作都开它的窗口）")
+        lines.append(f"   固定指纹：{'已生成 ' + str(fp_path) if fp_path.is_file() else '第一次打开时生成，存到 ' + str(fp_path)}")
+        lines.append(f"   浏览器数据：{_profile_dir(base) / CLOAK_DATA_DIR}（与 Chrome 的登录态分开，换浏览器要重新扫码）")
+        return True, lines
+    if engine in ("chrome", "msedge"):
+        why = "EASEL_XHS_BROWSER=chrome" if _browser_choice() == "chrome" else "没装 CloakBrowser"
+        lines.append(f"✅ 本机浏览器：{'Google Chrome' if engine == 'chrome' else 'Microsoft Edge'}"
+                     f"（{why}，小红书操作都开它的窗口）")
+        return True, lines
+    try:
         with sync_playwright() as p:
             path = p.chromium.executable_path
-            if path and Path(path).exists():
-                print(f"✅ chromium 内核：{path}")
-            else:
-                print("❌ 未安装浏览器内核（playwright install chromium）"); ok = False
-    except Exception as e:
-        print(f"❌ playwright/内核不可用：{e}"); ok = False
-    channel = _browser_channel()
-    cloak = _cloak_executable()
-    if channel:
-        print(f"✅ 本机浏览器：{'Google Chrome' if channel == 'chrome' else 'Microsoft Edge'}（小红书操作都开它的窗口）")
-    elif cloak:
-        print(f"⚠️ 没找到本机 Chrome / Edge，改用 CloakBrowser：{cloak}")
-    else:
-        print("⚠️ 没找到本机 Chrome / Edge：会用 Playwright 自带的 Chromium，更容易被小红书识别成脚本，建议安装 Google Chrome")
+        ok = bool(path and Path(path).exists())
+    except Exception:
+        ok = False
+    lines.append("⚠️ 没找到 CloakBrowser 和本机 Chrome / Edge：会用 Playwright 自带的 Chromium，更容易被小红书识别成脚本"
+                 if ok else "❌ 没有可用的浏览器：装 CloakBrowser（pip install cloakbrowser && python -m cloakbrowser install）或 Google Chrome")
+    return ok, lines
+
+
+def cmd_check(_a) -> int:
+    ok, lines = browser_report()
+    for ln in lines:
+        print(ln)
     if _allow_headless():
         print("⚠️ EASEL_XHS_HEADLESS=1：允许无头运行，很容易被小红书识别成脚本")
     print(f"登录态目录：{_profile_dir(None)}")
