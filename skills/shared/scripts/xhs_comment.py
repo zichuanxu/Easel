@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""xhs_comment.py — 小红书评论抓取 + 回复（Playwright，headless 可用）。
+"""xhs_comment.py — 小红书评论抓取 + 回复（Playwright 驱动本机 Chrome 窗口）。
 
 与 xhs_publish.py **共用同一持久化登录态**（XiaohongshuProfile）；登录用 xhs_publish.py login。
 确定性 IO（抓评论/定位回复框/发送）在本脚本；回复文案由上层（agent 结合画像）给定，脚本不编内容。
@@ -7,20 +7,24 @@
 子命令：check / fetch / reply / plan / selftest
   - fetch：拦截 comment/page 接口响应 → 输出评论 JSON（含子评论）。
   - reply：按 [{id,nickname,reply}] 逐条回评；**默认 dry-run，加 --exec 才真发**；--replied-file 去重。
-真实抓取/回复需：playwright + chromium + 已登录 + 干净网络（小红书对代理出口常判风险，建议 --no-proxy）。
+真实抓取/回复需：playwright + 本机 Chrome + 已登录 + 干净网络（小红书对代理出口常判风险，建议 --no-proxy）。
+
+浏览器与 xhs_publish 同一套（_launch：本机 Chrome 窗口，不再无头）；点击、输入、翻页都走
+human_input（真实鼠标事件，不用 JS 合成的 click()）；回复/评论受 xhs_publish 的频率闸门约束。
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import random
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import content_guard  # noqa: E402  出站内容安全闸门
+import human_input  # noqa: E402  真人节奏的鼠标/键盘
+import xhs_publish  # noqa: E402  共用浏览器启动与频率闸门
 
 PROFILE_NAME = "XiaohongshuProfile"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -96,30 +100,23 @@ _FIND_COMMENT_JS = """([nickname, content]) => {
     return null;
 }"""
 
-# 点击弹出菜单里文本匹配的项（删除菜单项）；只点可见的，返回是否点到。
-_CLICK_MENU_ITEM_JS = """(texts) => {
+# 找弹出菜单里文本匹配的可见项（删除菜单项），返回元素交给鼠标去点；JS 合成的 click() 是脚本特征。
+_FIND_MENU_ITEM_JS = """(texts) => {
     const items = Array.from(document.querySelectorAll(
         "[class*='menu-item'], [role='menuitem'], .dropdown-item, li, [class*='dropdown'] *"));
-    const el = items.find(e => e.offsetParent !== null && texts.includes((e.textContent || '').trim()));
-    if (el) { el.click(); return true; }
-    return false;
+    return items.find(e => e.offsetParent !== null && texts.includes((e.textContent || '').trim())) || null;
 }"""
 
-# 点击确认弹窗里文本匹配的按钮（确定/删除）；只点可见的，返回是否点到。
-_CLICK_CONFIRM_JS = """(texts) => {
+# 找确认弹窗里文本匹配的可见按钮（确定/删除/我知道了…），返回元素交给鼠标去点。
+_FIND_BUTTON_JS = """(texts) => {
     const btns = Array.from(document.querySelectorAll(
         "[class*='foot-btn'], [class*='dialog'] button, [class*='modal'] button, "
-        + "[class*='dialog'] [class*='btn'], button, [role='button']"));
-    const el = btns.find(e => e.offsetParent !== null && texts.some(t => (e.textContent || '').trim() === t));
-    if (el) { el.click(); return true; }
-    return false;
+        + "[class*='dialog'] [class*='btn'], button, [role='button'], a"));
+    return btns.find(e => e.offsetParent !== null && texts.some(t => (e.textContent || '').trim() === t)) || null;
 }"""
 
-LAUNCH_ARGS = [
-    "--disable-blink-features=AutomationControlled",
-    "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-    "--no-first-run", "--no-default-browser-check", "--mute-audio",
-]
+# 每条回复/评论之间至少等这么久（秒），--gap 只能往上调。再随机多等 0~100%。
+MIN_GAP_S = 20.0
 
 
 def _die(msg: str, code: int = 1) -> None:
@@ -274,16 +271,34 @@ def _parse_targets(json_str: str | None, nickname: str | None, content: str | No
 # 浏览器
 # --------------------------------------------------------------------------- #
 def _launch(p, headed: bool, base: str | None, proxy: str | None):
-    profile = _profile_dir(base)
-    profile.mkdir(parents=True, exist_ok=True)
-    args = list(LAUNCH_ARGS)
-    kwargs = dict(headless=not headed, locale="zh-CN", args=args)
-    if proxy:
-        kwargs["proxy"] = {"server": proxy}
-    else:
-        # 显式直连：Chromium 级屏蔽系统/环境代理（开 VPN 也能用）——同抖音链兜底
-        args.append("--no-proxy-server")
-    return p.chromium.launch_persistent_context(str(profile), **kwargs)
+    """与 xhs_publish 同一个浏览器：本机 Chrome 窗口、同一份登录目录。"""
+    return xhs_publish._launch(p, headed, base, proxy)
+
+
+def _click_found(page, js: str, arg) -> bool:
+    """用 JS 找到元素，再让鼠标真的移过去点。找不到返回 False。"""
+    el = page.evaluate_handle(js, arg).as_element()
+    if not el:
+        return False
+    human_input.click(page, el)
+    return True
+
+
+def _safe(fn, *args) -> bool:
+    """单条回复/删除出错（元素没了、被挡住点不到）只算这一条失败，不中断整批。"""
+    try:
+        return fn(*args)
+    except Exception as e:  # noqa: BLE001
+        print(f"  ❌ 这一条出错，跳过：{e}", file=sys.stderr)
+        return False
+
+
+def _gap_wait(page, gap: float) -> None:
+    """两次对外操作之间的间隔：不少于 MIN_GAP_S，再随机多等 0~100%。"""
+    base = max(float(gap or 0), MIN_GAP_S)
+    secs = base * human_input.rng.uniform(1.0, 2.0)
+    print(f"  等 {secs:.0f}s 再做下一条…", file=sys.stderr)
+    page.wait_for_timeout(int(secs * 1000))
 
 
 def _open_note(page, note_id: str, token: str):
@@ -302,11 +317,17 @@ def _logged_in(page) -> bool:
 
 
 def _scroll_comments(page, rounds: int) -> None:
+    """鼠标停在右侧评论区，用滚轮往下翻 rounds 屏（触发加载更多），再翻回上面。"""
+    w, h = human_input._viewport(page)
+    human_input.move_to(page, w * human_input.rng.uniform(0.65, 0.85), h * human_input.rng.uniform(0.45, 0.7))
+    total = 0.0
     for _ in range(max(1, rounds)):
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        page.wait_for_timeout(900)
-    page.evaluate("window.scrollTo(0, 400)")
-    page.wait_for_timeout(800)
+        dy = h * human_input.rng.uniform(1.2, 1.8)   # 一轮翻一屏多，评论懒加载要滚到底才触发
+        human_input.scroll(page, dy)
+        total += dy
+        human_input.pause(page, 600, 1400)
+    human_input.scroll(page, -total * 0.8)
+    human_input.pause(page, 500, 1000)
 
 
 def _do_reply(page, nickname: str, text: str) -> bool:
@@ -316,8 +337,7 @@ def _do_reply(page, nickname: str, text: str) -> bool:
     if not btn:
         print(f"  ❌ @{nickname}: 未找到回复按钮（重名或已改版）", file=sys.stderr)
         return False
-    btn.scroll_into_view_if_needed()
-    btn.click()
+    human_input.click(page, btn)
     page.wait_for_timeout(1500)
     _shot(page, f"{nickname[:6]}-clicked")
 
@@ -332,19 +352,17 @@ def _do_reply(page, nickname: str, text: str) -> bool:
     if not inp:
         print(f"  ❌ @{nickname}: 回复输入框未出现", file=sys.stderr)
         return False
-    inp.click()
-    page.wait_for_timeout(300)
-    for ch in text:
-        page.keyboard.type(ch)
-        page.wait_for_timeout(random.randint(30, 90))
-    page.wait_for_timeout(600)
+    human_input.click(page, inp)
+    human_input.pause(page, 300, 800)
+    human_input.type_text(page, text)
+    human_input.pause(page, 600, 1500)
     _shot(page, f"{nickname[:6]}-typed")
 
     for sel in SELECTORS["send_btn"]:
         try:
             sb = page.query_selector(sel)
             if sb and sb.is_visible():
-                sb.click()
+                human_input.click(page, sb)
                 print(f"  ✅ 已回复 @{nickname}：{text}")
                 page.wait_for_timeout(1500)
                 return True
@@ -364,9 +382,8 @@ def _do_delete(page, nickname: str, content: str = "") -> bool:
     if not el:
         print(f"  ❌ @{nickname}: 未找到该评论（重名/内容不匹配/已改版）", file=sys.stderr)
         return False
-    el.scroll_into_view_if_needed()
     try:
-        el.hover()
+        human_input.hover(page, el)
     except Exception:
         pass
     page.wait_for_timeout(500)
@@ -375,21 +392,21 @@ def _do_delete(page, nickname: str, content: str = "") -> bool:
         try:
             trig = el.query_selector(sel)
             if trig and trig.is_visible():
-                trig.click()
+                human_input.click(page, trig)
                 break
         except Exception:
             continue
     page.wait_for_timeout(600)
     _shot(page, f"del-{nickname[:6]}-menu")
     # 点「删除评论/删除」菜单项（文本匹配，跨 portal）
-    if not page.evaluate(_CLICK_MENU_ITEM_JS, list(DELETE_MENU_TEXTS)):
+    if not _click_found(page, _FIND_MENU_ITEM_JS, list(DELETE_MENU_TEXTS)):
         print(f"  ❌ @{nickname}: 未找到删除菜单项（DOM 变化，EASEL_COMMENT_DEBUG=1 存 DOM 校准）",
               file=sys.stderr)
         return False
     page.wait_for_timeout(800)
     _shot(page, f"del-{nickname[:6]}-confirm")
     # 确认弹窗（有的直接删无弹窗，点不到不算失败）
-    page.evaluate(_CLICK_CONFIRM_JS, list(CONFIRM_TEXTS))
+    _click_found(page, _FIND_BUTTON_JS, list(CONFIRM_TEXTS))
     page.wait_for_timeout(1200)
     print(f"  ✅ 已删除 @{nickname} 的评论" + (f"（含“{content[:12]}…”）" if content else ""))
     return True
@@ -616,17 +633,24 @@ def cmd_reply(a) -> int:
                                allow_unsafe=getattr(a, "allow_unsafe", False),
                                label="小红书评论回复")
 
+    left, why = xhs_publish.activity_budget(a.profile_base, "reply")
     if not a.exec:  # 默认 dry-run：只预演不发
         print(f"dry-run（加 --exec 才真发）：待回复 {len(todo)} 条"
               + (f"，已回复跳过 {skipped} 条" if skipped else ""))
         for r in todo:
             tag = f"[{r['id'][:8]}] " if r["id"] else ""
             print(f"  → {tag}@{r['nickname']}：{r['reply']}")
+        if len(todo) > left:
+            print(f"⚠️ 频率闸门：这次最多回 {left} 条" + (f"（{why}）" if why else "，其余留到之后再回"))
         return 0
 
     if not todo:
         print(f"无待回复（{skipped} 条已在 --replied-file 中）")
         return 0
+    if not left:
+        _die(f"小红书回复太密，这次不回：{why}", 5)
+    held = todo[left:]
+    todo = todo[:left]
 
     nid, tok = _resolve_note(a)
     try:
@@ -643,19 +667,25 @@ def cmd_reply(a) -> int:
                 _die("未登录（登录态与 xhs_publish 共用）——先 `xhs_publish.py login` 扫码", 4)
             _scroll_comments(page, a.scroll)
             for i, r in enumerate(todo):
-                if _do_reply(page, r["nickname"], r["reply"]):
+                if _safe(_do_reply, page, r["nickname"], r["reply"]):
                     ok_n += 1
+                    xhs_publish.record_activity(a.profile_base, "reply")
                     if r["id"]:
                         replied.add(r["id"])
                         _save_replied(a.replied_file, replied)  # 逐条落盘，中断也不丢
                 else:
                     fail_n += 1
                 if i < len(todo) - 1:
-                    page.wait_for_timeout(int(a.gap * 1000))  # 逐条间隔防风控
+                    _gap_wait(page, a.gap)  # 逐条间隔防风控
         finally:
             ctx.close()
     print(f"\n完成：成功 {ok_n} / 失败 {fail_n}" + (f"（另跳过已回复 {skipped}）" if skipped else ""))
-    return 0 if fail_n == 0 else 1
+    if fail_n:
+        return 1
+    if held:
+        print(f"⏸ 频率闸门：还有 {len(held)} 条没回（24 小时上限），之后带同一个 --replied-file 重跑")
+        return 5
+    return 0
 
 
 def cmd_delete(a) -> int:
@@ -684,61 +714,66 @@ def cmd_delete(a) -> int:
                 _die("未登录（登录态与 xhs_publish 共用）——先 `xhs_publish.py login` 扫码", 4)
             _scroll_comments(page, a.scroll)
             for i, t in enumerate(targets):
-                if _do_delete(page, t["nickname"], t["content"]):
+                if _safe(_do_delete, page, t["nickname"], t["content"]):
                     ok_n += 1
                 else:
                     fail_n += 1
                 if i < len(targets) - 1:
-                    page.wait_for_timeout(int(a.gap * 1000))  # 逐条间隔防风控
+                    _gap_wait(page, a.gap)  # 逐条间隔防风控
         finally:
             ctx.close()
     print(f"\n完成：删除成功 {ok_n} / 失败 {fail_n}。可重新 `fetch` 核对是否已消失。")
     return 0 if fail_n == 0 else 1
 
 
-# JS：用 dispatchEvent 点击，绕过 subtree 拦截 pointer events（XHS .not-active 外包层结构）
-_JS_CLICK_COMMENT_BOX = """
+# 找 XHS 评论输入区的外包层（.not-active 或内嵌 span 激活后的外包），返回元素交给鼠标去点。
+_FIND_COMMENT_BOX_JS = """
 () => {
-    // 匹配 XHS 评论输入区的外包层（.not-active 或内嵌 span 激活后的外包）
     const candidates = [
         document.querySelector('[class*="not-active"]'),
         document.querySelector('[class*="inner-when-not-active"]'),
         document.querySelector('[class*="comment-input"]'),
         document.querySelector('[class*="commentInput"]'),
         ...Array.from(document.querySelectorAll('[contenteditable="true"]')).filter(e => e.offsetParent !== null),
-    ].filter(Boolean);
-    for (const el of candidates) {
-        el.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
-        return el.className || el.tagName;
-    }
-    return null;
+    ].filter(e => e && e.offsetParent !== null);
+    return candidates[0] || null;
 }
 """
 
+_BANNED_JS = """() => Array.from(document.querySelectorAll('*')).some(e => e.offsetParent !== null
+    && (e.textContent || '').includes('被禁言'))"""
+
+
+def _banned(page) -> bool:
+    """出现「被禁言」弹窗（薯队长）就关掉它并返回 True。"""
+    try:
+        if not page.evaluate(_BANNED_JS):
+            return False
+    except Exception:
+        return False
+    try:
+        _click_found(page, _FIND_BUTTON_JS, ["我知道了", "确定", "关闭"])
+    except Exception:
+        pass
+    print("  ❌ 账号被禁言（薯队长弹窗），评论被拦截", file=sys.stderr)
+    return True
+
 
 def _do_post_comment(page, text: str) -> bool:
-    """在当前打开的笔记页面发一条顶层评论。
-    XHS 评论框是 .not-active 外包 + 内嵌 span，直接 click() 会被 subtree 拦截；
-    改用 dispatchEvent 正确激活。"""
-    # 1. 滚到评论区
-    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    page.wait_for_timeout(1500)
+    """在当前打开的笔记页面发一条顶层评论：鼠标点开评论框 → 按词组输入 → 点发送。"""
+    # 1. 先往下翻到评论区，像人在看
+    _scroll_comments(page, 2)
 
-    # 2. 激活评论框：优先用 Playwright force-click（绕过 subtree 拦截），降级到 JS dispatch
-    not_active_el = page.query_selector('[class*="not-active"]')
-    if not_active_el:
-        try:
-            not_active_el.click(force=True)   # force=True 绕过 span 子元素拦截
-            print(f"  ℹ️ 已触发评论框（force-click）：{(not_active_el.get_attribute('class') or '')[:60]}")
-        except Exception:
-            triggered = page.evaluate(_JS_CLICK_COMMENT_BOX)
-            if triggered:
-                print(f"  ℹ️ 已触发评论框（JS）：{str(triggered)[:60]}")
-    else:
-        triggered = page.evaluate(_JS_CLICK_COMMENT_BOX)
-        if triggered:
-            print(f"  ℹ️ 已触发评论框（JS fallback）：{str(triggered)[:60]}")
-    page.wait_for_timeout(1200)
+    # 2. 激活评论框（.not-active 外包里套着 span，点外包层就行）
+    box = page.query_selector('[class*="not-active"]')
+    try:
+        if box and box.is_visible():
+            human_input.click(page, box)
+        elif not _click_found(page, _FIND_COMMENT_BOX_JS, None):
+            print("  ⚠️ 没找到评论框外包层，直接找输入框", file=sys.stderr)
+    except Exception as e:
+        print(f"  ⚠️ 点评论框出错（{e}），直接找输入框", file=sys.stderr)
+    human_input.pause(page, 800, 1500)
 
     # 3. 找激活后的 contenteditable（外包应该已变 active；排除仍 not-active 的）
     inp = None
@@ -749,7 +784,7 @@ def _do_post_comment(page, text: str) -> bool:
         "[contenteditable='true']",
         "[class*='active'] [contenteditable]",
         "textarea",
-    ]
+    ] + SELECTORS["main_comment_input"]
     for sel in active_selectors:
         try:
             el = page.query_selector(sel)
@@ -758,99 +793,47 @@ def _do_post_comment(page, text: str) -> bool:
                 break
         except Exception:
             continue
-
-    # 4. 备用：再尝试一次常驻主评论输入框选择器
     if not inp:
-        for sel in SELECTORS["main_comment_input"]:
-            try:
-                el = page.query_selector(sel)
-                if el and el.is_visible():
-                    inp = el
-                    break
-            except Exception:
-                continue
-
-    if not inp:
-        print("  ❌ 未找到可用评论输入框（加 --headed 观察页面结构）", file=sys.stderr)
+        print("  ❌ 未找到可用评论输入框（页面可能改版）", file=sys.stderr)
         _shot(page, "post-no-input")
         return False
 
-    # 5. 原生 click 设置键盘焦点（JS click 不设置 activeElement）
+    # 4. 鼠标点进输入框拿到焦点，再按词组输入
+    human_input.click(page, inp)
+    human_input.pause(page, 400, 900)
+    human_input.type_text(page, text)
+    human_input.pause(page, 800, 2000)
     try:
-        inp.scroll_into_view_if_needed()
-        inp.click()   # Playwright 原生 click，确保 keyboard focus
-    except Exception:
-        try:
-            inp.evaluate("el => { el.focus(); }")
-        except Exception:
-            pass
-    page.wait_for_timeout(600)
-
-    # 6. 输入文字（keyboard.type 带随机delay防检测）
-    page.keyboard.type(text, delay=random.randint(40, 90))
-    page.wait_for_timeout(800)
-
-    # 验证内容是否确实进入输入框
-    try:
-        actual = inp.evaluate("el => el.textContent || el.value || ''")
-        if actual.strip() == "":
-            print("  ⚠️ keyboard.type 未进入内容，改用 execCommand", file=sys.stderr)
-            inp.evaluate("(el, t) => { el.focus(); document.execCommand('insertText', false, t); }", text)
-            page.wait_for_timeout(500)
+        if not (inp.evaluate("el => el.textContent || el.value || ''") or "").strip():
+            print("  ❌ 文字没进到评论框，未发送", file=sys.stderr)
+            return False
     except Exception:
         pass
     _shot(page, "post-typed")
 
-    # 7. 点发送按钮（用真实鼠标点击，非 JS .click()）
-    # 扩展候选：class="btn submit" 是 XHS 实测有效选择器
-    extended_send_selectors = [
-        "button.submit", "button[class*='submit']",
-        "button:has-text('发送')", "text=发送",
-        "[class*='send-btn']", "[class*='submit']",
-    ] + [s for s in SELECTORS["send_btn"] if s not in ["button:has-text('发送')", "text=发送", "[class*='send-btn']", "[class*='submit']"]]
-    for sel in extended_send_selectors:
+    # 5. 鼠标点发送（class="btn submit" 是 XHS 实测有效选择器）
+    send_selectors = ["button.submit", "button[class*='submit']"] + \
+        [s for s in SELECTORS["send_btn"] if s not in ("button.submit", "button[class*='submit']")]
+    for sel in send_selectors:
         try:
             sb = page.query_selector(sel)
             if sb and sb.is_visible():
-                sb.scroll_into_view_if_needed()
-                sb.click()   # Playwright 原生点击，带坐标和鼠标事件
+                human_input.click(page, sb)
                 page.wait_for_timeout(2500)
-                # 禁言弹窗检测
-                ban_d = page.evaluate("() => Array.from(document.querySelectorAll('*')).some(e => e.offsetParent !== null && (e.textContent||'').includes('被禁言'))")
-                if ban_d:
-                    page.evaluate("() => { const b=Array.from(document.querySelectorAll('button,[role=button]')).find(b=>b.offsetParent&&['我知道了','确定'].includes((b.textContent||'').trim())); if(b) b.click(); }")
-                    print("  ❌ 账号被禁言（薯队长弹窗），评论被拦截", file=sys.stderr)
+                if _banned(page):
                     return False
                 print(f"  ✅ 评论已发送：{text[:40]}{'...' if len(text) > 40 else ''}")
                 return True
         except Exception:
             continue
 
-    # 8. 兜底：Enter 键提交
+    # 6. 兜底：Enter 提交，看输入框是否清空
     page.keyboard.press("Enter")
-    page.wait_for_timeout(2500)   # 等长一点，给平台异步处理时间
-
-    # 8a. 禁言弹窗检测（薯队长 / 社区规范 / 被禁言）
-    ban_detected = page.evaluate("""() => {
-        const all = Array.from(document.querySelectorAll('*'));
-        return all.some(e => e.offsetParent !== null &&
-            (e.textContent || '').includes('被禁言'));
-    }""")
-    if ban_detected:
-        # 关掉弹窗再返回
-        page.evaluate("""() => {
-            const btns = Array.from(document.querySelectorAll('button, [role=button], a'));
-            const ok = btns.find(b => b.offsetParent !== null &&
-                ['我知道了','确定','关闭'].includes((b.textContent||'').trim()));
-            if (ok) ok.click();
-        }""")
-        print("  ❌ 账号被禁言（薯队长弹窗），评论发送被拦截", file=sys.stderr)
+    page.wait_for_timeout(2500)
+    if _banned(page):
         return False
-
-    # 验证输入框是否已清空（常见发送成功的标志）
     try:
-        val = inp.evaluate("el => el.textContent || el.value || ''")
-        sent = val.strip() == ""
+        sent = not (inp.evaluate("el => el.textContent || el.value || ''") or "").strip()
     except Exception:
         sent = True
     icon = "\u2705" if sent else "\u26a0\ufe0f"
@@ -886,6 +869,7 @@ def cmd_post(a) -> int:
                                label="小红书顶层评论")
 
     # Dry-run 预演
+    left, why = xhs_publish.activity_budget(a.profile_base, "comment")
     if not a.exec:
         print(f"dry-run（加 --exec 才真发）：待发 {len(tasks)} 条顶层评论\n")
         for i, t in enumerate(tasks, 1):
@@ -893,7 +877,17 @@ def cmd_post(a) -> int:
             print(f"  [{i}] 目标：{url_short}")
             print(f"       评论：{t['text']}")
             print()
+        if len(tasks) > 1 or not left:
+            print("⚠️ 频率闸门：去别人笔记下评论两条之间至少隔 "
+                  f"{xhs_publish._env_int('EASEL_XHS_COMMENT_GAP_MIN', 10)} 分钟，这次 --exec 最多发 "
+                  f"{1 if left else 0} 条" + (f"（{why}）" if why else ""))
         return 0
+    if not left:
+        _die(f"小红书评论太密，这次不发：{why}", 5)
+    # 两条之间要隔好几分钟（EASEL_XHS_COMMENT_GAP_MIN），一次运行只发得了一条（间隔设成 0 才能多发）
+    per_run = left if xhs_publish._env_int("EASEL_XHS_COMMENT_GAP_MIN", 10) == 0 else 1
+    held = tasks[per_run:]
+    tasks = tasks[:per_run]
 
     # 真发
     try:
@@ -919,21 +913,28 @@ def cmd_post(a) -> int:
                         print("  ⚠️ 疑似未登录，跳过", file=sys.stderr)
                         fail_n += 1
                         continue
+                    human_input.pause(page, 3000, 8000)   # 先看一会儿笔记
                     if _do_post_comment(page, t["text"]):
                         ok_n += 1
+                        xhs_publish.record_activity(a.profile_base, "comment")
                     else:
                         fail_n += 1
                 except Exception as e:
                     print(f"  ❌ 打开笔记失败：{e}", file=sys.stderr)
                     fail_n += 1
                 if i < len(tasks) - 1:
-                    gap = int(a.gap * 1000)
-                    print(f"  等待 {a.gap}s 防风控...")
-                    page.wait_for_timeout(gap)
+                    _gap_wait(page, a.gap)
         finally:
             ctx.close()
     print(f"\n完成：成功 {ok_n} / 失败 {fail_n}")
-    return 0 if fail_n == 0 else 1
+    if fail_n:
+        return 1
+    if held:
+        print(f"⏸ 频率闸门：还有 {len(held)} 条没发，等提示的间隔过了再发：")
+        for t in held:
+            print(f"  → {t['url'][:70]}：{t['text']}")
+        return 5
+    return 0
 
 
 def cmd_selftest(_a) -> int:
@@ -1025,14 +1026,15 @@ def cmd_selftest(_a) -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="小红书评论抓取+回复（Playwright，headless 可用）")
+    ap = argparse.ArgumentParser(description="小红书评论抓取+回复（Playwright 驱动本机 Chrome 窗口）")
     sub = ap.add_subparsers(dest="cmd")
 
     def add_common(p):
         p.add_argument("--profile-base", help="登录态根目录（默认 ~/.easel-browser-profiles）")
         p.add_argument("--proxy", help="外网代理（默认取 env）")
         p.add_argument("--no-proxy", action="store_true", help="禁用代理（小红书建议直连）")
-        p.add_argument("--headed", action="store_true", help="有头模式（首次校验/排错）")
+        p.add_argument("--headed", action="store_true",
+                       help="开窗口（默认就开；仅 EASEL_XHS_HEADLESS=1 时才可能无头）")
 
     def add_note(p):
         p.add_argument("--url", help="完整笔记链接（自动解析 note-id 与 xsec_token，推荐，粘贴即用）")
@@ -1061,7 +1063,8 @@ def main() -> int:
     pr.add_argument("--allow-unsafe", action="store_true",
                     help="放行内容安全闸门（检出内部设置泄露也照发，谨慎）")
     pr.add_argument("--replied-file", help="已回复 id 记录文件，重跑自动跳过")
-    pr.add_argument("--gap", type=float, default=4.0, help="每条回复间隔秒数（默认 4，防风控）")
+    pr.add_argument("--gap", type=float, default=MIN_GAP_S,
+                    help=f"每条回复至少间隔秒数（默认且最少 {MIN_GAP_S:.0f}，实际再随机多等 0~100%%）")
     pr.set_defaults(func=cmd_reply)
 
     pd = sub.add_parser("delete", help="删除评论（默认 dry-run，加 --exec 才真删；不可恢复）")
@@ -1070,7 +1073,8 @@ def main() -> int:
     pd.add_argument("--nickname", help="单条删除：评论作者昵称")
     pd.add_argument("--content", help="单条删除：内容片段（同名去歧义，可选）")
     pd.add_argument("--exec", action="store_true", help="真正删除（默认 dry-run 预演）")
-    pd.add_argument("--gap", type=float, default=4.0, help="每条删除间隔秒数（默认 4，防风控）")
+    pd.add_argument("--gap", type=float, default=MIN_GAP_S,
+                    help=f"每条删除至少间隔秒数（默认且最少 {MIN_GAP_S:.0f}）")
     pd.set_defaults(func=cmd_delete)
 
     pp = sub.add_parser("plan", help="离线预览将回复什么（不启浏览器）")
@@ -1087,8 +1091,8 @@ def main() -> int:
     ppost.add_argument("--exec", action="store_true", help="真正发送（默认 dry-run 预演）")
     ppost.add_argument("--allow-unsafe", action="store_true",
                        help="放行内容安全闸门（检出内部设置泄露也照发，谨慎）")
-    ppost.add_argument("--gap", type=float, default=6.0,
-                       help="每条间隔秒数（默认 6，防风控）")
+    ppost.add_argument("--gap", type=float, default=MIN_GAP_S,
+                       help=f"每条至少间隔秒数（默认且最少 {MIN_GAP_S:.0f}；另受频率闸门约束）")
     ppost.set_defaults(func=cmd_post)
 
     sub.add_parser("selftest", help="离线自检").set_defaults(func=cmd_selftest)

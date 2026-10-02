@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""xhs_publish.py — 小红书发布（Playwright，headless 可用）.
+"""xhs_publish.py — 小红书发布（Playwright 驱动本机 Chrome，有窗口）.
 
-替代旧的 CDP-to-真实Chrome 死栈（那套需桌面 Chrome，本 Linux 环境跑不了）。
-本脚本用 Playwright + 持久化登录态，headless 即可发布，流程与选择器移植自
-xpzouying/xiaohongshu-mcp（Go/go-rod，成熟稳定）。确定性 IO 固化在脚本，
+流程与选择器移植自 xpzouying/xiaohongshu-mcp（Go/go-rod）。确定性 IO 固化在脚本，
 文案/策略仍由上层 LLM 决定。
+
+浏览器：默认开**本机正式版 Chrome（找不到用 Edge）的窗口**，鼠标沿曲线移过去点、按词组输入
+（human_input.py）。2026-10 账号因「第三方脚本 / AI 托管发文」被封 30 天：当时用的是 Playwright
+自带内核的无头模式，UA 直接写着 HeadlessChrome。所以小红书这条链不再无头运行
+（EASEL_XHS_HEADLESS=1 可强开，仅限没有桌面的机器，很容易被识别）。
+另有发帖频率闸门（_activity_check）和「笔记含 AI 合成内容」声明（_declare_ai）。
 
 移植的关键健壮技巧（源见各处 REF 注释）：
   - 切「上传图文/视频」tab：重试 + 遮挡检测 + 移除弹层
@@ -12,7 +16,7 @@ xpzouying/xiaohongshu-mcp（Go/go-rod，成熟稳定）。确定性 IO 固化在
   - 话题：输 # + 联想下拉点选，真绑话题
   - 发布按钮：新版 <xhs-publish-btn> + 旧版 .bg-red 双兼容
   - 发布成功校验：URL 离开 /publish/publish 才算成功（消除假成功）
-  - 反检测：--disable-blink-features=AutomationControlled + 逐字符输入 + zh-CN
+  - 真人节奏：曲线移动鼠标再点、按词组输入、滚轮翻页（human_input.py）
 
 子命令:
   check          验 playwright + chromium 内核
@@ -38,6 +42,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import login_state  # noqa: E402
 import content_guard  # noqa: E402  出站内容安全闸门
+import human_input  # noqa: E402  真人节奏的鼠标/键盘
 
 # --------------------------------------------------------------------------- #
 # 选择器集中维护（小红书改版时单点更新）。REF = xiaohongshu-mcp 对应源。
@@ -78,15 +83,14 @@ PROFILE_NAME = "XiaohongshuProfile"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_QR_OUT = PROJECT_ROOT / "outputs" / "_login" / "xhs-login-qrcode.png"
 
-# Chromium 启动性能参数（提速冷启动；勿禁用图片——二维码是图片）
+# 启动参数尽量少：--no-sandbox / --disable-gpu 这类是无头脚本的标配，正式版 Chrome 带上还会弹
+# 「不受支持的命令行标记」提示条。--enable-automation 是 Playwright 默认加的，会亮「Chrome 正受到
+# 自动测试软件的控制」并打开自动化模式，单独去掉（IGNORE_DEFAULT_ARGS）。
 LAUNCH_ARGS = [
     "--disable-blink-features=AutomationControlled",
-    "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-    "--disable-extensions", "--disable-background-networking",
-    "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
-    "--disable-features=TranslateUI,BackForwardCache",
-    "--mute-audio", "--no-first-run", "--no-default-browser-check",
+    "--no-first-run", "--no-default-browser-check",
 ]
+IGNORE_DEFAULT_ARGS = ["--enable-automation"]
 
 
 # --------------------------------------------------------------------------- #
@@ -210,8 +214,18 @@ def _clear_stale_chrome_locks(profile: Path) -> None:
 
 
 def _browser_channel() -> str | None:
-    """Cloak 找不到时，有头登录才退回本机 Chrome/Edge。"""
+    """本机装的正式版浏览器：Chrome 优先，其次 Edge；都没有返回 None。"""
+    if sys.platform == "darwin":
+        for app, channel in (("Google Chrome.app", "chrome"), ("Microsoft Edge.app", "msedge")):
+            if any((d / app).is_dir() for d in (Path("/Applications"), Path.home() / "Applications")):
+                return channel
+        return None
     if os.name != "nt":
+        import shutil
+        if shutil.which("google-chrome") or shutil.which("google-chrome-stable"):
+            return "chrome"
+        if shutil.which("microsoft-edge") or shutil.which("microsoft-edge-stable"):
+            return "msedge"
         return None
     pf = Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
     pf86 = Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
@@ -271,11 +285,10 @@ def _proxy(explicit: str | None, disable: bool) -> str | None:
 # 浏览器动作（移植自 xiaohongshu-mcp，需 playwright）
 # --------------------------------------------------------------------------- #
 def _human_type(page, locator, text: str) -> None:
-    """逐字符输入 + 随机间隔（反检测，REF humanize/input.go Type）。"""
-    locator.click()
-    for ch in text:
-        page.keyboard.type(ch)
-        page.wait_for_timeout(random.randint(30, 110))
+    """鼠标点进输入框，再按真人节奏输入（human_input.type_text）。"""
+    human_input.click(page, locator)
+    human_input.pause(page, 200, 600)
+    human_input.type_text(page, text)
 
 
 def _click_publish_tab(page, tabname: str) -> None:
@@ -304,7 +317,7 @@ def _click_publish_tab(page, tabname: str) -> None:
                     cover.evaluate("el => el.remove()")
                 page.wait_for_timeout(200)
                 continue
-            tab.click()
+            human_input.click(page, tab)
             return
         page.wait_for_timeout(200)
     _die(f"未找到发布 TAB：{tabname}（页面结构可能已变，检查 SELECTORS.creator_tab）")
@@ -375,8 +388,10 @@ def _input_tags(page, content_el, tags: list[str]) -> None:
     """
     if not tags:
         return
-    content_el.click()
-    page.keyboard.press("Control+End")   # 光标移到正文末尾，避免 # 插到正文中间
+    human_input.click(page, content_el)
+    # 光标移到正文末尾，避免 # 插到正文中间。Control+End 在 macOS 上不是「到文末」，直接设选区
+    content_el.evaluate("""(el) => { const r = document.createRange(); r.selectNodeContents(el);
+        r.collapse(false); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); }""")
     page.wait_for_timeout(400)
     for tag in tags:
         tag = tag.lstrip("#").strip()
@@ -391,7 +406,7 @@ def _input_tags(page, content_el, tags: list[str]) -> None:
         page.wait_for_timeout(1000)
         item = page.query_selector(SELECTORS["topic_item"])
         if item:
-            item.click()                 # 点联想第一项 = 真正绑定话题
+            human_input.click(page, item)   # 点联想第一项 = 真正绑定话题
         else:
             page.keyboard.type(" ")      # 无联想则退化为空格分隔（至少保留 #文字）
         page.wait_for_timeout(500)
@@ -461,7 +476,7 @@ def _confirm_publish_dialog(page) -> None:
                     continue
                 tx = (b.inner_text() or "").strip()
                 if tx in ("确认发布", "确定发布", "继续发布", "立即发布", "确认", "确定"):
-                    b.click()
+                    human_input.click(page, b)
                     page.wait_for_timeout(1000)
                     return
             except Exception:
@@ -507,38 +522,114 @@ def _normalize_content(text: str) -> str:
     return text.strip("\n")
 
 
-def _fill_and_submit(page, title, content, tags):
-    """标题→正文→话题→长度校验→发布→成功校验。"""
+# 「笔记含 AI 合成内容」声明。小红书要求 AI 生成/合成的内容主动声明；入口在发布页下方的
+# 「内容类型声明」下拉里（有的版本收在「更多设置」后面）。按文字定位，改版时改这里。
+AI_DECLARE_ENTRY_TEXTS = ("添加内容类型声明", "内容类型声明")
+AI_DECLARE_MORE_TEXTS = ("更多设置",)
+AI_DECLARE_OPTION_TEXT = "笔记含AI合成内容"
+AI_DECLARE_FAILED_MSG = ("没能勾上「笔记含AI合成内容」声明，已停在发布前、没有发出去（页面可能改版）。"
+                         "可以在打开的窗口里手动勾选后自己点发布；确认内容不是 AI 生成的，加 --no-ai-declare 再发。")
+
+
+def _visible_text(page, text: str):
+    """页面上文字恰好是 text 的第一个可见元素（Locator），没有返回 None。"""
+    loc = page.get_by_text(text, exact=True)
+    try:
+        for i in range(min(loc.count(), 6)):
+            el = loc.nth(i)
+            if el.is_visible():
+                return el
+    except Exception:
+        return None
+    return None
+
+
+# 「笔记含AI合成内容」这几个字出现在表单上（不在还开着的下拉/选项列表里）= 已经选上。
+_AI_DECLARED_JS = """(text) => {
+    const pop = "[role=listbox],[role=option],[role=menu],[class*=dropdown],[class*=popover],"
+        + "[class*=option],[class*=menu]";
+    return Array.from(document.querySelectorAll('body *')).some(e =>
+        e.children.length === 0 && (e.textContent || '').trim() === text
+        && e.offsetParent !== null && !e.closest(pop));
+}"""
+
+
+def _ai_declared(page) -> bool:
+    try:
+        return bool(page.evaluate(_AI_DECLARED_JS, AI_DECLARE_OPTION_TEXT))
+    except Exception:
+        return False
+
+
+def _declare_ai(page) -> bool:
+    """勾上「笔记含AI合成内容」。只有确认表单上显示了选中值（不是下拉里的选项）才返回 True；
+    判断不了一律当没勾上——宁可停下不发，也不能没声明就发出去。
+    选择器按文字猜的，还没在真机上校准过；改版或首次跑不通就停在发布前（退出码 6）。"""
+    if _ai_declared(page):
+        return True
+    entry = None
+    for _ in range(2):
+        for t in AI_DECLARE_ENTRY_TEXTS:
+            entry = _visible_text(page, t)
+            if entry:
+                break
+        if entry:
+            break
+        more = None
+        for t in AI_DECLARE_MORE_TEXTS:
+            more = _visible_text(page, t)
+            if more:
+                break
+        if not more:
+            human_input.scroll(page, 600)
+            continue
+        human_input.click(page, more)
+        human_input.pause(page, 500, 1000)
+    if not entry:
+        return False
+    human_input.click(page, entry)
+    human_input.pause(page, 500, 1000)
+    option = _visible_text(page, AI_DECLARE_OPTION_TEXT)
+    if not option:
+        return False
+    human_input.click(page, option)
+    human_input.pause(page, 600, 1200)
+    return _ai_declared(page)
+
+
+def _fill_and_submit(page, title, content, tags, declare_ai: bool = True, on_click=None):
+    """标题→正文→话题→AI 声明→长度校验→发布→成功校验。
+    on_click：点下发布按钮后立刻调用（记频率闸门）——之后等成功提示超时，帖子也可能已经发出去了。"""
     content = _normalize_content(content)         # 修连续空行导致的发布失败
     title_el = page.query_selector(SELECTORS["title_input"])
     if not title_el:
         _die("未找到标题输入框（检查 SELECTORS.title_input）")
     _human_type(page, title_el, title)
-    page.wait_for_timeout(400)
+    human_input.pause(page, 400, 1200)
 
     content_el = _content_element(page)
     if not content_el:
         _die("未找到正文输入框（检查 SELECTORS.content_*）")
     _human_type(page, content_el, content)
-    page.wait_for_timeout(500)
-    title_el.click()  # REF waitAndClickTitleInput：回点标题增强稳定性
+    human_input.pause(page, 500, 1500)
+    human_input.click(page, title_el)  # REF waitAndClickTitleInput：回点标题增强稳定性
     _input_tags(page, content_el, tags)
+
+    if declare_ai and not _declare_ai(page):
+        _die(AI_DECLARE_FAILED_MSG, 6)
 
     _check_overflow(page)
 
     kind, btn = _wait_publish_clickable(page, 15)
-    btn.scroll_into_view_if_needed()
-    page.wait_for_timeout(300)
-    box = btn.bounding_box()
-    if kind == "new" and box:
+    human_input.pause(page, 1500, 4000)   # 发之前回看一眼
+    if kind == "new":
         # xhs-publish-btn 是宽横条(闭合 Shadow DOM)，内含[暂存离开][发布]两个按钮；
-        # 点 host 中心会落在两按钮间隙→无效。发布按钮在右侧约 62% 处（实测像素为品牌红），按坐标点它。
-        page.mouse.click(box["x"] + box["width"] * 0.62, box["y"] + box["height"] / 2)
+        # 点 host 中心会落在两按钮间隙→无效。发布按钮在右侧约 62% 处（实测像素为品牌红）。
+        human_input.click(page, btn, x_frac=0.62)
     else:
-        try:
-            btn.click(force=True)
-        except Exception:
-            btn.click()
+        human_input.click(page, btn)
+    if on_click:
+        on_click()
     page.wait_for_timeout(1000)
     _confirm_publish_dialog(page)   # 若弹二次确认框，点确认
     _wait_publish_success(page, 40)
@@ -547,25 +638,40 @@ def _fill_and_submit(page, title, content, tags):
 # --------------------------------------------------------------------------- #
 # 命令
 # --------------------------------------------------------------------------- #
+def _allow_headless() -> bool:
+    """EASEL_XHS_HEADLESS=1：允许无头（只给没有桌面的机器用，很容易被小红书识别成脚本）。"""
+    return (os.environ.get("EASEL_XHS_HEADLESS") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _launch(p, headed: bool, base: str | None, proxy: str | None):
+    """开小红书用的浏览器。默认一律开窗口（headed 参数只在允许无头时才有意义）；
+    内核优先本机正式版 Chrome / Edge，其次 Cloak，最后才是 Playwright 自带的 Chromium。"""
     profile = _profile_dir(base)
     profile.mkdir(parents=True, exist_ok=True)
     args = list(LAUNCH_ARGS)
-    kwargs = dict(headless=not headed,
+    headless = not headed and _allow_headless()
+    kwargs = dict(headless=headless,
                   locale="zh-CN",
-                  args=args)
+                  args=args,
+                  ignore_default_args=list(IGNORE_DEFAULT_ARGS))
+    if not headless:
+        kwargs["no_viewport"] = True   # 用真实窗口大小，不让页面尺寸和窗口对不上
+    if sys.platform.startswith("linux") and hasattr(os, "geteuid") and os.geteuid() == 0:
+        args.append("--no-sandbox")    # root 下 Chromium 不开沙箱起不来
     if proxy:
         kwargs["proxy"] = {"server": proxy}
     else:
         # 显式直连：Chromium 级屏蔽系统/环境代理（开 VPN 也能用）——同抖音链兜底
         args.append("--no-proxy-server")
-    cloak = _cloak_executable()
-    if cloak:
+    channel = _browser_channel()
+    cloak = None if channel else _cloak_executable()
+    if channel:
+        kwargs["channel"] = channel
+    elif cloak:
         kwargs["executable_path"] = str(cloak)
-    elif headed:
-        channel = _browser_channel()
-        if channel:
-            kwargs["channel"] = channel
+    else:
+        print("⚠️ 没找到本机 Chrome / Edge，改用 Playwright 自带的 Chromium，更容易被小红书识别成脚本。"
+              "建议安装 Google Chrome。", file=sys.stderr)
     last: Exception | None = None
     for attempt in range(2):
         try:
@@ -593,11 +699,16 @@ def cmd_check(_a) -> int:
                 print("❌ 未安装浏览器内核（playwright install chromium）"); ok = False
     except Exception as e:
         print(f"❌ playwright/内核不可用：{e}"); ok = False
+    channel = _browser_channel()
     cloak = _cloak_executable()
-    if cloak:
-        print(f"✅ CloakBrowser 内核：{cloak}")
+    if channel:
+        print(f"✅ 本机浏览器：{'Google Chrome' if channel == 'chrome' else 'Microsoft Edge'}（小红书操作都开它的窗口）")
+    elif cloak:
+        print(f"⚠️ 没找到本机 Chrome / Edge，改用 CloakBrowser：{cloak}")
     else:
-        print("⚠️ 未找到 CloakBrowser（~/.cloakbrowser）；小红书登录可能被 300012")
+        print("⚠️ 没找到本机 Chrome / Edge：会用 Playwright 自带的 Chromium，更容易被小红书识别成脚本，建议安装 Google Chrome")
+    if _allow_headless():
+        print("⚠️ EASEL_XHS_HEADLESS=1：允许无头运行，很容易被小红书识别成脚本")
     print(f"登录态目录：{_profile_dir(None)}")
     return 0 if ok else 3
 
@@ -636,7 +747,7 @@ def _query_safe(page, selector: str):
 # 登录完成后，到底有没有真的落下登录态：
 # 本机实测过「扫码后页面已是登录态 → 立刻关浏览器」，重开 profile 里却没有 web_session、创作平台
 # 退回 /login —— 脚本还打印了「登录成功，cookie 已持久化」。所以先等登录 cookie 出现再关，
-# 关完再用同一份 profile 无头重开一次亲眼确认，确认过了才报成功。
+# 关完再用同一份 profile 重开一次亲眼确认，确认过了才报成功。
 LOGIN_COOKIE = "web_session"      # 小红书的登录凭证 cookie（.xiaohongshu.com，持久化，约一年有效）
 LOGIN_COOKIE_WAIT_S = 10
 CREATOR_SETTLE_S = 3              # 创作平台登录那条路径不认得它的 cookie 名，只能多留几秒让它落盘
@@ -646,8 +757,8 @@ VERIFY_SETTLE_S = 15
 WEB_LOGIN_PLATFORM = "xiaohongshu"   # = web/app.py LOGIN_RUNNERS 的键，Web 账号页读 outputs/_login/<键>.json
 
 RISK_BLOCKED_MSG = ("小红书判定当前网络为风险 IP（安全限制 300012「IP存在风险，请切换可靠网络环境」）——"
-                    "二维码在此环境无法弹出。解决：①本机有桌面时加 `--headed` 在窗口里登录"
-                    "（或 `--headed-fallback`，被拦时自动改开窗口）——有头浏览器通常不被拦；"
+                    "二维码在此环境无法弹出。解决：①去掉 EASEL_XHS_HEADLESS，在有桌面的本机开窗口登录"
+                    "（或加 `--headed-fallback`，被拦时自动改开窗口）；"
                     "②用干净/家宽 IP 的代理 `--proxy socks5://...`；"
                     "③在正常网络的机器上 login 拿到登录态，再把持久化目录 {profile} 整个拷到本机复用。")
 HEADED_FALLBACK_MSG = "小红书拦截了无头浏览器，已弹出浏览器窗口，请在窗口里扫码登录，不要关掉它。"
@@ -747,7 +858,7 @@ def _publish_page_ready(page) -> bool:
 
 
 def _verify_saved_login(p, base: str | None, proxy: str | None) -> bool:
-    """用同一份 profile 无头重开创作平台发布页，看到发布页真渲染出来（正向信号）才算登录态已保存。
+    """用同一份 profile 重开创作平台发布页，看到发布页真渲染出来（正向信号）才算登录态已保存。
 
     不能只看「URL 没带 /login」：未登录时是前端等接口 401 才跳 /login，慢网下能拖好几秒，
     URL 在跳走前一直是发布页 —— 那样会把没存上的登录报成成功。"""
@@ -901,11 +1012,11 @@ def _login_attempt(p, a, *, headed: bool, sf: str | None, qr_out: Path, timeout_
 
 def _login_flow(p, a, sf: str | None, qr_out: Path, timeout_s: int) -> int:
     try:
-        result = _login_attempt(p, a, headed=bool(a.headed), sf=sf, qr_out=qr_out,
+        result = _login_attempt(p, a, headed=bool(a.headed) or not _allow_headless(), sf=sf, qr_out=qr_out,
                                 timeout_s=timeout_s,
                                 window_msg="请在弹出的浏览器窗口里扫码，不要关掉那个窗口。")
     except _HeadlessBlocked:
-        # 实测：小红书只拦「未登录 + 无头」；有头窗口不拦，登录后无头也能正常用（whoami/发布）。
+        # 只在 EASEL_XHS_HEADLESS=1 时走到这里：小红书拦「未登录 + 无头」，有头窗口不拦。
         # 所以被拦时不必放弃，改开窗口让用户在窗口里扫一次，登录态落进同一份 profile。
         login_state.write_status(sf, "window_login", HEADED_FALLBACK_MSG)
         print(f"⚠️ {HEADED_FALLBACK_MSG}", file=sys.stderr)
@@ -936,9 +1047,9 @@ def _login_flow(p, a, sf: str | None, qr_out: Path, timeout_s: int) -> int:
 
 
 def cmd_login(a) -> int:
-    """headless 友好登录：把二维码抠成 PNG 供扫码，登录成功并确认登录态已落盘后才报成功。
+    """开 Chrome 窗口登录（二维码也抠成 PNG 供 Web 显示），登录成功并确认登录态已落盘后才报成功。
     REF login.go FetchQrcodeImage/WaitForLogin。远程无桌面环境靠图片扫码，非有头窗口；
-    --headed-fallback：无头被风控拦时自动改开有头窗口（本机有桌面时用）。"""
+    --headed-fallback：仅 EASEL_XHS_HEADLESS=1 时有用，无头被风控拦就改开窗口。"""
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
@@ -989,12 +1100,79 @@ def _plan_lines(kind: str, title: str, content: str, media: list[str], tags: lis
         f"  1. goto {PUBLISH_URL} → WaitLoad+DOMStable",
         f"  2. 点 tab「{tab}」（重试+遮挡检测）",
         f"  3. {'逐图上传等预览(≤60s/张)' if kind == 'image' else '上传视频等处理(≤10min)'}",
-        "  4. 输标题/正文（逐字符）+ 话题联想点选",
-        "  5. 平台 DOM 长度校验",
-        "  6. 等发布按钮可点击（新版<xhs-publish-btn>/旧版.bg-red）→ 点击",
-        "  7. 成功校验：URL 离开 /publish/publish",
+        "  4. 输标题/正文（鼠标点进去，按词组输入）+ 话题联想点选",
+        "  5. 勾「笔记含AI合成内容」声明（--no-ai-declare 跳过；勾不上就停，不发）",
+        "  6. 平台 DOM 长度校验",
+        "  7. 等发布按钮可点击（新版<xhs-publish-btn>/旧版.bg-red）→ 鼠标移过去点",
+        "  8. 成功校验：URL 离开 /publish/publish",
     ]
     return lines
+
+
+# --------------------------------------------------------------------------- #
+# 频率闸门：同一个账号发得太密就是「托管」特征。记录在登录目录里（按账号算），只记成功的。
+# --------------------------------------------------------------------------- #
+ACTIVITY_FILE = ".easel-activity.json"
+DAY_S = 24 * 3600
+# 种类 → (两次之间至少隔几分钟的环境变量, 默认, 24 小时内最多几次的环境变量, 默认)
+ACTIVITY_LIMITS = {
+    "publish": ("EASEL_XHS_MIN_GAP_MIN", 60, "EASEL_XHS_DAILY_MAX", 3),
+    "reply": ("EASEL_XHS_REPLY_GAP_MIN", 0, "EASEL_XHS_REPLY_DAILY_MAX", 30),
+    "comment": ("EASEL_XHS_COMMENT_GAP_MIN", 10, "EASEL_XHS_COMMENT_DAILY_MAX", 5),
+}
+ACTIVITY_NAMES = {"publish": "发笔记", "reply": "回复评论", "comment": "去别人笔记下评论"}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        v = int((os.environ.get(name) or "").strip())
+        return v if v >= 0 else default
+    except ValueError:
+        return default
+
+
+def _activity_path(base: str | None) -> Path:
+    return _profile_dir(base) / ACTIVITY_FILE
+
+
+def _load_activity(base: str | None) -> dict:
+    try:
+        d = json.loads(_activity_path(base).read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def activity_budget(base: str | None, kind: str, now: float | None = None) -> tuple[int, str]:
+    """现在还能做几次 kind（0 = 不能做），以及不能做时的原因。"""
+    now = time.time() if now is None else now
+    gap_env, gap_def, max_env, max_def = ACTIVITY_LIMITS[kind]
+    gap_s = _env_int(gap_env, gap_def) * 60
+    day_max = _env_int(max_env, max_def)
+    stamps = [t for t in _load_activity(base).get(kind, []) if isinstance(t, (int, float)) and now - t < DAY_S]
+    name = ACTIVITY_NAMES[kind]
+    if len(stamps) >= day_max:
+        wait = int((min(stamps) + DAY_S - now) // 60) + 1
+        return 0, (f"24 小时内已经{name} {len(stamps)} 次（上限 {day_max}，{max_env} 可调），"
+                   f"约 {wait} 分钟后再来")
+    if stamps and gap_s and now - max(stamps) < gap_s:
+        wait = int((max(stamps) + gap_s - now) // 60) + 1
+        return 0, f"距上次{name}不到 {gap_s // 60} 分钟（{gap_env} 可调），约 {wait} 分钟后再来"
+    return day_max - len(stamps), ""
+
+
+def record_activity(base: str | None, kind: str, now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    d = _load_activity(base)
+    d[kind] = [t for t in d.get(kind, []) if isinstance(t, (int, float)) and now - t < DAY_S] + [now]
+    path = _activity_path(base)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as e:
+        print(f"⚠️ 没能记下这次操作的时间（频率闸门会少算一次）：{e}", file=sys.stderr)
 
 
 def cmd_plan(a) -> int:
@@ -1029,11 +1207,18 @@ def _publish(a, kind: str) -> int:
                                allow_unsafe=getattr(a, "allow_unsafe", False),
                                label="小红书发布内容")
 
+    left, why = activity_budget(a.profile_base, "publish")
+    declare_ai = not getattr(a, "no_ai_declare", False)
     if not a.exec:
         print("dry-run（加 --exec 真正发布）：\n")
         for ln in _plan_lines(kind, a.title, a.content or "", media, tags):
             print(ln)
+        print(f"AI 合成声明：{'会勾选「笔记含AI合成内容」' if declare_ai else '不勾（--no-ai-declare）'}")
+        if not left:
+            print(f"⚠️ 现在 --exec 会被频率闸门拦下：{why}")
         return 0
+    if not left:
+        _die(f"小红书发得太密，这次不发：{why}", 5)
 
     try:
         from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
@@ -1062,15 +1247,18 @@ def _publish(a, kind: str) -> int:
                     page.wait_for_timeout(500)
                 if not logged and "login" in page.url.lower():
                     _die("未登录，请先 `login` 扫码")
+                human_input.pause(page, 1500, 3500)   # 页面打开先看一眼
                 if kind == "image":
                     _click_publish_tab(page, "上传图文")
-                    page.wait_for_timeout(1000)
+                    human_input.pause(page, 800, 2000)
                     _upload_images(page, media)
                 else:
                     _click_publish_tab(page, "上传视频")
-                    page.wait_for_timeout(1000)
+                    human_input.pause(page, 800, 2000)
                     _upload_video(page, media[0])
-                _fill_and_submit(page, a.title, a.content or "", tags)
+                human_input.pause(page, 1000, 3000)
+                _fill_and_submit(page, a.title, a.content or "", tags, declare_ai=declare_ai,
+                                 on_click=lambda: record_activity(a.profile_base, "publish"))
             except PWTimeout as e:
                 _die(f"步骤超时（选择器可能已失效，检查 SELECTORS）：{e}")
             finally:
@@ -1220,7 +1408,7 @@ def cmd_selftest(_a) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="小红书发布（Playwright，headless 可用；流程移植自 xiaohongshu-mcp）",
+        description="小红书发布（Playwright 驱动本机 Chrome 窗口；流程移植自 xiaohongshu-mcp）",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd")
 
@@ -1238,19 +1426,22 @@ def main() -> int:
         p.add_argument("--exec", action="store_true", help="真正发布（默认 dry-run）")
         p.add_argument("--allow-unsafe", action="store_true",
                        help="放行内容安全闸门（检出内部设置泄露也照发，谨慎）")
-        p.add_argument("--headed", action="store_true", help="有头模式（首次校验选择器用）")
+        p.add_argument("--headed", action="store_true",
+                       help="开窗口（默认就开；仅 EASEL_XHS_HEADLESS=1 时才可能无头）")
         p.add_argument("--keep-open", action="store_true", help="发布后不关浏览器")
+        p.add_argument("--no-ai-declare", action="store_true",
+                       help="不勾「笔记含AI合成内容」（仅当内容确实不是 AI 生成/合成的）")
 
     sub.add_parser("check", help="检查 playwright/内核").set_defaults(func=cmd_check)
 
-    p = sub.add_parser("login", help="扫码登录并持久化（headless：抠二维码成图片）")
+    p = sub.add_parser("login", help="扫码登录并持久化（开 Chrome 窗口，二维码也抠成图片）")
     add_common(p)
     p.add_argument("--qr-out", help=f"二维码图片输出路径（默认 {DEFAULT_QR_OUT}）")
     p.add_argument("--status-file", help="登录状态 JSON 输出路径（供 Web 后端轮询）")
     p.add_argument("--timeout", type=int, help="等待扫码超时秒数（默认 180）")
-    p.add_argument("--headed", action="store_true", help="有头模式（本地有桌面时可窗口内扫）")
+    p.add_argument("--headed", action="store_true", help="开窗口（默认就开；仅 EASEL_XHS_HEADLESS=1 时有区别）")
     p.add_argument("--headed-fallback", action="store_true",
-                   help="无头被小红书风控拦截（300012）时自动改开有头窗口登录（本机有桌面时用）")
+                   help="EASEL_XHS_HEADLESS=1 时：无头被风控拦截（300012）就改开窗口登录")
     p.set_defaults(func=cmd_login)
 
     p = sub.add_parser("plan", help="发布步骤预览（离线）")
@@ -1265,7 +1456,7 @@ def main() -> int:
     add_common(p); add_content(p)
     p.set_defaults(func=cmd_publish_video)
 
-    p = sub.add_parser("whoami", help="真校验登录态 + 读昵称/头像（输出 JSON）")
+    p = sub.add_parser("whoami", help="开 Chrome 窗口真校验登录态 + 读昵称/头像（输出 JSON；Web 不再调用）")
     add_common(p)
     p.set_defaults(func=cmd_whoami)
 

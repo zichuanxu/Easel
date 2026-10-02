@@ -277,6 +277,8 @@ def fake_browser(monkeypatch, tmp_path):
     monkeypatch.setattr(xhs.login_state, "write_status", record)
     monkeypatch.setattr(xhs, "_cloak_executable", lambda: None)
     monkeypatch.setattr(xhs, "_browser_channel", lambda: None)
+    # 这些剧本覆盖「允许无头」时的登录链路（没有桌面的机器）；默认一律开窗口见下面的单独测试
+    monkeypatch.setenv("EASEL_XHS_HEADLESS", "1")
     yield make, statuses
     for world in worlds:
         assert not world.overlaps, f"浏览器重叠启动：第 {world.overlaps} 次"
@@ -639,6 +641,7 @@ def test_login_status_does_not_miss_final_success(login_dir):
 
 
 # ── Web：登录标记指纹（loginTs）让前后端的 whoami 缓存都能发现「之后有人登录过」──────
+# （用抖音演示：小红书的 whoami 已不起浏览器，见 test_xhs_whoami_never_launches_browser）
 
 
 @pytest.fixture
@@ -652,11 +655,11 @@ def whoami_env(monkeypatch, login_dir):
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(answer), stderr="")
 
     monkeypatch.setattr(web.subprocess, "run", fake_run)
-    return login_dir / "xiaohongshu.json", calls, answer
+    return login_dir / "douyin.json", calls, answer
 
 
 def _whoami() -> dict:
-    return asyncio.run(web.api_account_whoami("xiaohongshu"))
+    return asyncio.run(web.api_account_whoami("douyin"))
 
 
 def _simulate_cli_login(marker: Path) -> None:
@@ -688,7 +691,7 @@ def test_whoami_marker_check_is_clock_independent(whoami_env):
     _whoami()
     assert len(calls) == 1          # 标记没变：走缓存
 
-    cached_at = web._WHOAMI_CACHE["xiaohongshu"][0]
+    cached_at = web._WHOAMI_CACHE["douyin"][0]
     _simulate_cli_login(marker)
     os.utime(marker, (cached_at - 3600, cached_at - 3600))
     _whoami()
@@ -703,17 +706,84 @@ def test_login_ts_matches_between_accounts_and_whoami(whoami_env, monkeypatch):
     def accounts() -> dict[str, float | None]:
         return {a["platform"]: a["loginTs"] for a in asyncio.run(web.api_accounts())}
 
-    assert accounts()["xiaohongshu"] is None
+    assert accounts()["douyin"] is None
     assert _whoami()["loginTs"] is None         # 未登录：whoami 删了标记
 
     answer["loggedIn"] = True
     web._WHOAMI_CACHE.clear()
     res = _whoami()
     assert res["loginTs"] == marker.stat().st_mtime_ns / 1e9
-    assert accounts()["xiaohongshu"] == res["loginTs"]
+    assert accounts()["douyin"] == res["loginTs"]
     assert _whoami()["loginTs"] == res["loginTs"]   # 走缓存时也带当前指纹
 
     _simulate_cli_login(marker)
     os.utime(marker, ns=(1, 1))
-    assert accounts()["xiaohongshu"] != res["loginTs"]
+    assert accounts()["douyin"] != res["loginTs"]
     assert accounts()["kuaishou"] is None
+
+
+# ── 默认开本机 Chrome 窗口（2026-10 无头 + 自带内核导致账号被判「第三方脚本」封号）──────────
+
+
+class _RecordingChromium:
+    def __init__(self):
+        self.calls: list[dict] = []
+        self.chromium = self
+
+    def launch_persistent_context(self, profile: str, **kwargs):
+        self.calls.append(kwargs)
+        return object()
+
+
+@pytest.mark.parametrize("headed", [False, True])
+def test_launch_defaults_to_real_chrome_window(monkeypatch, tmp_path, headed):
+    monkeypatch.delenv("EASEL_XHS_HEADLESS", raising=False)
+    monkeypatch.setattr(xhs, "_browser_channel", lambda: "chrome")
+    monkeypatch.setattr(xhs, "_cloak_executable", lambda: (_ for _ in ()).throw(AssertionError("有 Chrome 就不该找 Cloak")))
+    pw = _RecordingChromium()
+    xhs._launch(pw, headed=headed, base=str(tmp_path), proxy=None)
+    kw = pw.calls[0]
+    assert kw["headless"] is False                     # 调用方要无头也不给
+    assert kw["channel"] == "chrome"
+    assert "executable_path" not in kw
+    assert "--enable-automation" in kw["ignore_default_args"]
+    assert kw["no_viewport"] is True
+    for flag in ("--no-sandbox", "--disable-gpu", "--disable-extensions"):
+        assert flag not in kw["args"]
+
+
+def test_launch_headless_only_when_allowed(monkeypatch, tmp_path):
+    monkeypatch.setenv("EASEL_XHS_HEADLESS", "1")
+    monkeypatch.setattr(xhs, "_browser_channel", lambda: None)
+    monkeypatch.setattr(xhs, "_cloak_executable", lambda: None)
+    pw = _RecordingChromium()
+    xhs._launch(pw, headed=False, base=str(tmp_path), proxy=None)
+    assert pw.calls[0]["headless"] is True
+    assert "no_viewport" not in pw.calls[0]
+
+
+def test_login_opens_window_by_default(fake_browser, tmp_path, monkeypatch):
+    """不允许无头时，登录一上来就开窗口（不再先无头碰一次小红书、被 300012 拦了才改窗口）。"""
+    make, _statuses = fake_browser
+    monkeypatch.delenv("EASEL_XHS_HEADLESS")
+    world = make()
+    rc = xhs.cmd_login(_login_args(tmp_path))
+    assert rc == 0
+    assert world.launches and not any(world.launches)
+
+
+def test_xhs_whoami_never_launches_browser(whoami_env, monkeypatch, tmp_path):
+    """小红书账号卡片的校验只读登录标记 + 上次创作数据里的昵称，绝不在后台开浏览器。"""
+    _marker, calls, _answer = whoami_env
+    xhs_marker = web.LOGIN_DIR / "xiaohongshu.json"
+    ana = tmp_path / "_analytics"
+    ana.mkdir()
+    monkeypatch.setattr(web, "ANALYTICS_CACHE_DIR", ana)
+    res = asyncio.run(web.api_account_whoami("xiaohongshu"))
+    assert res["loggedIn"] is False and res["name"] == ""
+    _simulate_cli_login(xhs_marker)
+    (ana / "xiaohongshu-latest.json").write_text(json.dumps({"nickname": "小红薯A"}), encoding="utf-8")
+    res = asyncio.run(web.api_account_whoami("xiaohongshu"))
+    assert res["loggedIn"] is True and res["name"] == "小红薯A"
+    assert calls == []
+    assert xhs_marker.is_file()          # 也不会因为「没校验」去删标记

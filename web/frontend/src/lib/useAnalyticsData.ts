@@ -6,6 +6,11 @@ import type { AccountAnalytics } from './api';
 export const ANALYTICS_TTL_MS = 30 * 60 * 1000;
 /** 同时最多几个平台在抓取（每个都会起一个浏览器）。 */
 const CONCURRENCY = 2;
+/**
+ * 只在用户点「刷新数据」时才抓的平台：每抓一次都是开浏览器登录一次账号，小红书会把定时的
+ * 自动访问判成第三方脚本（2026-10 因此被封号）。打开页面只显示上次的结果。
+ */
+export const MANUAL_ONLY_ANALYTICS = new Set(['xiaohongshu']);
 const STORE_KEY = 'easel_analytics';
 
 export interface AnalyticsEntry {
@@ -38,6 +43,7 @@ function loadStored(): Record<string, AccountAnalytics> {
 /**
  * 创作数据：先显示缓存、过期则后台刷新。
  * - ensure(p, priority)：有新鲜缓存不动；过期则后台抓，旧数据保留；本地没有则先读后端落盘结果，仍没有才真抓。
+ *   MANUAL_ONLY_ANALYTICS 里的平台 ensure 只读缓存，从不真抓。
  * - refresh(p)：强制抓取，期间保留旧数据。
  * - 同平台已在抓取时不重复发请求；最多 2 个平台同时抓，priority（当前选中的平台）插队首。
  */
@@ -52,6 +58,7 @@ export function useAnalyticsData() {
   const inflight = useRef(new Set<string>());   // 排队中 + 抓取中 + 读落盘缓存中
   const queue = useRef<string[]>([]);           // 等待抓取的平台，队首先跑
   const running = useRef(0);
+  const cacheRead = useRef(new Set<string>());   // 手动平台：已读过后端落盘结果
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true;
@@ -108,6 +115,19 @@ export function useAnalyticsData() {
       return;
     }
     const cur = store.current[p]?.data;
+    if (MANUAL_ONLY_ANALYTICS.has(p)) {
+      // 只读一次后端落盘结果；不占 inflight，读的这一下点「刷新数据」照样能抓
+      if (cur || cacheRead.current.has(p)) return;
+      cacheRead.current.add(p);
+      fetchCachedAnalytics(p)
+        .catch(() => null)
+        .then((r) => {
+          if (!alive.current || !r || store.current[p]?.data) return;
+          patch(p, { data: r });
+          persist();
+        });
+      return;
+    }
     if (isFresh(cur)) return;
     if (cur) { schedule(p, priority); return; }
     // 本地没有：先读后端落盘结果（毫秒级），比起浏览器抓取快得多
