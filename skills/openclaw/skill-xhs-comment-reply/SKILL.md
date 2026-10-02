@@ -2,7 +2,7 @@
 name: skill-xhs-comment-reply
 description: |
   小红书评论互动运营：列出我的笔记、抓取某条笔记下的评论、按画像语气逐条回复、以及删除评论
-  （含自己发的回复）。Playwright 驱动本机 Chrome 窗口 + 持久化登录态，与 skill-xhs-publisher
+  （含自己发的回复）。Playwright 驱动 Cloak/本机 Chrome 窗口 + 持久化登录态，与 skill-xhs-publisher
   共用同一登录态。评论抓取走接口响应拦截（稳）；回复/删除用鼠标移过去点、按词组输入；
   带已回复去重、频率闸门（每条 ≥20s、24 小时 ≤30 条）、dry-run 预演。用 notes 列笔记或 fetch --url 贴链接，免手动拆 token。
   触发：抓小红书评论 / 回复评论 / 删除评论 / 删评 / 维护评论区 / 看我某条笔记的评论。
@@ -15,7 +15,7 @@ layer: publish
 的回复逐条回评。确定性 IO（抓评论/定位回复框/发送）走 `xhs_comment.py`；**回复文案由你结合
 画像生成**，脚本只负责把你给定的文本发出去——脚本不编内容。
 
-## 运行方式（Playwright 驱动本机 Chrome 窗口）
+## 运行方式（Playwright 驱动 CloakBrowser / 本机 Chrome 窗口）
 
 统一走确定性脚本 **`../../shared/scripts/xhs_comment.py`**（CWD=项目根）。与
 `xhs_publish.py` **共用同一持久化登录态**（`~/.easel-browser-profiles/XiaohongshuProfile`），

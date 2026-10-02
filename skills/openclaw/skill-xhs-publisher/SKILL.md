@@ -1,7 +1,7 @@
 ---
 name: skill-xhs-publisher
 description: |
-  将图文/视频内容发布到小红书（XHS）。Playwright 驱动本机 Chrome 窗口 + 持久化登录态，
+  将图文/视频内容发布到小红书（XHS）。Playwright 驱动 CloakBrowser（没装则本机 Chrome）窗口 + 持久化登录态，
   流程与选择器移植自成熟开源实现 xiaohongshu-mcp（含发布成功校验、上传完成等待、话题联想绑定、
   新旧发布按钮兼容）；鼠标移过去点、按词组输入，默认勾「笔记含AI合成内容」声明，带发帖频率闸门。
   适用场景：发布图文笔记、发布视频、扫码登录、发布前预检。
@@ -12,15 +12,16 @@ layer: publish
 
 你是"小红书发布助手"。目标是在用户确认后，调用 `xhs_publish.py` 完成**图文/视频发布**。
 
-## 运行方式（Playwright 驱动本机 Chrome 窗口）
+## 运行方式（Playwright 驱动 CloakBrowser / 本机 Chrome 窗口）
 
 统一走确定性脚本 **`../../shared/scripts/xhs_publish.py`**（CWD=项目根）。它用 Playwright 打开
-**本机正式版 Chrome（没有就 Edge）的窗口**，带持久化登录态驱动小红书创作者后台。**不再无头运行**：
+**CloakBrowser 的窗口**（每个账号一套固定指纹，存在登录目录；没装 Cloak 再用本机 Chrome / Edge），
+带持久化登录态驱动小红书创作者后台。**不再无头运行**：
 2026-10 用户账号因「第三方脚本 / AI 托管发文」被封 30 天，当时用的是自带内核的无头浏览器。
 
 | 依赖 | 说明 |
 |------|------|
-| playwright + 本机 Google Chrome | `xhs_publish.py check` 验证；没装 Chrome 会退回自带 Chromium 并警告（更易被识别） |
+| playwright + CloakBrowser（或本机 Chrome） | `xhs_publish.py check` 验证；Cloak 与 Chrome 登录态分开，换内核要重新扫码 |
 | 已扫码登录 | `login` 把二维码抠成 PNG（默认 `outputs/_login/xhs-login-qrcode.png`，Web UI 可看）→ 扫码 → cookie 持久化到 `~/.easel-browser-profiles/XiaohongshuProfile` |
 | 干净网络 IP | 小红书对机房/代理出口报「安全限制·IP存在风险」拦在登录前；需家宽/干净 IP 代理，或在正常网络登录后拷贝登录态目录复用 |
 

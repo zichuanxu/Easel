@@ -4,9 +4,22 @@
 > 流程/选择器移植自 xpzouying/xiaohongshu-mcp。旧 CDP 脚本已退役删除。
 >
 > **为什么开窗口**：2026-10 账号被判「第三方脚本 / AI 托管发文」封 30 天，当时用的是 Playwright 自带内核的
-> 无头模式（UA 写着 HeadlessChrome）。现在所有小红书操作都开本机正式版 Chrome（没有就 Edge）的窗口，
-> 鼠标沿曲线移过去点、按词组输入；`--headed` 已是默认行为。只有没有桌面的机器才设 `EASEL_XHS_HEADLESS=1`
-> 强开无头（很容易被识别）。
+> 无头模式（UA 写着 HeadlessChrome）。现在所有小红书操作都开窗口，鼠标沿曲线移过去点、按词组输入；
+> `--headed` 已是默认行为。只有没有桌面的机器才设 `EASEL_XHS_HEADLESS=1` 强开无头（很容易被识别）。
+
+### 用哪个浏览器
+
+1. **CloakBrowser（优先）**：源码级抹掉自动化痕迹的 Chromium。安装：
+   `pip install cloakbrowser && python -m cloakbrowser install`（装到 `~/.cloakbrowser`）。
+   每个账号一套**固定指纹**，第一次打开时生成，存在登录目录的 `.easel-fingerprint.json`
+   （seed + 平台，Mac 上是 macOS 身份）；之后每次都用它，像同一台设备。不要删这个文件
+   （Web 账号页「退出」会保留它和频率记录）；从别的系统拷来的登录目录平台不符时会自动重新生成。
+   Cloak 的浏览器数据放在登录目录的 `cloak-browser/` 子目录，和 Chrome 的登录态分开，
+   **从 Chrome 换到 Cloak 要重新扫码登录一次**。
+2. **本机 Google Chrome / Edge**：没装 Cloak，或设了 `EASEL_XHS_BROWSER=chrome` 时用。
+3. Playwright 自带 Chromium：前两个都没有时才用，会警告。
+
+`xhs_publish.py check` 会显示实际用哪个。
 
 ## 环境检查
 

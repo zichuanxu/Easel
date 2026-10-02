@@ -3911,6 +3911,28 @@ async def _account_whoami(platform: str) -> dict:
     return data
 
 
+# 退出登录时登录目录里要留下的文件：账号固定指纹（重新登录还像同一台设备）和频率闸门记录
+# （退出再登录不能绕开发帖间隔）。见 xhs_publish.FINGERPRINT_FILE / ACTIVITY_FILE。
+PROFILE_KEEP_ON_LOGOUT = ('.easel-fingerprint.json', '.easel-activity.json')
+
+
+def _clear_profile_dir(pdir: Path) -> None:
+    """删掉浏览器登录目录（登录态、cookie、浏览器数据），但留下 PROFILE_KEEP_ON_LOGOUT。"""
+    if not any((pdir / n).is_file() for n in PROFILE_KEEP_ON_LOGOUT):
+        shutil.rmtree(pdir, ignore_errors=True)
+        return
+    for child in pdir.iterdir():
+        if child.name in PROFILE_KEEP_ON_LOGOUT:
+            continue
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            try:
+                child.unlink()
+            except OSError:
+                pass
+
+
 @app.post("/api/logout/{platform}")
 async def api_logout(platform: str):
     """退出登录：删持久化浏览器 profile + 登录状态/二维码/头像文件（biliup 删 cookies.json）。"""
@@ -3951,7 +3973,7 @@ async def api_logout(platform: str):
     if prof_name:
         pdir = (BROWSER_PROFILES / prof_name).resolve()
         if BROWSER_PROFILES.resolve() in pdir.parents and pdir.is_dir():
-            shutil.rmtree(pdir, ignore_errors=True)
+            _clear_profile_dir(pdir)
             deleted.append(prof_name)
     if cfg['backend'] == 'biliup':
         ck = PROJECT_ROOT / 'cookies.json'

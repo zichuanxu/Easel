@@ -3,7 +3,7 @@
 脚本：`skills/shared/scripts/xhs_comment.py`（CWD=项目根）。所有命令用 `python` 直接调。
 小红书对代理出口常判风险，**评论抓取/回复建议 `--no-proxy` 直连**。
 
-所有命令都会开**本机 Chrome 窗口**（与 xhs_publish 同一套，不再无头），鼠标移过去点、按词组输入、
+所有命令都会开 **CloakBrowser 窗口**（与 xhs_publish 同一套、同一套账号固定指纹；没装 Cloak 用本机 Chrome），鼠标移过去点、按词组输入、
 滚轮翻页。回复/评论受频率闸门约束（见 skill-xhs-publisher 的 references/commands.md「频率闸门」）：
 回复每条间隔 ≥20s 且 24 小时最多 30 条；超出的这次不发，dry-run 会提前提示。
 

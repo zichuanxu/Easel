@@ -91,7 +91,8 @@ bash setup.sh
 
 - **现场（2026-10）**：账号收到「笔记存在利用 AI 托管进行发文/互动」「使用第三方脚本或工具」警告并被封 30 天。当时 Easel 在 macOS 上用 Playwright 自带内核的**无头浏览器**操作小红书（UA 写着 `HeadlessChrome`），而且账号页每次打开都在后台开一次浏览器校验登录，创作数据页开着时也会定时重抓；发出去的 AI 视频没有做 AI 合成声明。
 - **现在的做法**：
-  - 发布、评论、看数据都开**本机 Google Chrome 的窗口**（没有就 Edge），鼠标沿曲线移过去点、按词组输入；过程中别动那个窗口。没装 Chrome 时退回自带 Chromium 并警告，建议装 Chrome。
+  - 发布、评论、看数据都开窗口，鼠标沿曲线移过去点、按词组输入；过程中别动那个窗口。
+  - 浏览器优先 **CloakBrowser**（`pip install cloakbrowser && python -m cloakbrowser install`）：每个账号一套固定指纹，存在登录目录 `.easel-fingerprint.json`（Mac 上是 macOS 身份），浏览器数据在 `cloak-browser/` 子目录。没装 Cloak（或 `EASEL_XHS_BROWSER=chrome`）用本机 Chrome / Edge；都没有才退回自带 Chromium 并警告。Cloak 和 Chrome 的登录态分开，换浏览器要重新扫码（以前在 Windows 上用 Cloak 的，登录态原来在登录目录本身，现在挪到 `cloak-browser/`，也要重新扫码一次）。账号页「退出」会删掉登录态，但保留固定指纹和频率记录。
   - 账号页不再为小红书开浏览器，只看本地登录记录（登录过期要等发布时才发现）；创作数据只在点「刷新数据」时抓。
   - 发布默认勾「笔记含AI合成内容」，勾不上就停在发布前不发（退出码 6）；内容确实不是 AI 生成才加 `--no-ai-declare`。
   - 频率闸门：笔记两条之间 ≥60 分钟、24 小时 ≤3 条；回复每条间隔 ≥20 秒、24 小时 ≤30 条；去别人笔记下评论两条之间 ≥10 分钟、24 小时 ≤5 条。超限退出码 5。
