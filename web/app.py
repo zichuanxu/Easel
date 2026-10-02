@@ -39,6 +39,7 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(PROJECT_ROOT / "scripts") not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
+from easel import gateway_cron
 from easel.gateway_endpoint import chat_completions_url, healthz_url, port_source
 from easel.openclaw_cmd import openclaw_base_cmd
 from easel.openclaw_workspace import config_path as openclaw_config_path, state_dir as openclaw_state_dir
@@ -4690,6 +4691,108 @@ async def api_schedule_delete(sid: str):
         raise HTTPException(404, "排期不存在")
     _write_schedule(new)
     return {"ok": True, "deleted": sid}
+
+
+# ---- 定时任务（OpenClaw cron，经 gateway RPC；规则见 easel/gateway_cron.py）----
+CRON_GATEWAY_HINT = "连不上 gateway，定时任务要靠它运行。先运行 `easel gateway start`，或在设置里检查网关状态。"
+# 任务内容里提到这些词时提醒：定时运行时没人确认，agent 按发布安全规则不会替你真发
+CRON_PUBLISH_WORDS = ("发布", "发帖", "发笔记", "发视频", "评论", "回复", "私信", "点赞", "上传")
+
+
+# cron.run 回 {ran: false, reason} 时的中文说明
+CRON_NOT_RUN_REASONS = {
+    "already-running": "任务正在运行中", "disabled": "任务已暂停", "invalid-spec": "任务的时间设置有问题",
+    "not-due": "还没到时间", "stopped": "定时器没在运行", "ownerless": "任务没有归属",
+}
+
+
+class CronCreateRequest(BaseModel):
+    name: str
+    message: str
+    schedule: dict
+
+
+async def _cron(fn, *args):
+    try:
+        return await asyncio.to_thread(fn, *args)
+    except gateway_cron.CronInputError as e:      # 含 CronRejectedError：gateway 回了拒绝原因
+        raise HTTPException(400, str(e))
+    except gateway_cron.CronGatewayError as e:
+        raise HTTPException(502, f"{CRON_GATEWAY_HINT}（{str(e)[:160]}）")
+
+
+async def _cron_user_job(job_id: str) -> dict:
+    """要改的任务必须存在且不是系统任务（OpenClaw / 插件自己声明的只读）。"""
+    job = await _cron(gateway_cron.get_job, job_id)
+    if job is None:
+        raise HTTPException(404, "定时任务不存在")
+    if job["readonly"]:
+        raise HTTPException(403, "这个任务只能查看（OpenClaw 自带的系统任务，或命令行建的命令 / 脚本任务）")
+    return job
+
+
+def _cron_publish_warning(message: str) -> str:
+    hit = [w for w in CRON_PUBLISH_WORDS if w in (message or "")]
+    if not hit:
+        return ""
+    return ("这条任务提到了「" + "、".join(hit) + "」。定时运行时没人确认，agent 按发布安全规则只会准备好内容、"
+            "不会替你真正发出去；小红书更不要定时自动发帖或互动（会被判 AI 托管）。")
+
+
+@app.get("/api/cron")
+async def api_cron_list():
+    jobs = await _cron(gateway_cron.list_jobs)
+    return {"jobs": jobs, "minIntervalMinutes": gateway_cron.MIN_INTERVAL_MIN}
+
+
+@app.post("/api/cron")
+async def api_cron_create(req: CronCreateRequest):
+    try:
+        params = gateway_cron.build_add_params(req.name, req.message, req.schedule)
+    except gateway_cron.CronInputError as e:
+        raise HTTPException(400, str(e))
+    job = await _cron(gateway_cron.add_job, params)
+    if job.get("enabled") and not job.get("nextRunAtMs") and job.get("id"):
+        # 合法但永远到不了的时间（如 2 月 31 日）：建了也不会跑，删掉并说清楚
+        await _cron(gateway_cron.remove_job, job["id"])
+        raise HTTPException(400, "这个时间永远不会到（比如 2 月 31 日），换一个时间")
+    return {"job": job, "warning": _cron_publish_warning(req.message)}
+
+
+@app.post("/api/cron/{job_id}/pause")
+async def api_cron_pause(job_id: str):
+    await _cron_user_job(job_id)
+    await _cron(gateway_cron.set_enabled, job_id, False)
+    return {"ok": True}
+
+
+@app.post("/api/cron/{job_id}/resume")
+async def api_cron_resume(job_id: str):
+    await _cron_user_job(job_id)
+    await _cron(gateway_cron.set_enabled, job_id, True)
+    return {"ok": True}
+
+
+@app.post("/api/cron/{job_id}/run")
+async def api_cron_run(job_id: str):
+    await _cron_user_job(job_id)
+    res = await _cron(gateway_cron.run_now, job_id)
+    if isinstance(res, dict) and res.get("ran") is False:
+        reason = str(res.get("reason") or "")
+        raise HTTPException(409, "这次没有运行：" + CRON_NOT_RUN_REASONS.get(reason, reason or "原因未知"))
+    return {"ok": True}
+
+
+@app.delete("/api/cron/{job_id}")
+async def api_cron_delete(job_id: str):
+    await _cron_user_job(job_id)
+    await _cron(gateway_cron.remove_job, job_id)
+    return {"ok": True}
+
+
+@app.get("/api/cron/{job_id}/runs")
+async def api_cron_runs(job_id: str, limit: int = 20):
+    return {"runs": await _cron(gateway_cron.list_runs, job_id, limit)}
 
 
 @app.get("/api/schedule/context")

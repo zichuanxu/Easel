@@ -5,11 +5,11 @@
 export type LayerKey = 'discover' | 'plan' | 'produce' | 'publish' | 'attribute' | 'general';
 
 export type Page =
-  | 'dashboard' | 'chat' | 'trends' | 'ideas' | 'calendar' | 'publish' | 'breakdown'
+  | 'dashboard' | 'chat' | 'trends' | 'ideas' | 'calendar' | 'cron' | 'publish' | 'breakdown'
   | 'skills' | 'outputs' | 'accounts' | 'profile' | 'analytics';
 
 export const ALL_PAGES: Page[] = [
-  'dashboard', 'chat', 'trends', 'ideas', 'calendar', 'publish', 'breakdown',
+  'dashboard', 'chat', 'trends', 'ideas', 'calendar', 'cron', 'publish', 'breakdown',
   'skills', 'outputs', 'accounts', 'profile', 'analytics',
 ];
 
@@ -50,6 +50,7 @@ export const PAGE_LAYER: Partial<Record<Page, LayerKey>> = {
   breakdown: 'discover',
   ideas: 'plan',
   calendar: 'plan',
+  cron: 'plan',
   outputs: 'produce',
   publish: 'publish',
   accounts: 'publish',
@@ -64,7 +65,7 @@ export interface NavGroup { layer?: LayerKey; items: NavItem[]; }
 export const NAV_GROUPS: NavGroup[] = [
   { items: [{ page: 'dashboard', label: '工作台' }, { page: 'chat', label: '对话' }] },
   { layer: 'discover', items: [{ page: 'trends', label: '热点雷达' }, { page: 'breakdown', label: '爆款拆解' }] },
-  { layer: 'plan', items: [{ page: 'ideas', label: '选题库' }, { page: 'calendar', label: '内容日历' }] },
+  { layer: 'plan', items: [{ page: 'ideas', label: '选题库' }, { page: 'calendar', label: '内容日历' }, { page: 'cron', label: '定时任务' }] },
   { layer: 'produce', items: [{ page: 'outputs', label: '内容库' }] },
   { layer: 'publish', items: [{ page: 'publish', label: '发布中心' }, { page: 'accounts', label: '账号' }] },
   { layer: 'attribute', items: [{ page: 'analytics', label: '创作数据' }] },

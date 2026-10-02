@@ -4,7 +4,7 @@ import type { PersonaItem } from '../lib/api';
 import { NAV_GROUPS, layerInfo } from '../lib/layers';
 import type { Page } from '../lib/layers';
 import {
-  IconDashboard, IconChat, IconFire, IconLayers, IconIdea, IconCalendar,
+  IconDashboard, IconChat, IconFire, IconLayers, IconIdea, IconCalendar, IconClock,
   IconOutputs, IconPublish, IconAccounts, IconChart, IconSkills, IconProfile,
 } from './icons';
 import { IconGear } from './settingsIcons';
@@ -29,7 +29,7 @@ interface SidebarProps {
 const PAGE_ICON: Record<Page, ComponentType<{ size?: number }>> = {
   dashboard: IconDashboard, chat: IconChat,
   trends: IconFire, breakdown: IconLayers,
-  ideas: IconIdea, calendar: IconCalendar,
+  ideas: IconIdea, calendar: IconCalendar, cron: IconClock,
   outputs: IconOutputs,
   publish: IconPublish, accounts: IconAccounts,
   analytics: IconChart,

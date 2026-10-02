@@ -118,6 +118,8 @@ Prompt layering is described in `docs/prompt-stack.md`: SOUL.md (persona) → AG
 - Path-traversal checks on the file, output, and media routes.
 - SSRF and value guards on writes to `.env`. `setup.sh` sources `.env`, so an injected value there becomes code execution.
 
+The 定时任务 page (`/api/cron*`) manages OpenClaw cron jobs over gateway RPC through `easel/gateway_cron.py`. It only creates agentTurn jobs (never command/script jobs, which would run shell on the gateway), keeps plugin-declared system jobs read-only, and enforces a 10-minute minimum interval.
+
 `tests/test_web_security.py` covers these safeguards. Keep it passing whenever you touch `.env` writes, tool installs, or file routes.
 
 The frontend calls the API through paths relative to the current page (no Vite proxy). To check a UI change, run `npm run build` and then `easel web`.

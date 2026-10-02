@@ -216,6 +216,48 @@ export function deleteSchedule(id: string): Promise<{ ok: boolean }> {
   return request(`/api/schedule/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
+// ---- 定时任务（OpenClaw cron，经后端 /api/cron）----
+export interface CronJob {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  system: boolean;           // OpenClaw / 插件自带的任务
+  readonly: boolean;         // 网页只能看：系统任务，或命令行建的命令 / 脚本任务
+  kind: string;
+  message: string;
+  schedule: import('./cronSchedule').CronScheduleData;
+  nextRunAtMs: number | null;
+  lastRunAtMs: number | null;
+  lastRunStatus: string;
+  lastError: string;
+  lastDurationMs: number | null;
+  runningAtMs: number | null;
+  createdAtMs: number | null;
+}
+export interface CronRun {
+  runAtMs: number | null; status: string; durationMs: number | null; summary: string; error: string; model: string;
+}
+export function fetchCronJobs(): Promise<{ jobs: CronJob[]; minIntervalMinutes: number }> {
+  return request('/api/cron');
+}
+export function createCronJob(body: {
+  name: string; message: string; schedule: import('./cronSchedule').ScheduleSpec;
+}): Promise<{ job: CronJob; warning: string }> {
+  return request('/api/cron', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+}
+export function cronAction(id: string, action: 'pause' | 'resume' | 'run'): Promise<{ ok: boolean }> {
+  return request(`/api/cron/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
+}
+export function deleteCronJob(id: string): Promise<{ ok: boolean }> {
+  return request(`/api/cron/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+export function fetchCronRuns(id: string, limit = 20): Promise<{ runs: CronRun[] }> {
+  return request(`/api/cron/${encodeURIComponent(id)}/runs?limit=${limit}`);
+}
+
 // ---- 选题库 ----
 export interface Idea {
   id: string; title: string; note: string; source: string; status: string; created: number;
