@@ -931,3 +931,36 @@ def test_logout_keeps_fingerprint_and_rate_limit_files(login_dir, monkeypatch, t
     res = asyncio.run(web.api_logout("xiaohongshu"))
     assert xhs.PROFILE_NAME in res["deleted"]
     assert sorted(c.name for c in pdir.iterdir()) == sorted([xhs.ACTIVITY_FILE, xhs.FINGERPRINT_FILE])
+
+
+# ── 不再莫名弹窗：whoami 默认不开浏览器，小红书数据抓取必须明确 --manual ─────────────
+# 现场（2026-10-02）：合并后没重启的旧 Web 后端还在定时调 `xhs_publish.py whoami`，而磁盘上的新脚本
+# 一律开窗口 → 隔一会儿弹一个 Cloak 窗口打开小红书。
+
+
+def test_whoami_is_passive_by_default(monkeypatch, outputs_root, capsys):
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", None)   # 真要起浏览器会 ImportError
+    marker = outputs_root / "_login" / "xiaohongshu.json"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    args = types.SimpleNamespace(live=False, profile_base=None, proxy=None, no_proxy=True)
+    assert xhs.cmd_whoami(args) == 0
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["loggedIn"] is False and out["passive"] is True and "error" not in out
+    marker.write_text(json.dumps({"state": "success"}), encoding="utf-8")
+    xhs.cmd_whoami(args)
+    assert json.loads(capsys.readouterr().out.strip())["loggedIn"] is True
+
+
+def test_xhs_stats_refuse_without_manual(monkeypatch, capsys):
+    import account_stats
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", None)
+    monkeypatch.setattr(account_stats, "_scrape", lambda *a: (_ for _ in ()).throw(AssertionError("不该抓")))
+    args = types.SimpleNamespace(platform="xiaohongshu", manual=False, no_proxy=False, proxy=None,
+                                 headed=False, profile_base=None)
+    assert account_stats.cmd_fetch(args) == 2
+    assert "manual-only" in json.loads(capsys.readouterr().out.strip())["error"]
+
+
+def test_web_passes_manual_only_for_xhs():
+    assert web._analytics_cmd("xiaohongshu")[-1] == "--manual"
+    assert "--manual" not in web._analytics_cmd("douyin")

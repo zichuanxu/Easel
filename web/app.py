@@ -4043,7 +4043,10 @@ def _analytics_cmd(platform: str) -> list[str]:
         return [sys.executable, str(SHARED_SCRIPTS / "weixin_mp_stats.py"), "stats",
                 "--proxy", wx_proxy, "--count", "20"]
     # 代理策略由 account_stats.py 按平台自定（xhs 直连、其它走 env），后端照常传 _proxy_env
-    return [sys.executable, str(SHARED_SCRIPTS / "account_stats.py"), "fetch", "--platform", platform]
+    cmd = [sys.executable, str(SHARED_SCRIPTS / "account_stats.py"), "fetch", "--platform", platform]
+    if platform == "xiaohongshu":
+        cmd.append("--manual")   # 前端只在用户点「刷新数据」时请求小红书（MANUAL_ONLY_ANALYTICS）
+    return cmd
 
 
 async def _run_analytics(platform: str) -> dict:

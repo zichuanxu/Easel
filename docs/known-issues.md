@@ -94,6 +94,7 @@ bash setup.sh
   - 发布、评论、看数据都开窗口，鼠标沿曲线移过去点、按词组输入；过程中别动那个窗口。
   - 浏览器优先 **CloakBrowser**（`pip install cloakbrowser && python -m cloakbrowser install`）：每个账号一套固定指纹，存在登录目录 `.easel-fingerprint.json`（Mac 上是 macOS 身份），浏览器数据在 `cloak-browser/` 子目录。没装 Cloak（或 `EASEL_XHS_BROWSER=chrome`）用本机 Chrome / Edge；都没有才退回自带 Chromium 并警告。Cloak 和 Chrome 的登录态分开，换浏览器要重新扫码（以前在 Windows 上用 Cloak 的，登录态原来在登录目录本身，现在挪到 `cloak-browser/`，也要重新扫码一次）。账号页「退出」会删掉登录态，但保留固定指纹和频率记录。
   - 账号页不再为小红书开浏览器，只看本地登录记录（登录过期要等发布时才发现）；创作数据只在点「刷新数据」时抓。
+  - **升级后一定要重启 `easel web`**：没重启的旧后端还会定时调 `xhs_publish.py whoami`。现在 `whoami` 默认只读本地登录记录、不开浏览器（`--live` 才开），`account_stats.py fetch --platform xiaohongshu` 不带 `--manual` 直接拒绝——旧后端也弹不出窗口了，但旧后端仍会把「未登录」写回账号卡片，重启后才恢复正常。
   - 发布默认勾「笔记含AI合成内容」，勾不上就停在发布前不发（退出码 6）；内容确实不是 AI 生成才加 `--no-ai-declare`。
   - 频率闸门：笔记两条之间 ≥60 分钟、24 小时 ≤3 条；回复每条间隔 ≥20 秒、24 小时 ≤30 条；去别人笔记下评论两条之间 ≥10 分钟、24 小时 ≤5 条。超限退出码 5。
 - **仍然有风险**：平台不允许第三方工具代发，以上只能降低被识别的概率。被封期间不要再用 Easel 碰这个账号；解封后先手动正常使用几天，再少量使用。
