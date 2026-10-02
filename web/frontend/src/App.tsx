@@ -10,6 +10,7 @@ import DashboardPage from './components/DashboardPage';
 import AnalyticsPage from './components/AnalyticsPage';
 import TrendsPage from './components/TrendsPage';
 import CalendarPage from './components/CalendarPage';
+import CronPage from './components/CronPage';
 import IdeasPage from './components/IdeasPage';
 import PublishPage from './components/PublishPage';
 import BreakdownPage from './components/BreakdownPage';
@@ -745,6 +746,8 @@ export default function App() {
         return <IdeasPage onUseTopic={handleUseTopic} />;
       case 'calendar':
         return <CalendarPage />;
+      case 'cron':
+        return <CronPage />;
       case 'publish':
         return <PublishPage persona={selectedPersona} />;
       case 'breakdown':
