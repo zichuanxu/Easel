@@ -47,6 +47,7 @@ export default function ChatPage({ session, stream, onSend, onStop, onResend, on
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isComposingRef = useRef(false);
 
   const isStreaming = !!stream;
   const isEmpty = session.messages.length === 0 && !isStreaming;
@@ -117,7 +118,9 @@ export default function ChatPage({ session, stream, onSend, onStop, onResend, on
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // 输入法组字中的回车（中文输入法里敲英文按回车上屏）只上屏，不发送
+    // 输入法组字 / 确认候选词的回车只交给输入法，不发送：
+    // isComposingRef 兜住 compositionend 先于 keydown 的浏览器，isSubmitEnter 兜住 isComposing / keyCode 229。
+    if (isComposingRef.current) return;
     if (isSubmitEnter(e) && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -147,6 +150,9 @@ export default function ChatPage({ session, stream, onSend, onStop, onResend, on
           placeholder={dragOver ? '松手上传素材…' : hero ? '把你的想法告诉我，选题 / 文案 / 卡片 / 视频 / 发布都行…（可拖入图片/文档当素材）' : '发消息…（Enter 发送，Shift+Enter 换行，可拖入/粘贴素材）'}
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onCompositionStart={() => { isComposingRef.current = true; }}
+          onCompositionEnd={() => { isComposingRef.current = false; }}
+          onBlur={() => { isComposingRef.current = false; }}
           onKeyDown={handleKeyDown}
           onPaste={onPaste}
           rows={1}

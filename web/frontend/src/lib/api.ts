@@ -816,6 +816,7 @@ export interface ModelRow {
   keyMasked: string;
   role: string;
   result: string;
+  protocol?: string;
   keyNew?: string;
   keyNew2?: string;
   key2Label?: string;
@@ -839,6 +840,8 @@ export interface ModelSaveRow {
   key: string;
   key2?: string;
   primary?: boolean;
+  /** 自定义供应商上游协议：openai（默认）| anthropic */
+  protocol?: string;
 }
 
 export interface ModelSaveResponse extends ModelChannelsResponse {

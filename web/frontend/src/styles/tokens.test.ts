@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import css from './tokens.css?raw';
+import allCss from './tokens.css?raw';
+
+// 浅色变量在 :root，夜间覆盖在 :root[data-theme='dark'] 之后；两段分开校验
+const DARK_MARK = ":root[data-theme='dark']";
+const css = allCss.split(DARK_MARK)[0];
+const darkCss = allCss.slice(allCss.indexOf(DARK_MARK));
 
 const REQUIRED: Record<string, string> = {
   '--c-canvas': '#F6F7F5',
@@ -75,5 +80,40 @@ describe('设计变量契约', () => {
         });
       }
     }
+  });
+
+  describe('夜间模式（data-theme="dark"）', () => {
+    const val = (name: string): string => {
+      const m = darkCss.match(new RegExp(`${name}:\\s*(#[0-9a-fA-F]{6});`));
+      if (!m) throw new Error(`夜间块里找不到 ${name}`);
+      return m[1];
+    };
+    const lin = (c: number) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+    const lum = (hex: string) => {
+      const n = parseInt(hex.slice(1), 16);
+      return 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
+    };
+    const ratio = (a: string, b: string) => {
+      const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+      return (hi + 0.05) / (lo + 0.05);
+    };
+    const FG = ['--c-ink', '--c-ink-2', '--c-ink-3', '--c-ok-text', '--c-warn', '--c-danger',
+      '--layer-discover-text', '--layer-plan-text', '--layer-produce-text', '--layer-publish-text',
+      '--layer-attribute-text', '--layer-general-text'];
+    const BG = ['--c-surface', '--c-canvas', '--c-sunken', '--c-side', '--c-tint'];
+
+    it('声明 color-scheme: dark', () => { expect(darkCss).toMatch(/color-scheme:\s*dark;/); });
+
+    for (const fg of FG) {
+      for (const bg of BG) {
+        it(`${fg} 在 ${bg} 上 ≥ 4.5`, () => {
+          expect(ratio(val(fg), val(bg))).toBeGreaterThanOrEqual(4.5);
+        });
+      }
+    }
+
+    it('主按钮：--c-on-ink 在 --c-ink 上 ≥ 4.5', () => {
+      expect(ratio(val('--c-on-ink'), val('--c-ink'))).toBeGreaterThanOrEqual(4.5);
+    });
   });
 });

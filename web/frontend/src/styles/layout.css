@@ -12,6 +12,7 @@
 .sidebar-brand { display: flex; align-items: center; gap: 9px; padding: 0 6px; }
 .sidebar-logo-icon { width: 26px; height: 26px; border-radius: var(--r-control); object-fit: cover; display: block; }
 .sidebar-wordmark { font-family: var(--font-brand); font-style: italic; font-weight: 600; font-size: 24px; letter-spacing: -0.5px; line-height: 1; color: var(--c-ink); }
+.sidebar-brand .theme-toggle { margin-left: auto; width: var(--h-ctl-sm); padding: 0; }
 .persona-select { flex: none; }
 
 .sidebar-nav { flex: 1; min-height: 0; margin: 0 -12px; padding: 0 4px 0 12px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; display: flex; flex-direction: column; gap: 6px; }
@@ -45,6 +46,8 @@
   .sidebar { width: var(--sidebar-rail); min-width: var(--sidebar-rail); padding: 14px 8px 10px; align-items: center; }
   .sidebar-wordmark, .nav-label, .nav-sub, .nav-group-title, .sidebar-status-text { display: none; }
   .persona-select { display: none; }
+  .sidebar-brand { flex-direction: column; gap: var(--sp-2); padding: 0; }
+  .sidebar-brand .theme-toggle { margin-left: 0; }
   .sidebar-nav { margin: 0 -8px; padding: 0 0 0 8px; align-items: center; }
   .nav-group { align-items: center; }
   .nav-group + .nav-group { border-top: 1px solid var(--c-rule); padding-top: 8px; }

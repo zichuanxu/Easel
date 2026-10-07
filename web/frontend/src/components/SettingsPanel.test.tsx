@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 vi.mock('../lib/api', () => ({
   fetchEnvTools: vi.fn(() => Promise.resolve({ tools: [], python: '' })),
@@ -93,7 +93,7 @@ describe('SettingsPanel 对话通道（上游合并：本机 Agent、拉取模�
     expect(document.querySelector('.la-row')?.textContent).toContain('已接入');
   });
 
-  it('可改模型的行有「拉取」按钮，拉到的模型名进输入框的补全列表', async () => {
+  it('可改模型的行有「拉取模型」按钮，拉到的模型名进自定义下拉面板', async () => {
     vi.mocked(api.fetchModelChannels).mockResolvedValueOnce({
       channels: { chat: { rows: [{ slot: 'openai', order: 0, name: 'OpenAI 兼容', sub: 'chat', type: 'openai',
         model: 'gpt-4o', baseUrl: 'https://api.example.com/v1', keyMasked: 'sk-***', role: '主', result: '已配置' }] },
@@ -101,9 +101,9 @@ describe('SettingsPanel 对话通道（上游合并：本机 Agent、拉取模�
     } as Awaited<ReturnType<typeof api.fetchModelChannels>>);
     vi.mocked(api.fetchAvailableModels).mockResolvedValueOnce({ models: ['gpt-4o', 'gpt-4.1'] } as Awaited<ReturnType<typeof api.fetchAvailableModels>>);
     render(<SettingsPanel onClose={() => {}} />);
-    fireEvent.click(await screen.findByRole('button', { name: '拉取' }));
-    await screen.findByRole('button', { name: '拉取' });
-    const options = [...document.querySelectorAll('datalist option')].map((o) => (o as HTMLOptionElement).value);
+    fireEvent.click(await screen.findByRole('button', { name: '拉取模型' }));
+    await waitFor(() => expect(document.querySelectorAll('.model-dd .dd-item')).toHaveLength(2));
+    const options = [...document.querySelectorAll('.model-dd .dd-item span')].map((o) => o.textContent);
     expect(options).toEqual(['gpt-4o', 'gpt-4.1']);
     expect(vi.mocked(api.fetchAvailableModels).mock.calls[0].slice(0, 3)).toEqual(['https://api.example.com/v1', '', 'openai']);
   });

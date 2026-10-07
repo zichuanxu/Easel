@@ -44,6 +44,21 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("EASEL_OPENCLAW_STATE_DIR", str(openclaw_state))
     monkeypatch.setattr(web, "_openclaw_provider_creds",
                         lambda: {"myproxy": ("https://good.example.com/v1", "sk-fake-custom")})
+    # 双保险（上游 issue #62 的做法）：本分支 _sync_openclaw_chat 已走 config_path()（上面的
+    # EASEL_OPENCLAW_STATE_DIR），这里再把 home 根也重定向，万一哪条路径漏了 config_path()，
+    # 写的也是沙箱里这份假配置，而不是用户真机的 ~/.openclaw-easel/openclaw.json。
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    oc_dir = tmp_path / ".openclaw-easel"
+    oc_dir.mkdir()
+    (oc_dir / "openclaw.json").write_text(json.dumps({
+        "models": {"providers": {"openai": {
+            "api": "openai-completions",
+            "apiKey": "sk-fake-existing",
+            "baseUrl": "https://api.openai.com/v1",
+            "models": [{"id": "gpt-4o"}],
+        }}},
+        "agents": {"defaults": {"model": {"primary": "openai/gpt-4o"}}},
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
     # local_write_guard 会把「非本机写请求」判 403。设置为本机来源。
     local = "http://127.0.0.1:7860"
     with TestClient(web.app, base_url=local, client=('127.0.0.1', 51234),

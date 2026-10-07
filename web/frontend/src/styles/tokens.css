@@ -92,3 +92,60 @@
   --sidebar-width: 232px;
   --sidebar-rail: 64px;
 }
+
+/* ============================================================
+ * 夜间模式：只重定义变量，组件样式不分叉。
+ * data-theme 由 index.html 的预置脚本（防闪白）和 ThemeToggle 写到 <html> 上，
+ * 偏好记在 localStorage 的 easel_theme，未设置时跟随系统。
+ * ============================================================ */
+:root { color-scheme: light; }
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --c-canvas: #14171A;
+  --c-surface: #1C2024;
+  --c-side: #181B1F;
+  --c-sunken: #171A1D;
+  --c-tint: #262B30;
+  --c-hover: rgba(236, 238, 234, 0.07);
+  --c-rule: #2C3238;
+  --c-rule-strong: #3C434A;
+  --c-ink: #ECEEEA;
+  --c-ink-hover: #FFFFFF;
+  --c-ink-2: #B9BEC4;
+  --c-ink-3: #959BA3;
+  --c-on-ink: #14171A;
+  --c-scrim: rgba(0, 0, 0, 0.6);
+
+  --layer-discover: #7C9BE6;
+  --layer-discover-text: #9DB6F0;
+  --layer-discover-soft: rgba(124, 155, 230, 0.16);
+  --layer-plan: #D49A6A;
+  --layer-plan-text: #E0AE86;
+  --layer-plan-soft: rgba(212, 154, 106, 0.16);
+  --layer-produce: #E8705D;
+  --layer-produce-text: #F0907F;
+  --layer-produce-soft: rgba(232, 112, 93, 0.16);
+  --layer-publish: #5FBF9A;
+  --layer-publish-text: #7FD1B0;
+  --layer-publish-soft: rgba(95, 191, 154, 0.16);
+  --layer-attribute: #E6B94A;
+  --layer-attribute-text: #EBC871;
+  --layer-attribute-soft: rgba(230, 185, 74, 0.16);
+  --layer-general: #9AA1AA;
+  --layer-general-text: #B9BEC4;
+  --layer-general-soft: rgba(154, 161, 170, 0.18);
+
+  --c-ok: #5FBF9A;
+  --c-ok-text: #7FD1B0;
+  --c-ok-soft: rgba(95, 191, 154, 0.16);
+  --c-warn: #EBC871;
+  --c-warn-soft: rgba(230, 185, 74, 0.16);
+  --c-danger: #F08A82;
+  --c-danger-soft: rgba(240, 138, 130, 0.14);
+  --c-focus: #ECEEEA;
+
+  --shadow-overlay: 0 24px 60px -20px rgba(0, 0, 0, 0.7), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 12px 32px -12px rgba(0, 0, 0, 0.65);
+  --shadow-composer: 0 8px 24px -16px rgba(0, 0, 0, 0.65);
+}
