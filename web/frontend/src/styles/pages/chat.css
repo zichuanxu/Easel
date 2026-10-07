@@ -177,6 +177,7 @@
 .question-card__actions { display: flex; justify-content: flex-end; }
 .question-card__hint { font-size: var(--fs-12); color: var(--c-ink-2); }
 .question-card__error { color: var(--c-danger); }
+.question-card--expired .question-card__item { opacity: 0.6; }
 
 /* 笔入口：点开「能做的都在这」 */
 .brush-entry { position: relative; flex: none; }

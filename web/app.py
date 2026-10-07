@@ -48,11 +48,12 @@ from easel.timeouts import (TIMEOUT_CHAT, TIMEOUT_DIRECT, TIMEOUT_PRODUCE, TIMEO
                             TIMEOUT_XHS_PUBLISH)
 try:
     from easel.gateway_questions import (
-        GatewayClient, GatewayQuestionError, GatewayUnsupportedError,
-        question_bridge_supported)
+        GatewayClient, GatewayQuestionError, GatewayQuestionGoneError,
+        GatewayUnsupportedError, question_bridge_supported)
 except Exception:  # 兼容缺失依赖：问答题桥接降级为关闭
     GatewayClient = None  # type: ignore
     GatewayQuestionError = None  # type: ignore
+    GatewayQuestionGoneError = None  # type: ignore
     GatewayUnsupportedError = None  # type: ignore
     question_bridge_supported = None  # type: ignore
 
@@ -3082,6 +3083,10 @@ async def api_chat_stream(req: ChatRequest):
     return EventSourceResponse(forward(), headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", "Content-Encoding": "identity"})
 
 
+QUESTION_GONE_HINT = ("这道题已经失效（等待超时被取消，或已在别处回答），Agent 收不到这个答案。"
+                      "如果 Agent 重新提问会出现新卡片；也可以直接在输入框里用文字回复。")
+
+
 class QuestionAnswerRequest(BaseModel):
     sessionId: str | None = None
     questionId: str
@@ -3099,6 +3104,9 @@ async def api_question_answer(req: QuestionAnswerRequest):
         client.connect()
         result = client.resolve(req.questionId, req.answers or {}, req.resolvedBy)
         return {"ok": True, "result": result}
+    except GatewayQuestionGoneError:
+        # 题已超时被取消 / 已被清理：Agent 不再等这道题，前端据 gone 把卡片转成失效态
+        return {"ok": False, "gone": True, "error": QUESTION_GONE_HINT}
     except Exception as e:
         return {"ok": False, "error": str(e)}
     finally:
