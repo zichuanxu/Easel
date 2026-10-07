@@ -71,6 +71,14 @@
 - 常见泄露源是把报错、命令输出、配置示例顺手复制进文案；对外内容只保留用户真正要发布的信息。
 - dry-run 先列出全部命中；真发前由 `skills/shared/scripts/content_guard.py` 确定性扫描，敏感信息命中会 exit 7。删除敏感内容后重发，不用 `--allow-unsafe` 绕过，除非用户明确要求。
 
+发布闸门与半自动（硬规则，不得绕过）：
+
+- 发布失败或结果未确认时，**不得自动重试同一平台**；先读页面报错并向用户汇报，由用户决定下一步。
+- **禁止自写脚本/探测脚本去操作国内平台页面**（抖音/小红书/视频号/快手/知乎）；只能用仓库内的发布/查询脚本。
+- 重复拦截（exit 8）与平台冷却（exit 9）由 `skills/shared/scripts/publish_guard.py` 负责，不得绕过。`--allow-repost` 与 `publish_guard.py cooldown clear` 只在用户于对话中明确要求时使用。
+- 国内平台是**半自动**：脚本在可见窗口里把内容填好后停在发布按钮前，提醒用户检查并亲自点「发布」；不要尝试替用户点击。
+- 不要设置 `EASEL_DOMESTIC_AUTO_PUBLISH`（只有用户自己能开的逃生口）。
+
 执行任一发布层 SKILL 前做人设一致性检查：
 
 1. 有 Profile 时用 `skill-persona-check` 得到评分和偏离点；无 Profile 则跳过并提示。

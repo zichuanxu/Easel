@@ -8,6 +8,7 @@
 （sms_required：扫码后平台风控要求短信验证，runner 等前端回填验证码——见 read_sms_code；
   verifying：已拿到验证码、正在提交校验，或登录后正在确认登录态已保存，前端显示转圈；
   校验失败会退回 sms_required 让重输；
+  awaiting_user_click：半自动发布，表单已填好，等用户在窗口里亲自点「发布」（semi_auto.py 写，非终态）；
   window_login：已弹出本机浏览器窗口，请用户在窗口里登录（可能附带二维码图），非终态）
 """
 from __future__ import annotations
@@ -18,7 +19,7 @@ import tempfile
 import time
 
 STATES = ("starting", "qr_ready", "window_login", "scanned", "sms_required", "verifying",
-          "success", "expired", "error")
+          "awaiting_user_click", "success", "expired", "error")
 
 
 def read_sms_code(path: str | None) -> str:

@@ -137,6 +137,22 @@ layer: publish
 - `ready`：告知用户可以发布，列出优化建议（如有）
 - `not_ready`：明确列出缺失项，给出具体补全指引
 
+## 发布闸门：重复拦截与平台冷却
+
+任何真发前，发布脚本都会过 `publish_guard.py`（同平台同媒体/同标题 30 天内发过 → exit 8；平台处罚后冷却 → exit 9）。
+发布前可手动预检，也可查看冷却状态：
+
+```bash
+python skills/shared/scripts/publish_guard.py check --platform douyin --title "标题" --media outputs/<主题>/final.mp4
+python skills/shared/scripts/publish_guard.py status --platform douyin
+python skills/shared/scripts/publish_guard.py cooldown set --platform douyin --reason "平台提示投稿功能被限制"
+python skills/shared/scripts/publish_guard.py cooldown clear --platform douyin
+```
+
+- 发布失败或结果未确认时**不得自动重试同一平台**：先读页面报错、向用户汇报，由用户决定。
+- 退出码 8/9 不得绕过。`--allow-repost` 与 `cooldown clear` 只在用户于对话中**明确要求**时使用（`cooldown clear` 仅在用户明确说解除时执行）。
+- 国内平台（抖音/小红书/视频号/快手/知乎）为半自动：脚本在窗口里填好后停在发布按钮前，提醒用户亲自点「发布」，不要替用户点；不要设置 `EASEL_DOMESTIC_AUTO_PUBLISH`。
+
 ## Profile 感知
 
 - **有 Profile**：读取 `platforms.md` 确定目标平台，启用平台特有检查项；读取 `style.md` 辅助判断封面风格是否匹配；读取 `identity.md` 检查账号名称等信息完整性
