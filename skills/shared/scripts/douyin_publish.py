@@ -387,6 +387,23 @@ def _select_ai_cover(page):
             page.wait_for_timeout(300)
 
 
+def _set_dual_cover(page):
+    """抖音 2026-10 起发布页提示『横/竖双封面缺失』，发布点击无反应。打开封面弹窗 →
+    横封面页签（自动同步竖封面底图）→ 完成。best-effort：无该入口则跳过。"""
+    try:
+        btn = page.get_by_text("选择封面").first
+        if not btn.count():
+            return
+        btn.click()
+        page.wait_for_timeout(2500)
+        page.get_by_text("设置横封面").last.click()
+        page.wait_for_timeout(2000)
+        page.get_by_role("button", name="完成").last.click()
+        page.wait_for_timeout(1500)
+    except Exception as e:
+        print(f"⚠️ 双封面设置跳过：{type(e).__name__}", file=sys.stderr)
+
+
 def _fill_title_desc(page, title: str, desc: str, tags: list[str]):
     ti = page.query_selector(SELECTORS["title_input"])
     if not ti:
@@ -1207,6 +1224,7 @@ def _publish(a, kind: str) -> int:
             if kind == "video":
                 _wait_video_processed(page)
                 _select_ai_cover(page)
+                _set_dual_cover(page)
             _fill_title_desc(page, a.title, a.content or "", tags)
             _click_publish(page, len(a.title) + len(a.content or ""))
             # 点击后轮询等风控墙浮现（2026-09-12 真机发现：墙的渲染晚于 2.5s，
