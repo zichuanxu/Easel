@@ -358,13 +358,14 @@ export interface ChatQuestion {
 }
 export async function answerQuestion(
   payload: { questionId: string; answers: Record<string, string[]>; resolvedBy?: string },
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; gone?: boolean }> {
   const res = await fetch(`${BASE}/api/chat/question/answer`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  const data = await res.json().catch(() => ({})) as { ok?: boolean; error?: string };
-  return { ok: data.ok === true, error: data.error };
+  const data = await res.json().catch(() => ({})) as { ok?: boolean; error?: string; gone?: boolean };
+  // gone：题已超时取消 / 被清理，Agent 不再等它（卡片转失效态，不是可重试的错误）
+  return { ok: data.ok === true, error: data.error, gone: data.gone === true };
 }
 
 /** 批量查 question 状态：过滤重放中已解决/已过期的旧题。 */

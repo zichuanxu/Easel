@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ChatQuestion, ChatQuestionItem } from '../lib/api';
-import { answerQuestion } from '../lib/api';
+import { answerQuestion, questionStatus } from '../lib/api';
 import Button from './ui/Button';
 import Tag from './ui/Tag';
 import { Input } from './ui/Field';
@@ -16,7 +16,13 @@ import { Input } from './ui/Field';
  * 多选：问题对象带 multiSelect: true 时，answers[qid] 可携带多个 label
  * （gateway 对 multiSelect=false 的多值直接报 "does not allow multiple answers"，
  * 前端只按数据渲染，不绕过校验）。
+ *
+ * 失效：ask_user 等待有时限（expiresAtMs），超时后 gateway 取消并清理这道题，
+ * Agent 往往换个 id 重新提问。旧卡片到点或提交时后端回 gone，就转成失效态，
+ * 不再能提交——否则用户对着一张死卡片反复提交，只会收到 QUESTION_NOT_FOUND。
  */
+const EXPIRED_HINT = '这道题已超时失效，Agent 收不到这个答案。如果 Agent 重新提问会出现新卡片；也可以直接在输入框里用文字回复。';
+
 function QuestionCard({ question, onAnswered }: { question: ChatQuestion; onAnswered: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -24,6 +30,28 @@ function QuestionCard({ question, onAnswered }: { question: ChatQuestion; onAnsw
   const [custom, setCustom] = useState<Record<string, string>>({});
   const [customVals, setCustomVals] = useState<Record<string, string[]>>({});
   const [showCustom, setShowCustom] = useState<Record<string, boolean>>({});
+  const [expired, setExpired] = useState('');   // 非空 = 失效提示文案
+
+  useEffect(() => {
+    const at = question.expiresAtMs;
+    if (typeof at !== 'number' || !(at > 0)) return;
+    // 到点只是提示该查了：浏览器时钟可能与网关不一致（远程打开时），以网关状态为准。
+    // 仍 pending / 查询失败 → 过一会儿再查，绝不凭本机时钟锁死一张还能答的卡片。
+    let t: ReturnType<typeof setTimeout>;
+    let stopped = false;
+    const check = () => {
+      void questionStatus([question.id]).then((st) => {
+        if (stopped) return;
+        const s = st[question.id]?.status;
+        if (s && s !== 'pending' && s !== 'unknown') setExpired(EXPIRED_HINT);
+        else t = setTimeout(check, 15_000);
+      });
+    };
+    // setTimeout 上限约 24.8 天，超出会立即触发；有效期不会这么长，夹一下防误判
+    t = setTimeout(check, Math.min(Math.max(at - Date.now(), 0), 2 ** 31 - 1));
+    return () => { stopped = true; clearTimeout(t); };
+  }, [question.id, question.expiresAtMs]);
+  const locked = busy || !!expired;
 
   const items: ChatQuestionItem[] = question.questions || [];
   const valsOf = (it: ChatQuestionItem): string[] => selected[it.questionId] || [];
@@ -58,13 +86,14 @@ function QuestionCard({ question, onAnswered }: { question: ChatQuestion; onAnsw
   };
 
   const submit = async () => {
-    if (busy || !allAnswered) return;
+    if (locked || !allAnswered) return;
     setBusy(true); setError('');
     const answers: Record<string, string[]> = {};
     for (const it of items) answers[it.questionId] = valsOf(it);
     try {
       const res = await answerQuestion({ questionId: question.id, answers });
-      if (!res.ok) setError(res.error || '提交失败');
+      if (res.gone) setExpired(res.error || EXPIRED_HINT);
+      else if (!res.ok) setError(res.error || '提交失败');
       else onAnswered();
     } catch (e) {
       setError(String(e));
@@ -76,7 +105,7 @@ function QuestionCard({ question, onAnswered }: { question: ChatQuestion; onAnsw
   return (
     <div className="message-row assistant">
       <div className="msg-col assistant question-col">
-        <div className="question-card">
+        <div className={`question-card${expired ? ' question-card--expired' : ''}`}>
           {items.map((it, idx) => {
             const options: { label: string; description?: string }[] = it.options || [];
             const vals = valsOf(it);
@@ -94,7 +123,7 @@ function QuestionCard({ question, onAnswered }: { question: ChatQuestion; onAnsw
                   {options.map((opt) => (
                     <button key={opt.label}
                       className={`question-card__option${vals.includes(opt.label) ? ' question-card__option--selected' : ''}`}
-                      disabled={busy}
+                      disabled={locked}
                       onClick={() => pick(it, opt.label)}>
                       <strong>{opt.label}</strong>
                       {opt.description && <span>{opt.description}</span>}
@@ -103,19 +132,19 @@ function QuestionCard({ question, onAnswered }: { question: ChatQuestion; onAnsw
                   {cvals.map((v) => (
                     <button key={`custom-${v}`}
                       className="question-card__option question-card__option--selected"
-                      disabled={busy}
+                      disabled={locked}
                       title="点击移除"
                       onClick={() => removeCustom(it, v)}>
                       <strong>{v}</strong>
                       <span>自定义 · 点击移除</span>
                     </button>
                   ))}
-                  <Button variant="ghost" size="sm" className="question-card__other" disabled={busy}
+                  {!expired && <Button variant="ghost" size="sm" className="question-card__other" disabled={busy}
                     onClick={() => setShowCustom((s) => ({ ...s, [it.questionId]: !s[it.questionId] }))}>
                     {ctl ? '收起自定义输入' : '自行输入'}
-                  </Button>
+                  </Button>}
                 </div>
-                {ctl && (
+                {ctl && !expired && (
                   <div className="question-card__custom">
                     <Input
                       type="text"
@@ -134,7 +163,11 @@ function QuestionCard({ question, onAnswered }: { question: ChatQuestion; onAnsw
           })}
 
           {/* 单选题：选完点提交；多题：全部选齐后提交（单选/多选同一规则） */}
-          {items.length === 1 ? (
+          {expired ? (
+            <div className="question-card__actions">
+              <Button variant="secondary" onClick={onAnswered}>关闭</Button>
+            </div>
+          ) : items.length === 1 ? (
             <div className="question-card__actions">
               <Button variant="primary" disabled={busy || !allAnswered}
                 onClick={() => void submit()}>
@@ -151,7 +184,8 @@ function QuestionCard({ question, onAnswered }: { question: ChatQuestion; onAnsw
             )
           )}
           {busy && <div className="question-card__hint">已提交，Agent 继续处理中…</div>}
-          {error && <div className="question-card__hint question-card__error">{error}</div>}
+          {expired && <div className="question-card__hint">{expired}</div>}
+          {!expired && error && <div className="question-card__hint question-card__error">{error}</div>}
         </div>
       </div>
     </div>

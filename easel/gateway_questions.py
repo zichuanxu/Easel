@@ -126,6 +126,40 @@ class GatewayUnsupportedError(GatewayQuestionError):
     """
 
 
+class GatewayQuestionGoneError(GatewayQuestionError):
+    """The question no longer accepts answers.
+
+    ask_user questions time out at expiresAtMs (the agent stops waiting, the
+    gateway marks them expired/cancelled, then prunes the record). Resolving one
+    afterwards answers INVALID_REQUEST with reason QUESTION_ALREADY_TERMINAL
+    ("question 'x' is already cancelled") or QUESTION_NOT_FOUND — a dead
+    question, not a gateway without question RPCs.
+    """
+
+
+# OpenClaw's own TERMINAL_QUESTION_ERROR_REASONS (gateway-question runtime).
+_GONE_REASONS = frozenset({"QUESTION_NOT_FOUND", "QUESTION_ALREADY_TERMINAL"})
+# Fallback when an error arrives without details.reason.
+_GONE_MESSAGE_RE = re.compile(r"^question '.*' (was not found|is already \w+)")
+
+
+def _classify_rpc_error(method: str, err: dict) -> GatewayQuestionError:
+    detail = json.dumps(err)[:200]
+    details = err.get("details")
+    reason = details.get("reason") if isinstance(details, dict) else None
+    message = str(err.get("message") or "")
+    if reason in _GONE_REASONS or _GONE_MESSAGE_RE.match(message):
+        return GatewayQuestionGoneError(f"{method} failed: {detail}")
+    # An unknown method surfaces as INVALID_REQUEST ("unknown method: x", no
+    # reason; the question RPCs don't exist pre-2026.9.x). Flag it so callers
+    # can quietly disable the bridge instead of retrying forever. Errors with a
+    # domain reason come from a method that exists: ordinary failures.
+    if err.get("code") == "INVALID_REQUEST" and not reason:
+        return GatewayUnsupportedError(
+            f"{method} not supported by this gateway: {detail}")
+    return GatewayQuestionError(f"{method} failed: {detail}")
+
+
 # --- device identity -------------------------------------------------------
 
 # Device identity file written by OpenClaw's loadOrCreateDeviceIdentity
@@ -334,15 +368,7 @@ class GatewayClient:
             msg = json.loads(self.ws.recv())
             if msg.get("id") == req_id:
                 if not msg.get("ok", False):
-                    err = msg.get("error") or {}
-                    detail = json.dumps(err)[:200]
-                    # An unknown method surfaces as INVALID_REQUEST here (the
-                    # question RPCs don't exist pre-2026.9.x). Flag it so callers
-                    # can quietly disable the bridge instead of retrying forever.
-                    if err.get("code") == "INVALID_REQUEST":
-                        raise GatewayUnsupportedError(
-                            f"{method} not supported by this gateway: {detail}")
-                    raise GatewayQuestionError(f"{method} failed: {detail}")
+                    raise _classify_rpc_error(method, msg.get("error") or {})
                 return msg.get("payload")
         raise GatewayQuestionError(f"{method} timed out")
 
