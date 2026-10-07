@@ -22,6 +22,7 @@ from pathlib import Path
 import calendar_ops
 import content_guard
 import login_state
+import publish_guard
 from overseas import PLATFORMS, REQUIRED_ATTRS, base, get
 from overseas.post import KIND_LABEL, Post, PostError, validate, x_weighted_length
 
@@ -172,7 +173,17 @@ def _pub_fail(sf, msg: str, rc: int) -> int:
     return rc
 
 
+def _guard_title(post: Post) -> str:
+    """发布闸门用的标题：有标题用标题，纯文字/图文没标题就用正文（截 200 字），与记账时同一口径。"""
+    return (post.title or post.desc or "").strip()[:200]
+
+
 def _record(mod, post: Post, fields: dict, result) -> None:
+    """发布成功后：先记发布闸门账本（重复拦截的依据），再记内容日历；互不影响。"""
+    try:
+        publish_guard.record_publish(mod.KEY, [str(m) for m in post.media], _guard_title(post), url=result.url)
+    except Exception as e:  # noqa: BLE001 — 记账失败不影响发布结果，但要让人看到
+        print(f"记发布账本失败（忽略）：{base.short_err(e)}", file=sys.stderr)
     title = post.title or (fields.get("caption") or fields.get("description") or "").split("\n")[0][:60]
     calendar_ops.record_publish(mod.KEY, title, url=result.url, ptype=KIND_LABEL[post.kind], tags=post.tags)
 
@@ -245,6 +256,11 @@ def _publish_once(mod, post, fields, headed, sf, launch, driver_cls, profile, re
                 print(f"记日历失败（忽略）：{base.short_err(e)}", file=sys.stderr)
             return 0
         base.save_failure(drv.page, mod.KEY)
+        # 平台明确的处罚/限流提示（只看结果里平台给的提示文本）：进入冷却，退出码 9，绝不重试
+        if publish_guard.classify_block_text(result.message):
+            publish_guard.on_block_detected(mod.KEY, result.message)
+            login_state.write_status(sf, "error", f"{mod.NAME} 返回了处罚/限制提示，已进入冷却：{result.message}")
+            return publish_guard.EXIT_COOLDOWN
         if result.status == "unknown":
             return _pub_fail(sf, UNKNOWN_MSG.format(name=mod.NAME, detail=result.message), EXIT_UNKNOWN)
         return _pub_fail(sf, f"{mod.NAME} 发布失败：{result.message}", 1)
@@ -268,6 +284,9 @@ def cmd_publish(a) -> int:
         print("dry-run：只预览，加 --exec 才会真正发布")
         return 0
     content_guard.guard_or_die(parts, exec_mode=True, allow_unsafe=a.allow_unsafe, label=label)
+    # 发布闸门：平台冷却（exit 9）/ 重复发布（exit 8）；只放行用户明确要求的 --allow-repost
+    publish_guard.guard_before_publish(mod.KEY, [str(m) for m in post.media], _guard_title(post),
+                                       allow_repost=getattr(a, "allow_repost", False))
     login_state.write_status(sf, "starting", f"准备发布到 {mod.NAME}…")
     return run_publish(mod, post, fields, headed=a.headed, status_file=sf)
 
@@ -346,6 +365,8 @@ def main(argv=None) -> int:
     p.add_argument("--status-file", help="发布状态 JSON（Web 发布中心轮询它）")
     p.add_argument("--headed", action="store_true", help="开窗口发布（平台要人工验证时用）")
     p.add_argument("--allow-unsafe", action="store_true", help="放行内容安全闸门（检出敏感信息也照发，谨慎）")
+    p.add_argument("--allow-repost", action="store_true",
+                   help="仅当用户明确要求「再发一次同样的内容」时才加：放行重复发布拦截（冷却期不受影响）")
     p.add_argument("--exec", action="store_true", help="真正发布（默认只预览）")
     sub.add_parser("selftest", help="离线自检")
     a = ap.parse_args(argv)

@@ -234,21 +234,54 @@ def _read_ledger() -> list[dict]:
     if not p.is_file():
         return []
     rows = []
-    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+    bad = 0
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        _eprint(f"⚠️ 无法读取发布账本 {p}（{e}），重复检测可能漏判，请检查该文件。")
+        return []
+    for line in text.splitlines():
         line = line.strip()
         if not line:
             continue
         try:
             d = json.loads(line)
         except ValueError:
-            continue  # 坏行忽略，不让账本损坏卡死发布
+            bad += 1  # 坏行忽略，不让账本损坏卡死发布；但要大声告警
+            continue
         if isinstance(d, dict):
             rows.append(d)
+    if bad:
+        _eprint(f"⚠️ 发布账本 {p} 有 {bad} 行损坏已跳过，这些记录不参与重复检测；请检查该文件（不要直接删除）。")
     return rows
 
 
-def record_publish(platform: str, media_paths, title: str, url: str = "", project: str = "") -> dict:
-    """发布成功后记一笔账（追加到 ledger.jsonl，原子重写）。返回写入的记录。"""
+def _append_ledger_line(path: Path, entry: dict) -> None:
+    """append-only 写一行 JSON：open('a') + flush + fsync，不重写整个文件（避免并发/崩溃丢账）。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(entry, ensure_ascii=False) + "\n"
+    # 上次写到一半崩溃会留下没换行的半行：先补一个换行，新记录单独成行，不和它粘成一条坏行
+    try:
+        with open(path, "rb") as rf:
+            rf.seek(0, os.SEEK_END)
+            if rf.tell() > 0:
+                rf.seek(-1, os.SEEK_END)
+                if rf.read(1) != b"\n":
+                    line = "\n" + line
+    except FileNotFoundError:
+        pass
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(line)
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def record_publish(platform: str, media_paths, title: str, url: str = "", project: str = "",
+                   unconfirmed: bool = False) -> dict:
+    """发布成功后记一笔账（append-only 追加到 ledger.jsonl）。返回写入的记录。
+
+    unconfirmed=True：已点击发布但结果未能确认（自动点击逃生口路径）——也要记账，让重复闸门挡住误二发；
+    此时 url 为空，记录带 `unconfirmed: true`。"""
     try:
         fp = media_fingerprint(media_paths)
     except OSError:
@@ -263,9 +296,9 @@ def record_publish(platform: str, media_paths, title: str, url: str = "", projec
         "project": project or "",
         "published_at": _now().isoformat(),
     }
-    rows = _read_ledger()
-    rows.append(entry)
-    _atomic_write_text(ledger_path(), "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+    if unconfirmed:
+        entry["unconfirmed"] = True
+    _append_ledger_line(ledger_path(), entry)
     return entry
 
 
@@ -324,19 +357,65 @@ def find_duplicate(platform: str, media_paths, title: str, window_days: int = DE
 # --------------------------------------------------------------------------- #
 # 冷却
 # --------------------------------------------------------------------------- #
-def _read_cooldowns() -> dict:
+def _load_cooldowns() -> tuple[dict, str | None]:
+    """读冷却文件。返回 (数据, 错误说明)：文件不存在 → ({}, None)；存在但读不了/不是 JSON 对象 → ({}, 原因)。"""
     p = cooldown_path()
-    if not p.is_file():
-        return {}
+    if not p.exists():
+        return {}, None
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as e:
+        return {}, f"{type(e).__name__}: {e}"
+    if not isinstance(d, dict):
+        return {}, "内容不是 JSON 对象"
+    return d, None
+
+
+def _read_cooldowns() -> dict:
+    return _load_cooldowns()[0]
+
+
+_corrupt_warned = False
+
+
+def _corrupt_record(err: str) -> dict:
+    """冷却文件损坏时合成的「全平台冷却」记录（fail-closed）。"""
+    return {
+        "platform": "*", "corrupt": True,
+        "reason": f"冷却状态文件 {cooldown_path()} 已损坏或无法读取（{err}），无法确认各平台是否在冷却，"
+                  "已按「所有平台都在冷却」处理。请检查/修复该文件（或备份后删除、再用 cooldown set 重建）后再发",
+        "evidence": "", "since": "", "until": None,
+    }
+
+
+def _quarantine_corrupt_cooldown(err: str) -> None:
+    """写冷却前遇到损坏文件：先挪到 cooldown.json.corrupt-<时间戳> 留证，再从空开始，避免静默覆盖/抹掉其他平台。"""
+    p = cooldown_path()
+    dest = p.with_name(f"{p.name}.corrupt-{_now().strftime('%Y%m%d-%H%M%S')}")
+    n = 0
+    while dest.exists():
+        n += 1
+        dest = p.with_name(f"{p.name}.corrupt-{_now().strftime('%Y%m%d-%H%M%S')}-{n}")
+    try:
+        os.replace(p, dest)
+    except OSError as e:
+        _eprint(f"⛔ 冷却文件 {p} 已损坏（{err}），且无法移开备份（{e}）；为防止抹掉其他平台的冷却记录，已中止写入。请手动处理该文件。")
+        sys.exit(EXIT_COOLDOWN)
+    _eprint(f"⚠️ 冷却文件 {p} 已损坏（{err}），已移到 {dest}（原内容保留）。"
+            "其他平台原有的冷却记录无法自动恢复，请打开备份核对并按需用 cooldown set 重新设置。")
+
+
+def _writable_cooldowns() -> dict:
+    data, err = _load_cooldowns()
+    if err:
+        _quarantine_corrupt_cooldown(err)
         return {}
-    return d if isinstance(d, dict) else {}
+    return data
 
 
 def set_cooldown(platform: str, reason: str, evidence: str = "", until=None) -> dict:
-    """让某平台进入冷却。until=None：直到用户手动解除；否则为 datetime / ISO 串 / epoch 秒（到点自动失效）。"""
+    """让某平台进入冷却。until=None：直到用户手动解除；否则为 datetime / ISO 串 / epoch 秒（到点自动失效）。
+    冷却文件损坏时先移到 cooldown.json.corrupt-<ts> 再写，不会静默抹掉其他平台。"""
     pid = canonical_platform(platform)
     until_dt = _parse_dt(until) if until is not None else None
     if until is not None and until_dt is None:
@@ -346,15 +425,26 @@ def set_cooldown(platform: str, reason: str, evidence: str = "", until=None) -> 
         "since": _now().isoformat(),
         "until": until_dt.isoformat() if until_dt else None,
     }
-    data = _read_cooldowns()
+    data = _writable_cooldowns()
     data[pid] = rec
     _atomic_write_text(cooldown_path(), json.dumps(data, ensure_ascii=False, indent=2) + "\n")
     return rec
 
 
 def active_cooldown(platform: str) -> dict | None:
-    """该平台当前生效的冷却记录；没有、或带 until 且已过期则 None（过期记录不自动删除，只视为无效）。"""
-    rec = _read_cooldowns().get(canonical_platform(platform))
+    """该平台当前生效的冷却记录；没有、或带 until 且已过期则 None（过期记录不自动删除，只视为无效）。
+
+    **fail-closed**：冷却文件存在但损坏/读不了时，对每个平台都返回一条合成的冷却记录（corrupt=True），
+    并大声提示用户检查文件——宁可误停，不可在无法确认时放行自动化访问。"""
+    global _corrupt_warned
+    data, err = _load_cooldowns()
+    if err:
+        rec = _corrupt_record(err)
+        if not _corrupt_warned:
+            _corrupt_warned = True
+            _eprint(f"⛔ {rec['reason']}。")
+        return rec
+    rec = data.get(canonical_platform(platform))
     if not isinstance(rec, dict):
         return None
     until = _parse_dt(rec.get("until")) if rec.get("until") else None
@@ -366,7 +456,7 @@ def active_cooldown(platform: str) -> dict | None:
 def clear_cooldown(platform: str) -> bool:
     """解除冷却。只应在用户于对话中明确要求时调用。返回是否真的删了一条记录。"""
     pid = canonical_platform(platform)
-    data = _read_cooldowns()
+    data = _writable_cooldowns()
     if pid not in data:
         return False
     del data[pid]
@@ -379,35 +469,62 @@ def clear_cooldown(platform: str) -> bool:
 # --------------------------------------------------------------------------- #
 _ACT = r"(?:投稿|发布|发文|发帖|发视频|上传)"
 _BAN = r"(?:封禁|封停|限制|冻结|禁用|关闭|暂停|禁止)"
+_LIM = rf"(?:{_BAN}|受限|不可用|无法使用)"
+_NC = r"[^。，,；;！!？?\n]"  # 不跨句读（逗号/句号等）的任意字符
+_ACCT = r"(?:账号|账户|帐号)"
 _BLOCK_PATTERNS = [
-    # 「视频投稿功能已封禁」「发布功能被限制」「投稿权限已被冻结」
-    re.compile(rf"{_ACT}(?:功能|权限)[^。，,；;\n]{{0,6}}?(?:已|被|暂时|暂)*被?{_BAN}"),
-    # 「你的投稿已被限制」「发文被冻结」：动作词后 8 字内出现「已被/被 + 处罚」
-    re.compile(rf"{_ACT}[^。，,；;\n]{{0,8}}?(?:已被|被){_BAN}"),
+    # 「视频投稿功能已封禁」「发布功能被限制」「投稿权限已被冻结」「发布权限已受限」「投稿功能暂不可用」
+    re.compile(rf"{_ACT}(?:功能|权限){_NC}{{0,6}}?{_LIM}"),
+    # 「您的账号已被限制发布」「你已被禁止发布笔记」：已被/被 + 处罚词 + 4 字内动作词
+    re.compile(rf"(?:已被|被){_BAN}{_NC}{{0,4}}?{_ACT}"),
+    # 「你的投稿已被限制」「发文被冻结」「笔记发布受限」：动作词后 8 字内出现 被/已被处罚 或「受限」
+    re.compile(rf"{_ACT}{_NC}{{0,8}}?(?:(?:已被|被){_BAN}|受限)"),
+    # 「账号被限流」「笔记已被限流」
+    re.compile(r"(?:已被|被)限流"),
     # 操作过于频繁 / 请求太频繁
     re.compile(r"(?:操作|请求|访问|发布|提交)(?:过于|太|过)频繁"),
-    # 账号异常 / 存在风险
-    re.compile(r"(?:账号|账户|帐号)(?:存在)?(?:异常|风险)"),
-    re.compile(r"(?:账号|账户|帐号)存在[^。，,；;\n]{0,4}风险"),
+    # 账号异常/存在风险：必须在 12 字内同时出现限制类词或「无法发布」，才算处罚（「账号异常登录提醒」之类不命中）
+    re.compile(rf"{_ACCT}(?:存在)?{_NC}{{0,6}}?(?:异常|风险)[^。；;！!？?\n]{{0,12}}?(?:{_LIM}|无法{_ACT})"),
     # 已被封禁 / 禁言 / 封号
     re.compile(r"(?:已被|被)(?:封禁|封号|封停|禁言)"),
-    re.compile(r"(?:账号|账户|帐号)(?:已)?被?(?:封禁|封号|封停|禁言|冻结)"),
+    re.compile(rf"{_ACCT}(?:已)?被?(?:封禁|封号|封停|禁言|冻结)"),
 ]
+# 提醒/预告类句式：「将被」「否则」「可能会被」「如果」…说的是假设或规则，不是已经发生的处罚。
+# 含这些词的分句不参与匹配（整句含它时，只逐个检查不含它的逗号分句）。
+_WARNING_MARKERS = ("将被", "将会被", "则将", "否则", "可能会被", "可能被", "会被", "如果", "若", "一旦",
+                    "请勿", "切勿", "严禁", "不得", "以免", "以防", "避免")
+# 按词匹配：「若」不算「若干」里的那个（「已被限制发布若干天」是已发生的处罚）
+_WARNING_RE = re.compile("|".join(re.escape(m) + ("(?!干)" if m == "若" else "") for m in _WARNING_MARKERS))
+_SENTENCE_SPLIT = re.compile(r"[。；;！!？?\n]+")
+_CLAUSE_SPLIT = re.compile(r"[，,、]+")
 
 
 def classify_block_text(text: str) -> str | None:
-    """判断一段 toast/通知文本是不是平台的处罚/限流提示。是则返回命中的原文片段，否则 None。
+    """判断一段 toast/通知文本是不是平台已经对账号施加的处罚/限流提示。是则返回命中的原文片段，否则 None。
 
-    保守：只匹配「功能/账号 已被 封禁·限制·冻结」「操作过于频繁」「账号异常/存在风险」这类明确处罚句式；
-    「请勿发布违规内容」「违规内容将被处理」之类的普通提示不会命中。
+    规则（保守，宁漏勿误——误判会把平台误置冷却）：
+      1. 只认「已发生」的明确句式：「投稿/发布功能·权限 已封禁·受限·不可用」「已被限制/禁止发布」
+         「笔记发布受限」「账号被限流」「操作过于频繁」「已被封禁/禁言」；
+      2. 含「将被/否则/可能会被/如果/若/一旦/请勿/不得…」的分句是规则提醒或假设，不匹配
+         （「请勿发布违规内容，否则账号将被封禁」「违规内容将被处理」→ None）；
+      3. 「账号异常/存在风险」单独出现**不算**（登录异常提醒很常见）；必须 12 字内同时带限制类词
+         （限制/封禁/冻结/受限/不可用…），如「账号存在风险，已限制发布」才命中。
     **只能**用在 toast / 通知元素的文本上——整页文本里的规则说明可能误伤。"""
     s = unicodedata.normalize("NFKC", text or "")
     if not s.strip():
         return None
-    for pat in _BLOCK_PATTERNS:
-        m = pat.search(s)
-        if m:
-            return m.group(0)
+    for sentence in _SENTENCE_SPLIT.split(s):
+        if not sentence.strip():
+            continue
+        if _WARNING_RE.search(sentence):
+            units = [c for c in _CLAUSE_SPLIT.split(sentence) if not _WARNING_RE.search(c)]
+        else:
+            units = [sentence]
+        for unit in units:
+            for pat in _BLOCK_PATTERNS:
+                m = pat.search(unit)
+                if m:
+                    return m.group(0)
     return None
 
 
@@ -416,6 +533,41 @@ def classify_block_text(text: str) -> str | None:
 # --------------------------------------------------------------------------- #
 def _eprint(*parts) -> None:
     print(*parts, file=sys.stderr)
+
+
+def _print_cooldown(name: str, cd: dict) -> None:
+    _eprint(f"   原因：{cd.get('reason') or '（未记录）'}")
+    if cd.get("evidence"):
+        _eprint(f"   平台提示原文：{cd['evidence']}")
+    if not cd.get("corrupt"):
+        _eprint(f"   起始：{cd.get('since', '')}；"
+                + (f"到期：{cd['until']}" if cd.get("until") else "到期：无（需用户手动解除）"))
+
+
+def exit_if_cooldown(platform: str, action: str = "访问", stdout_json: dict | None = None) -> None:
+    """任何会**自动打开浏览器访问该平台**的子命令（发布/抓取/评论/回读/whoami…）入口调用：
+    平台在冷却期 → 打印中文说明并 exit 9（EXIT_COOLDOWN），不启动浏览器。
+    （登录是用户主动发起的，用 warn_if_cooldown，不拦。）
+    stdout_json：给「stdout 必须是单行 JSON」的子命令（whoami），退出前先把它打到 stdout。"""
+    cd = active_cooldown(platform)
+    if not cd:
+        return
+    name = platform_display(platform)
+    if stdout_json is not None:
+        print(json.dumps({**stdout_json, "error": f"{name} 冷却中，未访问平台", "cooldown": True}, ensure_ascii=False))
+    _eprint(f"⛔ {name} 当前处于冷却期，已停止{action}（冷却期内一律不自动访问该平台，避免加重处罚）。")
+    _print_cooldown(name, cd)
+    _eprint("   不要重试、不要换方式绕过。请先把情况告知用户；只有用户在对话里明确要求才可解除冷却"
+            "（publish_guard.py cooldown clear）。")
+    sys.exit(EXIT_COOLDOWN)
+
+
+def warn_if_cooldown(platform: str) -> None:
+    """登录这类用户主动发起的操作：冷却期内不拦，但打印警告。"""
+    cd = active_cooldown(platform)
+    if cd:
+        _eprint(f"⚠️ {platform_display(platform)} 当前处于冷却期（{cd.get('reason') or '未记录'}）。"
+                "登录由你主动发起，已放行；但冷却期内不要再用脚本发布/抓取，先到平台消息中心查看处罚详情。")
 
 
 def guard_before_publish(platform: str, media_paths, title: str, *, allow_repost: bool = False) -> None:
@@ -427,11 +579,7 @@ def guard_before_publish(platform: str, media_paths, title: str, *, allow_repost
     cd = active_cooldown(platform)
     if cd:
         _eprint(f"⛔ {name} 当前处于冷却期，已停止发布。")
-        _eprint(f"   原因：{cd.get('reason') or '（未记录）'}")
-        if cd.get("evidence"):
-            _eprint(f"   平台提示原文：{cd['evidence']}")
-        _eprint(f"   起始：{cd.get('since', '')}；"
-                + (f"到期：{cd['until']}" if cd.get("until") else "到期：无（需用户手动解除）"))
+        _print_cooldown(name, cd)
         _eprint("   不要重试、不要换方式绕过。请先把情况告知用户，只有用户在对话里明确要求才可解除冷却"
                 "（publish_guard.py cooldown clear）。")
         sys.exit(EXIT_COOLDOWN)
@@ -466,7 +614,9 @@ def on_block_detected(platform: str, text: str) -> dict:
 # --------------------------------------------------------------------------- #
 def _cmd_status(a) -> int:
     pids = [canonical_platform(a.platform)] if a.platform else None
-    cds = _read_cooldowns()
+    cds, err = _load_cooldowns()
+    if err:
+        print(f"⛔ 冷却状态文件 {cooldown_path()} 已损坏（{err}）：所有平台按「冷却中」处理，请检查/修复该文件。")
     shown = False
     for pid, rec in sorted(cds.items()):
         if pids and pid not in pids:

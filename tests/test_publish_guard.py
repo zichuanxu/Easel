@@ -101,12 +101,80 @@ def test_empty_title_never_matches(tmp_path):
     assert pg.find_duplicate("douyin", [], "") is None
 
 
-def test_corrupt_state_files_do_not_crash(tmp_path):
+def test_corrupt_ledger_line_warns_but_does_not_crash(tmp_path, capsys):
     pg.ledger_path().parent.mkdir(parents=True)
     pg.ledger_path().write_text("not json\n", encoding="utf-8")
-    pg.cooldown_path().write_text("{broken", encoding="utf-8")
     assert pg.find_duplicate("douyin", [], "t") is None
-    assert pg.active_cooldown("douyin") is None
+    assert "损坏" in capsys.readouterr().err
+
+
+def _corrupt_cooldown():
+    pg.cooldown_path().parent.mkdir(parents=True, exist_ok=True)
+    pg.cooldown_path().write_text("{broken", encoding="utf-8")
+
+
+def test_corrupt_cooldown_fails_closed_for_every_platform(capsys):
+    _corrupt_cooldown()
+    for plat in ("douyin", "xiaohongshu", "zhihu", "bilibili"):
+        cd = pg.active_cooldown(plat)
+        assert cd and cd["corrupt"] is True
+        assert "检查" in cd["reason"] and "cooldown.json" in cd["reason"]
+    with pytest.raises(SystemExit) as e:
+        pg.guard_before_publish("douyin", [], "t")
+    assert e.value.code == pg.EXIT_COOLDOWN
+    assert "损坏" in capsys.readouterr().err
+
+
+def test_set_cooldown_on_corrupt_file_quarantines_first(capsys):
+    _corrupt_cooldown()
+    pg.set_cooldown("douyin", "被封")
+    asides = list(pg.cooldown_path().parent.glob("cooldown.json.corrupt-*"))
+    assert len(asides) == 1 and asides[0].read_text(encoding="utf-8") == "{broken"
+    assert "已移到" in capsys.readouterr().err
+    assert pg.active_cooldown("douyin")["reason"] == "被封"
+    assert pg.active_cooldown("zhihu") is None   # 文件已修复，别的平台恢复正常判定
+
+
+def test_clear_cooldown_on_corrupt_file_quarantines_first(capsys):
+    _corrupt_cooldown()
+    assert pg.clear_cooldown("douyin") is False
+    assert len(list(pg.cooldown_path().parent.glob("cooldown.json.corrupt-*"))) == 1
+    assert "已移到" in capsys.readouterr().err
+
+
+def test_cooldown_status_cli_reports_corrupt(capsys):
+    _corrupt_cooldown()
+    assert pg.main(["status"]) == 0
+    assert "损坏" in capsys.readouterr().out
+
+
+def test_ledger_is_append_only(tmp_path):
+    v = _video(tmp_path)
+    pg.record_publish("douyin", [v], "a")
+    before = pg.ledger_path().read_bytes()
+    pg.record_publish("douyin", [v], "b")
+    after = pg.ledger_path().read_bytes()
+    assert after.startswith(before) and after.count(b"\n") == 2   # 只追加，不重写已有内容
+
+
+def test_ledger_append_preserves_corrupt_line_and_fsyncs(tmp_path, monkeypatch):
+    pg.ledger_path().parent.mkdir(parents=True)
+    pg.ledger_path().write_text("garbage-line\n", encoding="utf-8")
+    synced = []
+    real = pg.os.fsync
+    monkeypatch.setattr(pg.os, "fsync", lambda fd: (synced.append(fd), real(fd))[1])
+    pg.record_publish("douyin", [], "t")
+    assert synced
+    text = pg.ledger_path().read_text(encoding="utf-8")
+    assert text.startswith("garbage-line\n")   # 坏行不被抹掉
+    assert pg.find_duplicate("douyin", [], "t")
+
+
+def test_record_publish_unconfirmed_flag_blocks_second_post(tmp_path):
+    v = _video(tmp_path)
+    rec = pg.record_publish("douyin", [v], "t", url="", unconfirmed=True)
+    assert rec["unconfirmed"] is True and rec["url"] == ""
+    assert pg.find_duplicate("douyin", [v], "other title")["reason"] == "media"
 
 
 # ---- 冷却 ----
@@ -137,10 +205,16 @@ def test_cooldown_expiry():
     "发文功能已被冻结",
     "投稿权限已被封禁",
     "操作过于频繁，请稍后再试",
-    "账号异常，请联系客服",
-    "当前账号存在风险",
+    "账号存在风险，已限制发布",
     "您的账号已被封禁",
     "你已被禁言",
+    "您的账号已被限制发布",
+    "你已被禁止发布笔记",
+    "笔记发布受限",
+    "账号被限流",
+    "您的账号涉嫌违规，发布权限已受限",
+    "你的账号存在违规行为，投稿功能暂不可用",
+    "发布功能已被冻结",
 ])
 def test_classify_positive(text):
     assert pg.classify_block_text(text)
@@ -149,6 +223,14 @@ def test_classify_positive(text):
 @pytest.mark.parametrize("text", [
     "请勿发布违规内容",
     "违规内容将被处理",
+    "请勿发布违规内容，否则账号将被封禁",
+    "账号异常登录提醒",
+    "检测到账号异常登录，请确认是否本人操作",
+    "账号异常，请联系客服",      # 单独的「账号异常/存在风险」不算处罚，必须带限制类词
+    "当前账号存在风险",
+    "如果违规，发布功能将被限制",
+    "发布违规内容可能会被限流",
+    "违规内容会被平台处理",
     "发布成功",
     "发布前请阅读社区规范，遵守相关法律法规",
     "上传中，请勿关闭页面",
@@ -209,3 +291,31 @@ def test_cli(tmp_path, capsys):
     assert "冷却中" in capsys.readouterr().out
     assert pg.main(["cooldown", "clear", "--platform", "douyin"]) == 0
     assert pg.active_cooldown("douyin") is None
+
+
+@pytest.mark.parametrize("text", [
+    "账号违规，已被限制发布若干天",       # 「若干」不是假设语气的「若」
+    "账号存在异常，暂时无法发布",
+    "账号异常，无法发布",
+])
+def test_block_text_review_followups_detected(text):
+    assert pg.classify_block_text(text)
+
+
+@pytest.mark.parametrize("text", [
+    "若账号异常将被限制发布",              # 真正的假设句仍不命中
+    "账号异常登录提醒",
+])
+def test_block_text_review_followups_ignored(text):
+    assert pg.classify_block_text(text) is None
+
+
+def test_ledger_append_after_partial_line_keeps_new_record(tmp_path):
+    """上次写到一半崩溃留下没换行的半行：新记录要单独成行，仍能被查重认出来。"""
+    pg.LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    pg.LEDGER_PATH.write_text('{"platform": "douyin", "title": "半行', encoding="utf-8")
+    v = _video(tmp_path)
+    pg.record_publish("douyin", [v], "完整的一条")
+    lines = pg.LEDGER_PATH.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2 and json.loads(lines[1])["title"] == "完整的一条"
+    assert pg.find_duplicate("douyin", [v], "完整的一条")

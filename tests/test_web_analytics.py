@@ -23,6 +23,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "web"))
 sys.path.insert(0, str(PROJECT_ROOT / "skills" / "shared" / "scripts"))
 
 import app as web  # noqa: E402
+import publish_guard  # noqa: E402  web/app 已把 skills/shared/scripts 放进 sys.path
 
 SAMPLE = {"platform": "douyin", "loggedIn": True, "fetched_at": 1_700_000_000, "followers": 12}
 
@@ -52,6 +53,7 @@ class FakeRun:
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(web, "ANALYTICS_CACHE_DIR", tmp_path / "_analytics")
+    monkeypatch.setattr(publish_guard, "COOLDOWN_PATH", tmp_path / "cooldown.json")   # 不碰真实冷却记录
     web._BROWSER_LOCKS.clear()
     web._ANALYTICS_INFLIGHT.clear()
     web._WHOAMI_CACHE.clear()
@@ -67,7 +69,7 @@ def test_single_flight(env, monkeypatch):
     _patch(monkeypatch, fake)
 
     async def go():
-        return await asyncio.gather(web.api_analytics("douyin"), web.api_analytics("douyin"))
+        return await asyncio.gather(web.api_analytics("douyin", manual=1), web.api_analytics("douyin", manual=1))
 
     a, b = asyncio.run(go())
     assert fake.calls == 1
@@ -76,7 +78,7 @@ def test_single_flight(env, monkeypatch):
 
 def test_success_writes_latest(env, monkeypatch):
     _patch(monkeypatch, FakeRun())
-    res = asyncio.run(web.api_analytics("douyin"))
+    res = asyncio.run(web.api_analytics("douyin", manual=1))
     f = env / "_analytics" / "douyin-latest.json"
     assert json.loads(f.read_text(encoding="utf-8")) == res
 
@@ -114,7 +116,7 @@ def test_no_json_502_keeps_old_latest(env, monkeypatch):
     old.write_text(json.dumps(SAMPLE), encoding="utf-8")
     _patch(monkeypatch, FakeRun(stdout=""))
     with pytest.raises(HTTPException) as e:
-        asyncio.run(web.api_analytics("douyin"))
+        asyncio.run(web.api_analytics("douyin", manual=1))
     assert e.value.status_code == 502
     assert json.loads(old.read_text(encoding="utf-8")) == SAMPLE
 
@@ -132,7 +134,7 @@ def test_whoami_and_analytics_serialized(env, monkeypatch):
     monkeypatch.setattr(web, "_write_login_marker", lambda *a, **k: None)
 
     async def go():
-        return await asyncio.gather(web._account_whoami("douyin"), web.api_analytics("douyin"))
+        return await asyncio.gather(web._account_whoami("douyin", manual=True), web.api_analytics("douyin", manual=1))
 
     asyncio.run(go())
     assert fake.calls == 2
@@ -146,7 +148,7 @@ def test_not_logged_in_or_error_does_not_overwrite_latest(env, monkeypatch, bad)
     old = d / "douyin-latest.json"
     old.write_text(json.dumps(SAMPLE), encoding="utf-8")
     _patch(monkeypatch, FakeRun(stdout=json.dumps(bad)))
-    assert asyncio.run(web.api_analytics("douyin")) == bad   # 返回值照旧
+    assert asyncio.run(web.api_analytics("douyin", manual=1)) == bad   # 返回值照旧
     assert json.loads(old.read_text(encoding="utf-8")) == SAMPLE
 
 
@@ -160,7 +162,7 @@ def test_concurrent_waiters_share_error_and_inflight_cleared(env, monkeypatch):
     _patch(monkeypatch, fake)
 
     async def go():
-        rs = await asyncio.gather(web.api_analytics("douyin"), web.api_analytics("douyin"), return_exceptions=True)
+        rs = await asyncio.gather(web.api_analytics("douyin", manual=1), web.api_analytics("douyin", manual=1), return_exceptions=True)
         await asyncio.sleep(0)
         return rs, dict(web._ANALYTICS_INFLIGHT)
 
@@ -170,7 +172,7 @@ def test_concurrent_waiters_share_error_and_inflight_cleared(env, monkeypatch):
     assert inflight == {}
     # 失败后下一次请求重新跑
     _patch(monkeypatch, FakeRun())
-    assert asyncio.run(web.api_analytics("douyin")) == SAMPLE
+    assert asyncio.run(web.api_analytics("douyin", manual=1)) == SAMPLE
 
 
 def test_timeout_504_and_inflight_cleared(env, monkeypatch):
@@ -179,10 +181,64 @@ def test_timeout_504_and_inflight_cleared(env, monkeypatch):
     _patch(monkeypatch, boom)
 
     async def go():
-        rs = await asyncio.gather(web.api_analytics("douyin"), web.api_analytics("douyin"), return_exceptions=True)
+        rs = await asyncio.gather(web.api_analytics("douyin", manual=1), web.api_analytics("douyin", manual=1), return_exceptions=True)
         await asyncio.sleep(0)
         return rs, dict(web._ANALYTICS_INFLIGHT)
 
     rs, inflight = asyncio.run(go())
     assert all(isinstance(r, HTTPException) and r.status_code == 504 for r in rs)
     assert inflight == {}
+
+
+# ---------------------------------------------------------------------------
+# 国内平台不做后台抓取：没有 manual 标志只读缓存；冷却期内拒绝
+# ---------------------------------------------------------------------------
+DOMESTIC = ["xiaohongshu", "douyin", "kuaishou", "zhihu", "weixin-channels", "wechat-oa"]
+
+
+@pytest.mark.parametrize("pf", DOMESTIC)
+def test_domestic_without_manual_never_launches(env, monkeypatch, pf):
+    fake = FakeRun()
+    _patch(monkeypatch, fake)
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(web.api_analytics(pf))          # 没缓存 → 404，且不起子进程
+    assert e.value.status_code == 404
+    d = env / "_analytics"
+    d.mkdir()
+    (d / f"{pf}-latest.json").write_text(json.dumps(SAMPLE), encoding="utf-8")
+    assert asyncio.run(web.api_analytics(pf)) == SAMPLE   # 有缓存 → 直接返回缓存
+    assert fake.calls == 0
+
+
+def test_domestic_manual_launches_and_bilibili_still_automatic(env, monkeypatch):
+    fake = FakeRun()
+    _patch(monkeypatch, fake)
+    assert asyncio.run(web.api_analytics("douyin", manual=1)) == SAMPLE
+    assert fake.calls == 1
+    assert asyncio.run(web.api_analytics("bilibili")) == SAMPLE   # B站走 cookie API，保持自动
+    assert fake.calls == 2
+
+
+def test_manual_refused_during_cooldown(env, monkeypatch):
+    fake = FakeRun()
+    _patch(monkeypatch, fake)
+    publish_guard.set_cooldown("douyin", "平台提示处罚")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(web.api_analytics("douyin", manual=1))
+    assert e.value.status_code == 409 and "冷却期" in e.value.detail
+    assert fake.calls == 0
+    # 冷却期内仍可读缓存
+    d = env / "_analytics"
+    d.mkdir()
+    (d / "douyin-latest.json").write_text(json.dumps(SAMPLE), encoding="utf-8")
+    assert asyncio.run(web.api_analytics("douyin")) == SAMPLE
+
+
+def test_subprocess_cooldown_exit_surfaces_chinese_message(env, monkeypatch):
+    """account_stats 自己拒绝（退出码 9）时，后端把中文说明给前端，而不是通用 502 / 把错误 JSON 当数据。"""
+    def fake_run(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 9, stdout=json.dumps({"error": "冷却", "loggedIn": False}), stderr="")
+    monkeypatch.setattr(web.subprocess, "run", fake_run)
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(web._run_analytics("douyin"))
+    assert e.value.status_code == 409

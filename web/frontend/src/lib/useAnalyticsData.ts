@@ -7,10 +7,11 @@ export const ANALYTICS_TTL_MS = 30 * 60 * 1000;
 /** 同时最多几个平台在抓取（每个都会起一个浏览器）。 */
 const CONCURRENCY = 2;
 /**
- * 只在用户点「刷新数据」时才抓的平台：每抓一次都是开浏览器登录一次账号，小红书会把定时的
- * 自动访问判成第三方脚本（2026-10 因此被封号）。打开页面只显示上次的结果。
+ * 只在用户点「刷新数据」时才抓的平台（国内、要起浏览器的）：每抓一次都是开浏览器登录一次账号，
+ * 平台会把定时的自动访问判成第三方脚本（2026-10 小红书因此被封号）。打开页面、切页签、定时器
+ * 都只显示上次缓存的结果；B站走 cookie API，不在此列。与后端 DOMESTIC_BROWSER_PLATFORMS 一致。
  */
-export const MANUAL_ONLY_ANALYTICS = new Set(['xiaohongshu']);
+export const MANUAL_ONLY_ANALYTICS = new Set(['xiaohongshu', 'douyin', 'kuaishou', 'zhihu', 'weixin-channels', 'wechat-oa']);
 const STORE_KEY = 'easel_analytics';
 
 export interface AnalyticsEntry {
@@ -19,6 +20,8 @@ export interface AnalyticsEntry {
   updating: boolean;
   /** 最近一次抓取失败。 */
   failed: boolean;
+  /** 失败原因（后端给的中文说明，如平台冷却期）。 */
+  error?: string;
 }
 
 const EMPTY: AnalyticsEntry = { updating: false, failed: false };
@@ -43,7 +46,7 @@ function loadStored(): Record<string, AccountAnalytics> {
 /**
  * 创作数据：先显示缓存、过期则后台刷新。
  * - ensure(p, priority)：有新鲜缓存不动；过期则后台抓，旧数据保留；本地没有则先读后端落盘结果，仍没有才真抓。
- *   MANUAL_ONLY_ANALYTICS 里的平台 ensure 只读缓存，从不真抓。
+ *   MANUAL_ONLY_ANALYTICS 里的平台（国内浏览器平台）ensure 只读缓存，从不真抓（定时器/切页签也一样）。
  * - refresh(p)：强制抓取，期间保留旧数据。
  * - 同平台已在抓取时不重复发请求；最多 2 个平台同时抓，priority（当前选中的平台）插队首。
  */
@@ -80,12 +83,13 @@ export function useAnalyticsData() {
     while (running.current < CONCURRENCY && queue.current.length) {
       const p = queue.current.shift()!;
       running.current++;
-      fetchAccountAnalytics(p)
+      // 手动平台只会经 refresh（用户点「刷新数据」）走到这里，带 manual 标志后端才会真抓
+      fetchAccountAnalytics(p, MANUAL_ONLY_ANALYTICS.has(p))
         .then((r) => {
-          patch(p, { data: r, updating: false, failed: false });
+          patch(p, { data: r, updating: false, failed: false, error: undefined });
           persist();
         })
-        .catch(() => patch(p, { updating: false, failed: true }))
+        .catch((e) => patch(p, { updating: false, failed: true, error: e instanceof Error ? e.message : undefined }))
         .finally(() => {
           running.current--;
           inflight.current.delete(p);
@@ -97,7 +101,7 @@ export function useAnalyticsData() {
   /** 排进抓取队列；已在队列里的只调整位置。 */
   const schedule = useCallback((p: string, priority: boolean) => {
     inflight.current.add(p);
-    patch(p, { updating: true, failed: false });
+    patch(p, { updating: true, failed: false, error: undefined });
     queue.current = queue.current.filter((x) => x !== p);
     if (priority) queue.current.unshift(p); else queue.current.push(p);
     pump();

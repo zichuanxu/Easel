@@ -70,9 +70,11 @@ def test_published(tmp_path):
         page, platform="douyin", is_published=lambda p: p.polls >= 3,
         toast_selectors=(".toast",), status_file=str(sf), on_status=lambda s, m: states.append(s))
     assert out == "published"
-    assert states == ["awaiting_user_click", "success"]
+    assert states == ["awaiting_user_click", "verifying"]   # 非终态：核对由调用方做，本函数从不写 success
     d = json.loads(sf.read_text(encoding="utf-8"))
-    assert d["state"] == "success" and "ts" in d and "message" in d
+    assert d["state"] == "verifying" and "ts" in d and "正在核对" in d["message"]
+    import login_state
+    assert "verifying" in login_state.STATES
     assert page.clicked == []   # 绝不点击
 
 
@@ -136,3 +138,33 @@ def test_transient_errors_are_ignored():
         return True
     out = semi_auto.await_human_publish(FakePage(), platform="douyin", is_published=pub, toast_selectors=())
     assert out == "published" and calls["n"] == 2
+
+
+def test_exit_net_turns_pending_status_into_error(tmp_path):
+    """进程退出时状态文件仍停在 verifying / awaiting_user_click → 补写 error；已终态的不动。"""
+    import login_state
+    sf = tmp_path / "s.json"
+    login_state.write_status(str(sf), "verifying", "已检测到发布，正在核对…")
+    semi_auto.note_exit_reason("读回未见本次内容")
+    assert semi_auto.mark_error_if_pending(str(sf)) is True
+    d = json.loads(sf.read_text(encoding="utf-8"))
+    assert d["state"] == "error" and "读回" in d["message"]
+    login_state.write_status(str(sf), "success", "ok")
+    assert semi_auto.mark_error_if_pending(str(sf)) is False
+    assert json.loads(sf.read_text(encoding="utf-8"))["state"] == "success"
+
+
+def test_default_toast_selectors_are_toast_only():
+    sels = " ".join(semi_auto.DEFAULT_TOAST_SELECTORS)
+    for broad in ("notice", "tips", "message-box", "Modal", "dialog"):
+        assert broad not in sels
+    assert "[role=alert]" in semi_auto.DEFAULT_TOAST_SELECTORS
+
+
+def test_platform_toast_selectors_not_broad():
+    import douyin_publish, web_publisher, xhs_publish, zhihu_answer
+    allsel = (list(douyin_publish.TOAST_SELECTORS) + list(web_publisher._TOAST_SELECTORS)
+              + list(xhs_publish.XHS_TOAST_SELECTORS) + list(zhihu_answer.ZHIHU_TOAST_SELECTORS))
+    for sel in allsel:
+        for broad in ("Modal", "dialog", "tips", "[class*=message]", "notice", "message-box"):
+            assert broad not in sel, sel

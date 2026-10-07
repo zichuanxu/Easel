@@ -262,3 +262,47 @@ def launch(p, *, profile_dir: Path, headed: bool, proxy: str | None = None,
                 continue
             raise
     raise last  # pragma: no cover
+
+
+# --------------------------------------------------------------------------- #
+# 国内平台注册表：登录目录名 / 指纹文件 / 环境变量名 / 中文名。
+# 发布脚本（xhs_publish / douyin_publish / web_publisher）与读数据脚本（account_stats /
+# zhihu_comments_fetch）必须用同一套引擎 + 同一份登录目录，否则读数据时看不到发布时的登录态。
+# 值必须与各发布脚本里的 PROFILE_NAME / PLATFORMS[...]["profile"] / 环境变量名逐一一致
+# （tests/test_real_browser.py 有一致性断言）。
+# --------------------------------------------------------------------------- #
+PLATFORMS: dict[str, dict] = {
+    "xiaohongshu": {"profile": "XiaohongshuProfile", "label": "小红书",
+                    "headless_env": "EASEL_XHS_HEADLESS", "browser_env": "EASEL_XHS_BROWSER",
+                    "fingerprint_file": FINGERPRINT_FILE},
+    "douyin": {"profile": "DouyinProfile", "label": "抖音",
+               "headless_env": "EASEL_DOUYIN_HEADLESS", "browser_env": "EASEL_DOUYIN_BROWSER",
+               "fingerprint_file": FINGERPRINT_FILE},
+    "kuaishou": {"profile": "KuaishouProfile", "label": "快手",
+                 "headless_env": "EASEL_KUAISHOU_HEADLESS", "browser_env": "EASEL_KUAISHOU_BROWSER",
+                 "fingerprint_file": FINGERPRINT_FILE},
+    "weixin-channels": {"profile": "ChannelsProfile", "label": "微信视频号",
+                        "headless_env": "EASEL_CHANNELS_HEADLESS", "browser_env": "EASEL_CHANNELS_BROWSER",
+                        "fingerprint_file": FINGERPRINT_FILE},
+    "zhihu": {"profile": "ZhihuProfile", "label": "知乎",
+              "headless_env": "EASEL_ZHIHU_HEADLESS", "browser_env": "EASEL_ZHIHU_BROWSER",
+              "fingerprint_file": FINGERPRINT_FILE},
+}
+
+
+def platform_profile_dir(platform: str, base: str | None = None) -> Path:
+    """该平台账号的登录目录（~/.easel-browser-profiles/<XxxProfile>，base 可覆盖根目录）。"""
+    root = Path(base).expanduser() if base else Path.home() / ".easel-browser-profiles"
+    return root / PLATFORMS[platform]["profile"]
+
+
+def launch_platform(p, platform: str, *, headed: bool = True, proxy: str | None = None,
+                    base: str | None = None, headless_env: str | None = None, **kw) -> object:
+    """按注册表开某国内平台的浏览器：与该平台发布脚本同引擎、同登录目录、同指纹、同环境变量。
+    headed=False 只有该平台的 *_HEADLESS 环境变量为真时才真无头，否则一律开窗口。"""
+    cfg = PLATFORMS[platform]
+    return launch(
+        p, profile_dir=platform_profile_dir(platform, base), headed=headed, proxy=proxy,
+        fingerprint_file=cfg["fingerprint_file"], platform_label=cfg["label"],
+        headless_env=headless_env or cfg["headless_env"], browser_env=cfg["browser_env"],
+        chrome_hint=kw.pop("chrome_hint", f"对应平台的登录命令（{cfg['label']}）"), **kw)

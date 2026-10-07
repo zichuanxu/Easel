@@ -14,6 +14,7 @@
         status_file=args.status_file,
     )
     # outcome: "published" | "blocked" | "closed" | "timeout"
+    # published 只代表「检测到用户点了发布」，状态文件此时是非终态 verifying；调用方核对通过后自己写 success。
     # blocked 时 publish_guard 已把该平台设为冷却；调用方应 sys.exit(publish_guard.EXIT_COOLDOWN)，不得重试。
 
 逃生口：环境变量 EASEL_DOMESTIC_AUTO_PUBLISH=1 才允许脚本自动点击发布（auto_click_allowed）。
@@ -35,11 +36,15 @@ import publish_guard  # noqa: E402
 AUTO_PUBLISH_ENV = "EASEL_DOMESTIC_AUTO_PUBLISH"
 AWAITING_MESSAGE = "已在窗口里填好，请检查后亲自点击『发布』（脚本不会替你点）。"
 
+VERIFYING_MESSAGE = "已检测到发布，正在核对…"
+
 # 常见 toast / 通知容器（各平台不全，调用方可按平台传自己的）。只取这些元素的文本去判处罚，不看整页。
+# 只收「确属 toast/通知」的容器：不要加 [class*=notice] / [class*=tips] / [class*=message-box] / .Modal-content /
+# .Modal-wrapper / *-dialog 这类宽泛选择器——它们常装着发布须知、规则说明、确认弹窗，会把普通提示误判成处罚。
 DEFAULT_TOAST_SELECTORS = (
     ".semi-toast", ".semi-toast-content", ".semi-notification",
     ".ant-message", ".ant-notification", ".el-message", ".el-notification",
-    "[role=alert]", "[class*=toast]", "[class*=Toast]", "[class*=notice]", "[class*=message-box]",
+    "[role=alert]", "[class*=toast]", "[class*=Toast]",
 )
 
 # 内部定时/时钟入口（测试可替换）
@@ -65,6 +70,58 @@ def _write_status(status_file, on_status, state: str, message: str) -> None:
             on_status(state, message)
         except Exception:
             pass
+
+
+# ---- 状态文件收尾：保证 verifying/awaiting_user_click 不会被留成「假的进行中」或「假成功」 ----
+_PENDING_STATES = ("awaiting_user_click", "verifying")
+_guarded_status_files: list[str] = []
+_exit_reason: list[str] = []
+_exit_hook_registered = False
+EXIT_UNFINISHED_MESSAGE = "脚本在核对完成前退出，未确认发布结果；请到平台后台核对是否已发出，不要自动重试。"
+
+
+def report_final(status_file, state: str, message: str) -> None:
+    """调用方在自己的核对（回读/严格判定）完成后写终态（success / error）。status_file 为空则跳过。"""
+    if status_file:
+        _write_status(status_file, None, state, message)
+
+
+def note_exit_reason(message: str) -> None:
+    """发布脚本的 _die 在退出前登记原因，供 guard_status_on_exit 写进 error 状态。"""
+    if message:
+        _exit_reason.append(str(message))
+
+
+def mark_error_if_pending(status_file, message: str = "") -> bool:
+    """状态文件当前还是非终态（awaiting_user_click / verifying）→ 改写 error 并返回 True。其余情况不动。"""
+    if not status_file or not Path(str(status_file)).exists():
+        return False
+    if login_state.read_status(str(status_file)).get("state") not in _PENDING_STATES:
+        return False
+    _write_status(status_file, None, "error", message or (_exit_reason[-1] if _exit_reason else EXIT_UNFINISHED_MESSAGE))
+    return True
+
+
+def _finalize_guarded() -> None:
+    for sf in list(_guarded_status_files):
+        try:
+            mark_error_if_pending(sf)
+        except Exception:
+            pass
+
+
+def guard_status_on_exit(status_file) -> None:
+    """登记「退出兜底」：进程以任何方式结束（_die / sys.exit / 未捕获异常）时，若状态文件还停在
+    awaiting_user_click / verifying，就补写 error（原因取 note_exit_reason 登记的最后一条）。"""
+    global _exit_hook_registered
+    if not status_file:
+        return
+    if str(status_file) not in _guarded_status_files:
+        _guarded_status_files.append(str(status_file))
+    if not _exit_hook_registered:
+        import atexit
+        atexit.register(_finalize_guarded)
+        _exit_hook_registered = True
 
 
 def _page_closed(page) -> bool:
@@ -102,8 +159,11 @@ def await_human_publish(page, *, platform: str, is_published: Callable[[object],
 
     每轮轮询顺序：页面是否已关 → toast 里有没有平台处罚提示（命中则 publish_guard.on_block_detected 设冷却，
     返回 "blocked"）→ is_published(page)（成功返回 "published"）。本函数从不点击任何按钮。
-    状态文件写 login_state 同款 JSON：awaiting_user_click（等用户点）→ success（已发布）/ error（其余）。"""
+    状态文件写 login_state 同款 JSON：awaiting_user_click（等用户点）→ verifying（非终态：检测到点击，
+    **尚未核对**）/ error（其余）。**本函数从不写终态 success**：调用方在自己的回读/核对通过后才写 success，
+    核对失败或任何退出路径（_die / sys.exit / 异常）都必须写 error，避免状态文件停在假的成功上。"""
     name = publish_guard.platform_display(platform)
+    guard_status_on_exit(status_file)
     print(f"✋ {name}：{AWAITING_MESSAGE}", flush=True)
     _write_status(status_file, on_status, "awaiting_user_click", AWAITING_MESSAGE)
     deadline = _monotonic() + timeout_s
@@ -119,7 +179,7 @@ def await_human_publish(page, *, platform: str, is_published: Callable[[object],
                                   f"{name} 提示处罚/限制：{text[:120]}。已设为冷却，请勿重试，先向用户汇报。")
                     return "blocked"
             if is_published(page):
-                _write_status(status_file, on_status, "success", "检测到已发布。")
+                _write_status(status_file, on_status, "verifying", VERIFYING_MESSAGE)
                 return "published"
         except Exception as e:
             if _looks_closed(e) or _page_closed(page):

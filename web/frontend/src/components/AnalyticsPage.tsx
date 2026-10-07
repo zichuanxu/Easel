@@ -62,7 +62,8 @@ export default function AnalyticsPage({ onNavigate }: { onNavigate: (page: Page)
     return () => clearInterval(t);
   }, [anaSel, ensure]);
 
-  const { data: d, updating, failed } = entry(anaSel);
+  const { data: d, updating, failed, error } = entry(anaSel);
+  const manualOnly = MANUAL_ONLY_ANALYTICS.has(anaSel);
   const fetchedMs = d ? Number(d.fetched_at) * 1000 : NaN;
   const ago = d && Number.isFinite(fetchedMs) ? fmtAgo(fetchedMs, now) : '';
 
@@ -75,6 +76,7 @@ export default function AnalyticsPage({ onNavigate }: { onNavigate: (page: Page)
           <>
             各平台已登录账号的粉丝、获赞、关注，增长趋势和最新作品。
             {anaSel && d && ago && <span className="ana-updated">更新于 {ago}{updating ? '，正在更新' : ''}</span>}
+            {manualOnly && <span className="ana-updated">这里显示的是缓存数据，不会在后台自动抓取；要最新数据请点「刷新数据」</span>}
           </>
         )}
         actions={anaSel
@@ -98,7 +100,7 @@ export default function AnalyticsPage({ onNavigate }: { onNavigate: (page: Page)
           />
           {d && failed && (
             <div className="ana-fail" role="status">
-              <span>{ago ? `更新失败，显示的是 ${ago}的数据。` : '更新失败，显示的是之前的数据。'}</span>
+              <span>{error && <span className="ana-fail-reason">{error}</span>}{ago ? `更新失败，显示的是 ${ago}的数据。` : '更新失败，显示的是之前的数据。'}</span>
               <Button size="sm" onClick={() => refresh(anaSel)}>重试</Button>
             </div>
           )}
@@ -108,7 +110,7 @@ export default function AnalyticsPage({ onNavigate }: { onNavigate: (page: Page)
           <div className="analytics-body">
             {!d && !updating && !failed && (MANUAL_ONLY_ANALYTICS.has(anaSel)
               ? <EmptyState
-                  text="小红书的数据只在你点「刷新数据」时抓取，会打开一个 Chrome 窗口，不要关掉它。不会在后台自动抓。"
+                  text="还没有缓存数据。这个平台的数据只在你点「刷新数据」时才抓取（会启动一个浏览器，请不要关掉它），不会在后台自动抓。"
                   action={{ label: '刷新数据', onClick: () => refresh(anaSel) }}
                 />
               : <EmptyState text="点上方的平台，拉取这个账号的数据。" />)}
@@ -124,7 +126,7 @@ export default function AnalyticsPage({ onNavigate }: { onNavigate: (page: Page)
             ))}
             {!d && !updating && failed && (
               <EmptyState
-                text="拉取失败：可能是登录失效，或平台页面改版了。"
+                text={error || '拉取失败：可能是登录失效，或平台页面改版了。'}
                 action={{ label: '重试', onClick: () => refresh(anaSel) }}
               />
             )}

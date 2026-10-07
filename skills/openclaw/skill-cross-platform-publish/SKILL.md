@@ -77,6 +77,9 @@ python skills/openclaw/skill-cross-platform-publish/scripts/publish_dispatch.py 
 2. 发布前用 `plan` 检查越限，逐条消除 warnings 再发。
 3. 视频跨横竖平台先用 video-reframe 转比例，别直接发导致黑边/裁切。
 4. 每个平台的实际发布委派其 publisher SKILL；未部署 publisher 的平台先提示用户。
+   各 publisher 真发前都过**发布闸门**：退出码 `8` = 重复发布拦截、`9` = 平台冷却，**不重试、不绕过**，告知用户；
+   仅当用户在对话里明确要求「再发一次同样的内容」才给该平台加 `--allow-repost`（冷却期绕不过）。
+   B站 / 海外平台（tiktok/youtube/instagram/x/threads）全自动，其余国内平台为半自动（按各 publisher SKILL）。
 5. 批量按时间发布见 **skill-publish-scheduler**。
 
 ## 参考来源

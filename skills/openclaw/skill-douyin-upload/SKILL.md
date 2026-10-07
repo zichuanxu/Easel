@@ -1,9 +1,9 @@
 ---
 name: skill-douyin-upload
 description: |
-  将视频/图文内容发布到抖音（creator.douyin.com）。基于 Playwright + 持久化登录态，headless 即可运行，
-  流程与选择器移植自开源实现 douyin-upload-mcp-skill（含高清发布入口、切 tab、上传等转码、AI 封面、
-  发布成功 toast 校验、二维码登录）。适用场景：发布抖音视频、发布图文、扫码登录、发布前预检。
+  将视频/图文内容发布到抖音（creator.douyin.com）。**半自动**：脚本在可见的真实浏览器窗口里填好标题/简介/话题/
+  封面/AI 声明，停在发布按钮前，由用户亲自点「发布」；带重复发布/冷却闸门。基于 Playwright + 持久化登录态，
+  流程与选择器移植自开源实现 douyin-upload-mcp-skill。适用场景：发布抖音视频、发布图文、扫码登录、发布前预检。
 layer: publish
 ---
 
@@ -11,15 +11,16 @@ layer: publish
 
 在用户确认后，调用 `douyin_publish.py` 完成**视频/图文发布**。
 
-## 运行方式（Playwright，headless 可用）
+## 运行方式（Playwright + 可见真实浏览器，半自动）
 
-统一走 **`../../shared/scripts/douyin_publish.py`**（CWD=项目根）。Playwright + 持久化登录态驱动
-抖音创作者后台，headless 即可发布——**替代了旧的 CDP/puppeteer/MCP Node 死栈**（需真实 Chrome，
-本环境跑不了，已删除）。
+统一走 **`../../shared/scripts/douyin_publish.py`**（CWD=项目根）。浏览器由 `real_browser` 启动：**CloakBrowser
+（账号固定指纹）优先 → 本机 Chrome/Edge → Playwright 自带 Chromium（告警）**；环境变量 `EASEL_DOUYIN_BROWSER=chrome`
+跳过 Cloak，`EASEL_DOUYIN_HEADLESS=1` 才允许无头（仅限无桌面机器，易被识别，**发布始终开窗口**）。鼠标/键盘走
+`human_input` 真人节奏。**login 与发布共用同一引擎/登录目录；换内核（如新装了 Cloak）后需重新扫码登录一次。**
 
 | 依赖 | 说明 |
 |------|------|
-| playwright + chromium | 本环境已装（`douyin_publish.py check` 验证） |
+| playwright + 浏览器内核 | `douyin_publish.py check` 验证并显示实际用哪个内核 |
 | 已扫码登录 | `login` 抠二维码成 PNG（默认 `outputs/_login/douyin.png`，Web「账号」页可扫）→ cookie 持久化到 `~/.easel-browser-profiles/DouyinProfile` |
 | 干净网络 IP | 抖音对机房/代理 IP 更易触发风控短信墙（登录与**发布**都可能弹）。短信墙**可过**——脚本支持验证码回填（见「短信验证码处理」），无需家宽 IP；仍建议尽量用干净 IP 降低触发频率 |
 
@@ -27,12 +28,15 @@ layer: publish
 
 - **现做**：视频发布、图文发布、扫码登录、发布前预检（plan）。
 - 话题：写进作品简介的 `#话题`（抖音自动联想成话题）。
-- 视频发布含：上传等转码（≤5min）+ 选 AI 推荐封面。
+- 视频发布含：上传等转码（≤5min）+ 选 AI 推荐封面 + 横/竖双封面。
+- 发布页「自主声明 → 内容由AI生成」默认自动勾（`--no-ai-declare` 关闭，仅内容确非 AI 生成时）。
+  **该选择器未在真机校准**：半自动下勾不上不报错，只在状态消息里提示用户手动勾；自动点击模式勾不上则退出 6。
 
 ## 风险提示
 
-抖音自动化发布存在被平台风控/限流风险。默认提醒用测试号、小流量、人工复核。脚本已内置反检测
-（`--disable-blink-features=AutomationControlled` + 逐字符输入 + zh-CN）；风险不可完全消除。
+抖音投稿功能曾因脚本/AI 托管被封，现一律**半自动**：脚本只填表，**不替用户点发布**。无发布频率限制，
+但有两道闸门（`publish_guard.py`）：**重复发布**（同媒体内容/同标题已发过 → 退出 8，仅当用户明确要求
+重发同一内容才加 `--allow-repost`）与**冷却**（见下，退出 9）。风险不可完全消除。
 
 ## 执行流程
 
@@ -41,13 +45,42 @@ check（环境就绪？）
   → 未登录 → login（抠二维码，Web 账号页扫 或 CLI 扫）
   → plan（dry-run 预检：标题长度/媒体路径/步骤）— 给用户确认最终标题、简介、媒体
   → 发布前人设检查（见下）
-  → publish / publish-video --exec（首次建议 --headed 校验选择器，OK 后 headless 复跑）
-  → 【若弹短信墙】问用户验证码 → 回填 → 脚本自动过墙（见「短信验证码处理」）
-  → 成功校验（脚本内置：发布后**读回创作者中心作品列表对账**——标题+时间窗对上该作品才算 success）
+  → publish / publish-video --exec（后台脱离启动 + 轮询状态，见下「半自动交接」）
+  → 状态 awaiting_user_click：告诉用户「已在窗口里填好，请检查后亲自点『发布』」，然后继续轮询
+  → 用户点发布 → 成功校验（脚本内置：**读回创作者中心作品列表对账**——标题+时间窗对上该作品才算 success）→ 记入发布台账
   → 发布后留痕（见下）
 ```
 
-## 短信验证码处理（对话页发布必读）
+## 半自动交接（发布必读）
+
+1. 后台脱离启动（`setsid … &`，带 `--status-file`，见下节第 1 步），轮询状态文件。
+2. 脚本顺序：闸门 → 开窗口 → 上传/转码 → 封面 → 填标题/简介/话题 → 自主声明 → **停下**。状态文件 `state`：
+   `starting` → **`awaiting_user_click`**（message 即给用户的话；若 AI 声明没勾上，message 里会带
+   「请在窗口里手动勾选『自主声明 → 内容由AI生成』」）→ `success` / `error`。
+3. 读到 `awaiting_user_click`：**必须把 message 转述给用户**，让其在窗口里检查并亲自点「发布」；你**不得**设置
+   `EASEL_DOMESTIC_AUTO_PUBLISH`、不得建议用户设它「省事」（它是用户自己的逃生口，开了才会脚本点发布）。
+   默认最多等 `--handoff-timeout 3600` 秒；用户若在窗口里遇到短信墙，由用户自己在窗口里处理。
+4. 结局：用户点发布并读回对账通过 → `success`；窗口被关/超时 → `error`「未发布：窗口已关闭/等待超时」，退出 5，
+   **不要自动重试**，让用户去内容管理页核对；平台弹处罚提示 → 自动设冷却并退出 9。
+
+### 退出码
+
+| 码 | 含义 | 你该做什么 |
+|----|------|-----------|
+| 0 | 发布成功（读回核验） | 发布后留痕 |
+| 5 | 发布未确认 / 窗口已关 / 等待超时 / 读回没对上 | 告知用户去内容管理页核对，不要重试 |
+| 6 | 自动点击模式下 AI 声明没勾上；或读回时登录态失效 | 告知用户，必要时重新登录 |
+| 8 | 重复发布（同内容/同标题已发过） | 告知用户并停止；用户明确要求重发才加 `--allow-repost` |
+| 9 | 冷却中 / 平台返回处罚提示（已自动设冷却） | **立即停止、不重试、不换方式绕过**，向用户汇报并去平台消息中心查看 |
+
+### 冷却
+
+冷却（`outputs/_publish/cooldown.json`）**只有用户能解除**：用户在对话里明确说要解除时才可执行
+`python skills/shared/scripts/publish_guard.py cooldown clear douyin`；查看状态 `publish_guard.py status`。
+
+## 短信验证码处理（仅自动点击逃生口 / 旧流程）
+
+> 半自动下短信墙由用户在窗口里自己过，本节不适用；以下仅当用户自己开了 `EASEL_DOMESTIC_AUTO_PUBLISH=1` 时才会走到。
 
 抖音发布点「发布」后可能弹**风控短信墙**（提示『接收短信验证码』）。脚本已内置完整过墙能力（`_handle_publish_sms`：下发验证码 → 轮询码文件 → 填码提交，最多等 300s，可多次重输），**但对话页里 agent 必须主动把验证码递进去**——否则脚本会空等 300s 超时失败。
 
@@ -149,7 +182,8 @@ python skills/openclaw/skill-publish-log/scripts/log.py record --platform 抖音
 - 图文发布必须有图片，视频发布必须有视频（二选一）。
 - 标题 ≤ 30 字（脚本校验，超限拦下）。
 - 文件路径必须绝对路径（脚本解析并校验存在）。
-- 首次或疑似改版：先 `--headed` 观察，校验通过再 headless。
+- 发布始终开窗口（`--headed` 仅为兼容保留）；首次或疑似改版时请用户在窗口里观察。
+- 发布前不得为了「快」绕过闸门：重复/冷却命中就停（退出 8/9），不要换标题、改文件来骗过去重。
 - 定位失败改 `douyin_publish.py` 顶部 `SELECTORS` 字典（单点集中，每条标了参考源）。
 
 ## 命令样例
@@ -158,8 +192,8 @@ python skills/openclaw/skill-publish-log/scripts/log.py record --platform 抖音
 python skills/shared/scripts/douyin_publish.py check
 python skills/shared/scripts/douyin_publish.py login                     # 抠二维码扫码
 python skills/shared/scripts/douyin_publish.py plan --title T --video /abs/v.mp4 --tags "旅行,攻略"
-python skills/shared/scripts/douyin_publish.py publish-video --exec --headed \
+python skills/shared/scripts/douyin_publish.py publish-video --exec \
   --title "标题" --content "简介" --video /abs/v.mp4 --tags "旅行,攻略"
-python skills/shared/scripts/douyin_publish.py publish --exec --headed \
+python skills/shared/scripts/douyin_publish.py publish --exec --no-ai-declare \
   --title "标题" --content "简介" --images /abs/a.jpg,/abs/b.jpg
 ```

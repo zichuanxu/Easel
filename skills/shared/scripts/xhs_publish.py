@@ -11,6 +11,9 @@
 （EASEL_XHS_HEADLESS=1 可强开，仅限没有桌面的机器，很容易被识别）。
 另有发帖频率闸门（_activity_check）和「笔记含 AI 合成内容」声明（_declare_ai）。
 
+【半自动】默认（未设 EASEL_DOMESTIC_AUTO_PUBLISH=1）填完表单后停在发布按钮前，由用户亲自点「发布」，
+脚本只被动观察结果（semi_auto.await_human_publish）；真发前还过 publish_guard（冷却/重复，退出码 9/8）。
+
 移植的关键健壮技巧（源见各处 REF 注释）：
   - 切「上传图文/视频」tab：重试 + 遮挡检测 + 移除弹层
   - 逐图上传并等预览出现（≤60s）；视频等发布按钮可点击（≤10min = 处理完成）
@@ -45,6 +48,8 @@ import login_state  # noqa: E402
 import content_guard  # noqa: E402  出站内容安全闸门
 import human_input  # noqa: E402  真人节奏的鼠标/键盘
 import real_browser  # noqa: E402  可见真实浏览器启动器（Cloak/Chrome）
+import publish_guard  # noqa: E402  发布闸门：平台冷却 + 重复发布拦截
+import semi_auto  # noqa: E402  半自动交接：填完表单停在发布按钮前，由人亲自点发布
 
 # --------------------------------------------------------------------------- #
 # 选择器集中维护（小红书改版时单点更新）。REF = xiaohongshu-mcp 对应源。
@@ -109,6 +114,7 @@ def calc_title_length(s: str) -> int:
 
 def _die(msg: str, code: int = 1) -> None:
     print(f"ERROR: {msg}", file=sys.stderr)
+    semi_auto.note_exit_reason(msg)
     sys.exit(code)
 
 
@@ -471,32 +477,81 @@ def _confirm_publish_dialog(page) -> None:
         page.wait_for_timeout(500)
 
 
-def _wait_publish_success(page, timeout_s: int = 40) -> None:
-    """发布成功校验：小红书发布成功后**原地清空表单回到上传页**（不换 URL）。
+# 只收确属 toast/通知的容器（不含 [class*=message]：会匹配消息列表等普通区域，误判处罚/成功）
+XHS_TOAST_SELECTORS = (".d-message", ".d-toast", ".d-notification", "[class*=toast]", "[role=alert]")
+# 小红书发布成功后跳到的页面（URL 片段）
+XHS_POST_PUBLISH_URL_MARK = "/publish/success"
+EXIT_NOT_PUBLISHED = 1   # 窗口被关 / 等用户点发布超时：未发布，不重试
+
+
+def _publish_succeeded(page) -> str:
+    """发布成功的非阻塞判定：返回成功依据文字，没成功返回空串。
+    小红书发布成功后**原地清空表单回到上传页**（不换 URL）。
     成功信号任一：跳离 /publish/publish、出现「成功」toast、或编辑表单已重置（标题框+图片预览消失）。"""
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        if "/publish/publish" not in page.url:
-            print(f"✅ 发布成功，已跳转：{page.url}")
-            return
-        for sel in (".d-message", ".d-toast", "[class*=toast]", "[class*=message]"):
-            try:
-                el = page.query_selector(sel)
-                if el and el.is_visible() and "成功" in (el.inner_text() or ""):
-                    print("✅ 发布成功（检测到成功提示）")
-                    return
-            except Exception:
-                pass
-        # 表单已重置：填过的标题框 + 上传的图片预览都消失 = 已提交回到空上传页
+    if "/publish/publish" not in page.url:
+        return f"已跳转：{page.url}"
+    for sel in (".d-message", ".d-toast", "[class*=toast]", "[class*=message]"):
         try:
-            if (not page.query_selector(SELECTORS["title_input"])
-                    and not page.query_selector(SELECTORS["img_preview"])):
-                print("✅ 发布成功（编辑表单已清空复位）")
-                return
+            el = page.query_selector(sel)
+            if el and el.is_visible() and "成功" in (el.inner_text() or ""):
+                return "检测到成功提示"
         except Exception:
             pass
+    # 表单已重置：填过的标题框 + 上传的图片预览都消失 = 已提交回到空上传页
+    try:
+        if (not page.query_selector(SELECTORS["title_input"])
+                and not page.query_selector(SELECTORS["img_preview"])):
+            return "编辑表单已清空复位"
+    except Exception:
+        pass
+    return ""
+
+
+def _publish_succeeded_strict(page) -> str:
+    """半自动模式的严格成功判定：只认「发布成功」toast，或跳到已知的发布成功页（/publish/success）。
+    **不认**：泛泛的「成功」（如「上传成功」「保存成功」）、表单被清空、URL 只是离开了 /publish/publish
+    （登录过期被踢去 /login 也会离开）。返回成功依据文字，没成功返回空串。
+    自动点击逃生口仍走较宽松的 `_publish_succeeded`（行为不变）。"""
+    try:
+        if XHS_POST_PUBLISH_URL_MARK in (page.url or ""):
+            return f"已跳转到发布成功页：{page.url}"
+    except Exception:
+        return ""
+    try:
+        if any("发布成功" in t for t in semi_auto._toast_texts(page, XHS_TOAST_SELECTORS)):
+            return "检测到「发布成功」提示"
+    except Exception:
+        return ""
+    return ""
+
+
+def _scan_block_toasts(page) -> str | None:
+    """扫 toast/通知元素文本里的平台处罚提示；命中则设冷却并返回原文，否则 None。"""
+    try:
+        texts = semi_auto._toast_texts(page, XHS_TOAST_SELECTORS)
+    except Exception:
+        return None
+    for text in texts:
+        if publish_guard.classify_block_text(text):
+            publish_guard.on_block_detected("xiaohongshu", text)
+            return text
+    return None
+
+
+def _wait_publish_success(page, timeout_s: int = 40) -> None:
+    """（自动点击逃生口路径）点发布后等成功信号；期间扫 toast，命中处罚提示 → 设冷却并 exit 9。"""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if _scan_block_toasts(page):
+            sys.exit(publish_guard.EXIT_COOLDOWN)
+        how = _publish_succeeded(page)
+        if how:
+            print(f"✅ 发布成功（{how}）")
+            return
         page.wait_for_timeout(500)
-    _die("发布未确认成功：点击发布后未跳离发布页/未见成功提示。" + _diag_after_publish(page))
+    if _scan_block_toasts(page):
+        sys.exit(publish_guard.EXIT_COOLDOWN)
+    _die("发布未确认成功：点击发布后未跳离发布页/未见成功提示（不要自动重试，请到创作中心核对）。" + _diag_after_publish(page))
 
 
 def _normalize_content(text: str) -> str:
@@ -584,9 +639,12 @@ def _declare_ai(page) -> bool:
     return _ai_declared(page)
 
 
-def _fill_and_submit(page, title, content, tags, declare_ai: bool = True, on_click=None):
-    """标题→正文→话题→AI 声明→长度校验→发布→成功校验。
-    on_click：点下发布按钮后立刻调用（记频率闸门）——之后等成功提示超时，帖子也可能已经发出去了。"""
+AI_DECLARE_MANUAL_NOTE = "请在窗口里手动勾选 AI 声明"
+
+
+def _fill_form(page, title, content, tags, declare_ai: bool, semi: bool) -> str:
+    """标题→正文→话题→AI 声明→长度校验。返回交接时要提醒用户的附加说明（没有则空串）。
+    AI 声明勾不上：半自动模式不退出，改为提醒用户在窗口里手动勾；自动逃生口模式仍 exit 6（宁可不发）。"""
     content = _normalize_content(content)         # 修连续空行导致的发布失败
     title_el = page.query_selector(SELECTORS["title_input"])
     if not title_el:
@@ -602,10 +660,56 @@ def _fill_and_submit(page, title, content, tags, declare_ai: bool = True, on_cli
     human_input.click(page, title_el)  # REF waitAndClickTitleInput：回点标题增强稳定性
     _input_tags(page, content_el, tags)
 
+    note = ""
     if declare_ai and not _declare_ai(page):
-        _die(AI_DECLARE_FAILED_MSG, 6)
+        if not semi:
+            _die(AI_DECLARE_FAILED_MSG, 6)
+        note = AI_DECLARE_MANUAL_NOTE
 
     _check_overflow(page)
+    return note
+
+
+def _status_note_callback(status_file, note: str):
+    """on_status 回调：await_human_publish 写完 awaiting_user_click 后，把附加说明补进状态文件的 message。"""
+    if not note:
+        return None
+
+    def cb(state: str, message: str) -> None:
+        if state == "awaiting_user_click":
+            print(f"⚠️ {note}", flush=True)
+            try:
+                login_state.write_status(status_file, state, f"{message} {note}。")
+            except OSError:
+                pass
+    return cb
+
+
+def _fill_and_submit(page, title, content, tags, declare_ai: bool = True, on_click=None,
+                     semi: bool | None = None, status_file: str | None = None,
+                     handoff_timeout: float = 3600, on_unconfirmed=None) -> str:
+    """填表单 →（半自动）停在发布按钮前等用户亲自点发布 /（逃生口）自动点发布 → 成功判定。
+    返回 "published"；其它结局（窗口关闭/超时/处罚提示/失败）直接 sys.exit，不重试。
+    on_click：发布后记频率闸门（半自动＝检测到用户已发布时；自动＝点下发布按钮后立刻）。
+    on_unconfirmed：自动路径已点发布但结果未确认时调用（调用方借此记账防误二发，见 _publish）。"""
+    if semi is None:
+        semi = not semi_auto.auto_click_allowed("xiaohongshu")
+    note = _fill_form(page, title, content, tags, declare_ai, semi)
+
+    if semi:
+        outcome = semi_auto.await_human_publish(
+            page, platform="xiaohongshu", is_published=lambda pg: bool(_publish_succeeded_strict(pg)),
+            toast_selectors=XHS_TOAST_SELECTORS, status_file=status_file,
+            timeout_s=handoff_timeout, on_status=_status_note_callback(status_file, note))
+        if outcome == "blocked":
+            sys.exit(publish_guard.EXIT_COOLDOWN)
+        if outcome != "published":
+            why = "窗口已被关闭" if outcome == "closed" else "等待你点击发布超时"
+            _die(f"小红书未发布：{why}，没有确认发布成功。请先到创作中心核对，不要自动重试。", EXIT_NOT_PUBLISHED)
+        print("✅ 小红书发布成功（用户亲自点击，脚本检测到发布结果）")
+        if on_click:
+            on_click()
+        return "published"
 
     kind, btn = _wait_publish_clickable(page, 15)
     human_input.pause(page, 1500, 4000)   # 发之前回看一眼
@@ -619,7 +723,14 @@ def _fill_and_submit(page, title, content, tags, declare_ai: bool = True, on_cli
         on_click()
     page.wait_for_timeout(1000)
     _confirm_publish_dialog(page)   # 若弹二次确认框，点确认
-    _wait_publish_success(page, 40)
+    try:
+        _wait_publish_success(page, 40)
+    except SystemExit as e:
+        # 已点过发布但没确认成功（非平台处罚）：记一笔 unconfirmed，让重复闸门挡住误二发
+        if e.code != publish_guard.EXIT_COOLDOWN and on_unconfirmed:
+            on_unconfirmed()
+        raise
+    return "published"
 
 
 # --------------------------------------------------------------------------- #
@@ -1020,6 +1131,7 @@ def cmd_login(a) -> int:
     """开 Chrome 窗口登录（二维码也抠成 PNG 供 Web 显示），登录成功并确认登录态已落盘后才报成功。
     REF login.go FetchQrcodeImage/WaitForLogin。远程无桌面环境靠图片扫码，非有头窗口；
     --headed-fallback：仅 EASEL_XHS_HEADLESS=1 时有用，无头被风控拦就改开窗口。"""
+    publish_guard.warn_if_cooldown("xiaohongshu")   # 登录由用户主动发起：冷却期内不拦，只警告
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
@@ -1071,10 +1183,11 @@ def _plan_lines(kind: str, title: str, content: str, media: list[str], tags: lis
         f"  2. 点 tab「{tab}」（重试+遮挡检测）",
         f"  3. {'逐图上传等预览(≤60s/张)' if kind == 'image' else '上传视频等处理(≤10min)'}",
         "  4. 输标题/正文（鼠标点进去，按词组输入）+ 话题联想点选",
-        "  5. 勾「笔记含AI合成内容」声明（--no-ai-declare 跳过；勾不上就停，不发）",
+        "  5. 勾「笔记含AI合成内容」声明（--no-ai-declare 跳过；半自动下勾不上则提醒你手动勾）",
         "  6. 平台 DOM 长度校验",
-        "  7. 等发布按钮可点击（新版<xhs-publish-btn>/旧版.bg-red）→ 鼠标移过去点",
-        "  8. 成功校验：URL 离开 /publish/publish",
+        ("  7. 【半自动】停在发布按钮前，由你亲自点「发布」（脚本不点）" if not semi_auto.auto_click_allowed("xiaohongshu")
+         else "  7. 【自动逃生口已开】等发布按钮可点击 → 鼠标移过去点"),
+        "  8. 成功校验：URL 离开 /publish/publish / 成功提示 / 表单复位（成功后才记账）",
     ]
     return lines
 
@@ -1155,7 +1268,19 @@ def cmd_plan(a) -> int:
     return 0
 
 
+def _record_unconfirmed(media, title: str) -> None:
+    """自动点击路径：已点发布但结果未确认 → 记账（unconfirmed），防止误二发。记账失败不影响退出。"""
+    try:
+        publish_guard.record_publish("xiaohongshu", media, title, url="", unconfirmed=True)
+        print("⚠️ 发布结果未确认，已按「可能已发出」记账（unconfirmed）；再发同内容会被重复闸门拦下。", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠️ 未确认发布的记账失败：{e}", file=sys.stderr)
+
+
 def _publish(a, kind: str) -> int:
+    sf_pub = getattr(a, "status_file", None)
+    if sf_pub:
+        semi_auto.guard_status_on_exit(sf_pub)   # 任何退出路径：状态文件停在非终态时补写 error
     if not a.title:
         _die("--title 必填")
     if calc_title_length(a.title) > TITLE_MAX:
@@ -1177,8 +1302,8 @@ def _publish(a, kind: str) -> int:
                                allow_unsafe=getattr(a, "allow_unsafe", False),
                                label="小红书发布内容")
 
-    left, why = activity_budget(a.profile_base, "publish")
     declare_ai = not getattr(a, "no_ai_declare", False)
+    left, why = activity_budget(a.profile_base, "publish")
     if not a.exec:
         print("dry-run（加 --exec 真正发布）：\n")
         for ln in _plan_lines(kind, a.title, a.content or "", media, tags):
@@ -1187,6 +1312,9 @@ def _publish(a, kind: str) -> int:
         if not left:
             print(f"⚠️ 现在 --exec 会被频率闸门拦下：{why}")
         return 0
+    # 发布闸门：平台冷却（exit 9）+ 重复发布（exit 8）。放在起浏览器之前。
+    publish_guard.guard_before_publish("xiaohongshu", media, a.title,
+                                       allow_repost=getattr(a, "allow_repost", False))
     if not left:
         _die(f"小红书发得太密，这次不发：{why}", 5)
 
@@ -1228,7 +1356,13 @@ def _publish(a, kind: str) -> int:
                     _upload_video(page, media[0])
                 human_input.pause(page, 1000, 3000)
                 _fill_and_submit(page, a.title, a.content or "", tags, declare_ai=declare_ai,
-                                 on_click=lambda: record_activity(a.profile_base, "publish"))
+                                 on_click=lambda: record_activity(a.profile_base, "publish"),
+                                 status_file=getattr(a, "status_file", None),
+                                 handoff_timeout=getattr(a, "handoff_timeout", 3600),
+                                 on_unconfirmed=lambda: _record_unconfirmed(media, a.title))
+                # 已确认发布成功 → 记账（供重复拦截）
+                publish_guard.record_publish("xiaohongshu", media, a.title)
+                semi_auto.report_final(sf_pub, "success", "发布成功（已检测到「发布成功」）。")
             except PWTimeout as e:
                 _die(f"步骤超时（选择器可能已失效，检查 SELECTORS）：{e}")
             finally:
@@ -1274,6 +1408,8 @@ def cmd_whoami(a) -> int:
         print(json.dumps({"loggedIn": _marker_logged_in(), "name": "", "avatar": "", "passive": True},
                          ensure_ascii=False))
         return 0
+    publish_guard.exit_if_cooldown("xiaohongshu", "登录态校验",
+                                   stdout_json={"loggedIn": False, "name": "", "avatar": ""})
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
@@ -1417,6 +1553,11 @@ def main() -> int:
         p.add_argument("--keep-open", action="store_true", help="发布后不关浏览器")
         p.add_argument("--no-ai-declare", action="store_true",
                        help="不勾「笔记含AI合成内容」（仅当内容确实不是 AI 生成/合成的）")
+        p.add_argument("--allow-repost", action="store_true",
+                       help="放行重复发布拦截（仅当用户明确要求重发同一内容）")
+        p.add_argument("--handoff-timeout", type=float, default=3600,
+                       help="半自动：等用户亲自点「发布」的最长秒数（默认 3600）")
+        p.add_argument("--status-file", help="半自动状态 JSON 输出路径（awaiting_user_click / success / error）")
 
     sub.add_parser("check", help="检查 playwright/内核").set_defaults(func=cmd_check)
 
