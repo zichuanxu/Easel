@@ -97,20 +97,29 @@ cd <项目根> && python skills/shared/scripts/persona_gate.py check --score <�
 
 ---
 
-## Step 5：发布命令
+## Step 5：发布命令（半自动）
+
+- **半自动**：`--exec` 后脚本在**可见的真实浏览器窗口**里把内容全部填好，**停在「发布回答」前**，由用户亲自检查并点击；
+  脚本只被动观察结果（成功才记账）。**agent 不得替用户点发布，也不得设置/建议设置 `EASEL_DOMESTIC_AUTO_PUBLISH=1`**
+  （该逃生口只能用户自己开）。状态文件（`--status-file`）会出现 `awaiting_user_click`；等用户点的最长时间 `--handoff-timeout`（默认 3600 秒）。
+- **发布闸门**（起浏览器前）：同平台 30 天内媒体/标题重复 → 退出码 **8**（仅当用户明确要求重发才加 `--allow-repost`）；
+  平台冷却 → 退出码 **9**，任何参数都绕不过，**只有用户能解除**（`python skills/shared/scripts/publish_guard.py cooldown clear --platform <平台>`，agent 不要主动清）。
+- **fail-stop**：窗口被关/等点击超时 → 提示「未发布」并非零退出，**不要自动重试**；检测到平台处罚/限流 toast → 设冷却并退出 9，先向用户汇报。
+- 状态文件：用户点击后先是非终态 `verifying`（正在核对），核对通过才写 `success`；任何失败/未确认出口都写 `error`。dry-run 只打印计划（含冷却/重复状态），**不启动浏览器**。
+- 不做发布频率限制（小红书原有间隔闸门保持不变）。
+- 重复拦截按**问题 id** 计：同一问题 30 天内回答过会退出码 8。
+- **浏览器内核**：同 `real_browser`（CloakBrowser → 本机 Chrome/Edge，与专栏共用 `ZhihuProfile`，`EASEL_ZHIHU_BROWSER=chrome` 强制 Chrome）；
+  **升级后需在账号页重新扫码登录一次**。内容含 AI 时交接提示提醒手动勾 AI 声明（`--no-ai-declare` 关闭提醒）。
+- 「已发布」靠被动检测（URL 变成 `.../answer/<id>` 或「发布成功」toast），未真机校准；检测不到会报「未发布/未确认」，请用户到知乎核对，不要重试。
 
 ```bash
 # Dry-run 预检（默认，不真正发布）
 cd <项目根> && python skills/shared/scripts/zhihu_answer.py \
     --question <问题URL> --content-file <回答内容.md>
 
-# 正式发布
+# 正式发布（开窗口填好回答，停在『发布回答』前，由用户亲自点）
 cd <项目根> && python skills/shared/scripts/zhihu_answer.py \
     --question <问题URL> --content-file <回答内容.md> --exec
-
-# 调试模式（有头浏览器，首次校验选择器时用）
-cd <项目根> && python skills/shared/scripts/zhihu_answer.py \
-    --question <问题URL> --content-file <回答内容.md> --exec --headed
 ```
 
 ---
@@ -130,7 +139,7 @@ cd <项目根> && python skills/shared/scripts/zhihu_answer.py \
 
 ---
 
-## 核心实现：点击「发布回答」按钮
+## 核心实现：点击「发布回答」按钮（仅自动逃生口模式；半自动由用户点）
 
 > **根本原因**：内容输入后按钮可能滚出视口，`wait_for(state="visible")` 超时；且同页有
 > 「发布设置」与「发布回答」两个含「发布」的按钮，需精确匹配「发布回答」。
@@ -161,7 +170,7 @@ cd <项目根> && python skills/openclaw/skill-publish-log/scripts/log.py record
 
 ## 批量发布多个问题
 
-1. 列出问题 URL + 对应内容文件；2. 批量检查可答状态；3. 制作层**写完全部内容再发布**（避免写一篇发一篇的上下文碎片化）；4. 逐题**串行**发布（同一浏览器 Profile 不并发）；5. 每题间隔约 30 秒降低风控。
+1. 列出问题 URL + 对应内容文件；2. 批量检查可答状态；3. 制作层**写完全部内容再发布**（避免写一篇发一篇的上下文碎片化）；4. 逐题**串行**发布（同一浏览器 Profile 不并发）；5. 每题半自动交接，等用户点完再开下一题，不要并行。
 
 ---
 

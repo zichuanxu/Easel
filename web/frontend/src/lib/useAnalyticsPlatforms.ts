@@ -19,8 +19,8 @@ export function useAnalyticsPlatforms(onLoggedIn?: (platform: string) => void) {
       const cache = getWhoamiCache();
       const first = ps.find((p) => p.loggedIn || !!cache[p.platform]?.loggedIn);
       if (first) cb.current?.(first.platform);
-      // 开页后台自愈：对非 API 式的归因平台真校验（whoami），刷新登录态；
-      // B 站走 cookie、公众号走凭证/官方 API 判定，都不起浏览器。
+      // 开页后台自愈：对非 API 式的归因平台调 whoami 刷新登录态。国内浏览器平台后端只读登录标记/缓存、
+      // 不起浏览器（手动校验才真起）；B 站走 cookie、公众号走凭证/会话判定，也不起浏览器。
       const API_BASED = new Set(['bilibili', 'wechat-oa']);
       verifyStale(ps.filter((p) => !API_BASED.has(p.platform)).map((p) => p.platform), {
         onUpdate: (platform, r) => {

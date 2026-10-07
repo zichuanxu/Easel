@@ -74,10 +74,11 @@ export default function AccountsPage() {
     return () => { aliveRef.current = false; };
   }, []);
 
-  // 真校验某平台登录态 + 拉昵称/头像（后端起浏览器，数秒）；手动「校验账号」或登录成功后调
-  const runWhoami = useCallback((platform: string) => {
+  // 校验某平台登录态 + 拉昵称/头像；手动「校验账号」或登录成功后调。
+  // manual=true（只有点「校验账号」按钮）国内浏览器平台才会真起浏览器，其余只读登录标记/缓存。
+  const runWhoami = useCallback((platform: string, manual = false) => {
     setWhoami((w) => ({ ...w, [platform]: 'loading' }));
-    accountWhoami(platform)
+    accountWhoami(platform, manual)
       .then((r) => { if (aliveRef.current) { setWhoami((w) => ({ ...w, [platform]: r })); setWhoamiCache(platform, r); } })
       .catch(() => {
         if (aliveRef.current) setWhoami((w) => { const n = { ...w }; delete n[platform]; return n; });
@@ -319,7 +320,7 @@ export default function AccountsPage() {
         <span className="account-actions">
           {logged ? (
             <>
-              <Button size="sm" disabled={busyFor(a) || w === 'loading'} onClick={() => runWhoami(a.platform)}>
+              <Button size="sm" disabled={busyFor(a) || w === 'loading'} onClick={() => runWhoami(a.platform, true)}>
                 {w === 'loading' ? '校验中…' : '校验'}
               </Button>
               <Button size="sm" disabled={logoutBusy === a.platform} onClick={() => handleLogout(a)}>

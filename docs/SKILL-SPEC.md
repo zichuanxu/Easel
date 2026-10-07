@@ -154,6 +154,15 @@ Schema：`{topic, profile, created, updated, title, summary, platform, kind, sta
 
 任何把文本**发到公开平台**的脚本（xhs/douyin/web_publisher/xhs_comment/zhihu_answer 等），在真发（`--exec`）前**必须**过 `skills/shared/scripts/content_guard.py` 的 `guard_or_die(...)`。**分两级**（见 `BLOCK_CATEGORIES`）：**BLOCK 级**=真·敏感信息（API key、内部 URL/域名、代理 IP、内部路径、env 名 + `.env` 真值）→ **fail-closed 退出码 7 阻止发布**；**WARN 级**=AI 措辞（由 AI 生成/OpenClaw/Claude/system prompt/大模型）与模型名（claude-*/gpt-image-2）→ 论文解读、AI 科普里可能是正常内容，**只提醒不拦截**。dry-run 全部只告警。放行硬拦须显式 `--allow-unsafe`。新增发布类脚本照此接入。
 
+## 发布闸门与半自动契约（发布类脚本）
+
+在 content_guard 之外，发布脚本还必须遵守（`scripts/validate_skills.py` 的 `PUBLISH_SCRIPT_CONTRACTS` 强制检查 `publish_guard.guard_before_publish`；公众号草稿类 `publish.py` / `multi_publish.py` 只建草稿，豁免）：
+
+- **真发前调用** `publish_guard.guard_before_publish(platform, media_paths, title, allow_repost=...)`：先查平台冷却（exit 9，`EXIT_COOLDOWN`），再查重复发布（同平台、同媒体 sha256 或同归一化标题、30 天内；exit 8，`EXIT_DUPLICATE`）。跨平台发同一条内容不算重复。发布成功后调用 `record_publish(...)` 记账（`outputs/_publish/ledger.jsonl`，冷却在 `outputs/_publish/cooldown.json`）。
+- **fail-stop**：发布失败或结果未确认时不得自动重试同一平台；检测到平台处罚/限流 toast（`classify_block_text`，只对 toast/通知元素文本用）时调用 `on_block_detected` 并以 exit 9 退出。`--allow-repost` 与 `cooldown clear` 只在用户明确要求时使用。
+- **国内浏览器平台半自动**（抖音/小红书/视频号/快手/知乎）：用 `real_browser.launch` 开可见真实浏览器（Cloak → 本机 Chrome/Edge → 自带 Chromium；每平台独立登录目录 + 固定指纹文件），填完表单后由 `semi_auto.await_human_publish` 停在发布按钮前，由用户亲自点击「发布」；脚本只被动观察结果。`EASEL_DOMESTIC_AUTO_PUBLISH=1` 才允许自动点击，仅用户可设，agent 不得设置。
+- **不做**发布频率限制、不做国内平台的后台抓取/探测。
+
 **有界编排约定**：manifest 只当**薄索引**（`summary` 一行给编排层路由 + `outputs[]` 指路径），**不复制内容**。跨层要传的东西分两类，都落 `outputs/<主题>/` 成文件，不留在对话里：
 - **产物（载荷）**：脚本/图/视频/文案 → 写文件，`--outputs` 指过去，下游按路径读全文。
 - **决策/意图**（基调、受众、钩子、do/don't 等不体现在产物里的）→ 写进 `outputs/<主题>/brief.md`（策划层的创作简报），同样列入 `--outputs`。

@@ -33,7 +33,9 @@ layer: general
 ## 能力范围
 
 - **查登录身份 `whoami`**（轻量，秒级）：某平台是否登录 + 昵称 + 头像。回答"我是谁 / 登录了吗 / 我的账号名"。
-- **查创作数据 `account_stats fetch`**：粉丝 / 获赞 / 关注 / 作品数 + **作品列表（标题 + 链接 + 每条数据）**。回答"我多少粉丝 / 最近发了什么 / 我有哪些帖子 / 获赞多少"。
+- **查创作数据 `account_stats fetch`**（会起浏览器访问平台，**仅在用户明确要求「现在查/刷新」时才跑**，不要为凑答案、定时或顺手而抓；
+  平台处于发布冷却期时脚本直接拒绝，退出码 `9`，改读 `outputs/_analytics/<平台>-latest.json` 里的缓存并告诉用户）：粉丝 / 获赞 / 关注 / 作品数 + **作品列表（标题 + 链接 + 每条数据）**。
+  抓取与发布用**同一套浏览器引擎和登录目录**（Cloak → 本机 Chrome，登录态通用）；默认会弹出可见窗口，仅 `EASEL_<平台>_HEADLESS=1`（无桌面机器）才无头。回答"我多少粉丝 / 最近发了什么 / 我有哪些帖子 / 获赞多少"。
 - **评论**：某条帖子的评论抓取与分析不在本 SKILL——用 **skill-xhs-comment-reply**（抓评论）+ **skill-comment-insights**（情感/诉求分析）。
 
 ## 支持平台
@@ -51,7 +53,8 @@ account_stats fetch `--platform`：`xiaohongshu` / `douyin` / `kuaishou` / `zhih
 ```
 判断用户问的是「身份」还是「数据」
   ├ 身份（我是谁/登录了哪些号） → whoami（可多平台各跑一次）
-  └ 数据（粉丝/帖子/获赞/最近发啥） → account_stats.py fetch --platform <平台>
+  └ 数据（粉丝/帖子/获赞/最近发啥） → 先读缓存 outputs/_analytics/<平台>-latest.json（注明更新时间）；
+        用户明确要最新才 account_stats.py fetch --platform <平台>（国内平台不后台自动抓，被判第三方脚本会封号）
         ├ logged_in=true  → 按用户问题提取对应字段回答（粉丝数 / 最近 N 条作品标题+链接 …）
         └ logged_in=false → 提示"你还没登录 X，去『账号』页扫码"
 ```
@@ -67,6 +70,7 @@ account_stats fetch `--platform`：`xiaohongshu` / `douyin` / `kuaishou` / `zhih
 
 ## 约束
 
+- 国内平台（小红书/抖音/快手/知乎/视频号/公众号）一律**不做后台/定时抓取**；Web 创作数据页只在用户点「刷新数据」时才抓，其余显示缓存。
 - 只读登录态、不改；登录/退出让用户去 Web「账号」页。
 - 未登录不报错收场，明确提示去哪登录。
 - 作品链接原样给出（小红书 explore 链接、知乎 zhuanlan/p 链接；快手无公开链接则说明）。

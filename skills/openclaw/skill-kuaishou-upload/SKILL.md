@@ -24,6 +24,19 @@ layer: publish
 发布成功输出形如 `✅ 快手发布成功（读回核验：作品 <id>，<状态>；账号：<昵称>）`——
 该判定来自**平台作品列表对账**（不是「点完就算」）；未核实的档位会在输出里明确写出原因与「先别重发」提示。
 
+## 半自动发布与发布闸门（默认，必读）
+
+- **半自动**：`--exec` 后脚本在**可见的真实浏览器窗口**里把内容全部填好，**停在「发布」前**，由用户亲自检查并点击；
+  脚本只被动观察结果（成功才记账）。**agent 不得替用户点发布，也不得设置/建议设置 `EASEL_DOMESTIC_AUTO_PUBLISH=1`**
+  （该逃生口只能用户自己开）。状态文件（`--status-file`）会出现 `awaiting_user_click`；等用户点的最长时间 `--handoff-timeout`（默认 3600 秒）。
+- **发布闸门**（起浏览器前）：同平台 30 天内媒体/标题重复 → 退出码 **8**（仅当用户明确要求重发才加 `--allow-repost`）；
+  平台冷却 → 退出码 **9**，任何参数都绕不过，**只有用户能解除**（`python skills/shared/scripts/publish_guard.py cooldown clear --platform <平台>`，agent 不要主动清）。
+- **fail-stop**：窗口被关/等点击超时 → 提示「未发布」并非零退出，**不要自动重试**；检测到平台处罚/限流 toast → 设冷却并退出 9，先向用户汇报。
+- 不做发布频率限制（小红书原有间隔闸门保持不变）。
+- **浏览器内核**：同 `real_browser`（CloakBrowser → 本机 Chrome/Edge，`EASEL_KUAISHOU_BROWSER=chrome` 强制 Chrome，`EASEL_KUAISHOU_HEADLESS=1` 仅无桌面机器）。
+  **从旧版升级后需重新扫码登录一次**。成功判定仍是读回对账：用户点完后脚本检测到跳转再读回作品列表。
+- 内容是 AI 生成时，交接提示会提醒手动勾选平台 AI 声明（`--no-ai-declare` 关闭提醒；脚本不自动勾）。
+
 ## 执行
 
 脚本：`../../shared/scripts/web_publisher.py`（各子命令 `-h`）。
@@ -35,7 +48,7 @@ python <ROOT>/skills/shared/scripts/web_publisher.py plan    --platform kuaishou
   --media out.mp4 --title "标题" --tags "#恐怖故事 #都市怪谈 #灵异事件"
 # 有头执行，便于首次核对选择器：
 python <ROOT>/skills/shared/scripts/web_publisher.py publish --platform kuaishou \
-  --media out.mp4 --title "标题" --tags "#话题1 #话题2 #话题3 #话题4" --exec --headed
+  --media out.mp4 --title "标题" --tags "#话题1 #话题2 #话题3 #话题4" --exec   # 开窗口填好，停在『发布』前等你点
 ```
 
 ## 登录态：确认「真能发」而不只是「已登录」
@@ -56,7 +69,7 @@ python <ROOT>/skills/shared/scripts/web_publisher.py publish --platform kuaishou
 1. 快手以竖版 9:16 为主，横版素材先用 video-reframe 转竖版；发布走视频流程，只收视频。
 2. **话题标签最多 4 个**：超过报「话题标签数量超过上限：4」，`--tags` 控制在 4 个以内。
 3. 发布前先 `plan` 预览、`--headed` 目视确认；确认无误再无头批量。
-4. **发布按钮靠 JS 派发点击**（脚本已用 `js_click`）：底部提交按钮 class 带哈希后缀（如
+4. （仅自动逃生口模式）**发布按钮靠 JS 派发点击**，且只点一次、失败不补点（脚本已用 `js_click`）：底部提交按钮 class 带哈希后缀（如
    `_button-primary_xxx`）、每次改版都变，纯 CSS `:has-text('发布')` 在 headless 下命中不稳；
    脚本改为定位「可见 + `innerText=='发布'` + class 含 `button-primary`」的元素派发点击。
    注意别误点右上角下拉菜单里的「发布作品」（那不是提交按钮）。

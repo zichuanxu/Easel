@@ -25,7 +25,7 @@ python skills/shared/scripts/zhihu_answer.py \
 {"success": true, "url": "...", "dry_run": true}
 ```
 
-## 2. 正式发布
+## 2. 正式发布（半自动：窗口里填好，停在『发布回答』前，由用户亲自点）
 
 ```bash
 python skills/shared/scripts/zhihu_answer.py \
@@ -34,13 +34,16 @@ python skills/shared/scripts/zhihu_answer.py \
     --exec
 ```
 
-## 3. 有头模式（调试/首次校验）
+## 3. 其它参数（`--headed` 仅兼容保留，发布一律开窗口）
+
+`--allow-repost`（仅用户明确要求重答同一问题）、`--handoff-timeout 3600`、`--status-file <json>`、`--no-ai-declare`。
+退出码：8 重复拦截 / 9 平台冷却（只有用户能解除）。
 
 ```bash
 python skills/shared/scripts/zhihu_answer.py \
     --question "https://www.zhihu.com/question/XXXXX" \
     --content-file "outputs/<主题>/answer.md" \
-    --exec --headed
+    --exec --status-file outputs/_login/zhihu-answer.json
 ```
 
 ## 4. 检查问题可答状态（批量，临时脚本逻辑）

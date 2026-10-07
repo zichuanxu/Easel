@@ -44,8 +44,8 @@ from easel.gateway_endpoint import chat_completions_url, healthz_url, port_sourc
 from easel.openclaw_cmd import openclaw_base_cmd
 from easel.openclaw_workspace import config_path as openclaw_config_path, state_dir as openclaw_state_dir
 from easel.persona import load_profile_text, persona_prefix, chat_turn_message, profile_exists, _FILE_ORDER
-from easel.timeouts import (TIMEOUT_CHAT, TIMEOUT_DIRECT, TIMEOUT_PRODUCE, TIMEOUT_PUBLISH,
-                            TIMEOUT_XHS_PUBLISH)
+from easel.timeouts import (PUBLISH_HANDOFF_TIMEOUT, TIMEOUT_CHAT, TIMEOUT_DIRECT, TIMEOUT_PRODUCE,
+                            TIMEOUT_PUBLISH, TIMEOUT_PUBLISH_SEMI_AUTO)
 try:
     from easel.gateway_questions import (
         GatewayClient, GatewayQuestionError, GatewayQuestionGoneError,
@@ -3782,13 +3782,15 @@ async def api_mp_login_status(platform: str):
 
 
 @app.get("/api/accounts/{platform}/whoami")
-async def api_account_whoami(platform: str):
-    """真校验登录态 + 读昵称/头像（起 headless 浏览器，数秒）。前端开页后台调用以自愈假阳性。
+async def api_account_whoami(platform: str, manual: int = 0):
+    """校验登录态 + 读昵称/头像。海外平台起 headless 浏览器真校验（数秒）；国内浏览器平台
+    （DOMESTIC_BROWSER_PLATFORMS）默认只读登录标记/缓存，不起浏览器，用户手动点「校验账号」
+    （?manual=1）才真校验（冷却期内拒绝）。前端开页后台调用以自愈假阳性。
     带 TTL 进程内缓存（避免账号页+工作台重复起浏览器）；确认已登录则回写标记，令快速路径自愈。
     结果附带 loginTs（登录标记指纹，见 /api/accounts）：前端缓存记住它，标记再变就知道缓存过时了。
     校验暂缓（pending：登录进行中 / 结论过时）的结果 loginTs 给 null：前端照样会缓存它，但下次
     /api/accounts 的指纹一比就对不上、作废重验，不会把这份没昵称的已知状态顶满 10 分钟。"""
-    data = await _account_whoami(platform)
+    data = await _account_whoami(platform, manual=bool(manual))
     return {**data, 'loginTs': None if data.get('pending') else _login_marker_ts(platform)}
 
 
@@ -3826,11 +3828,31 @@ async def _login_runner_busy(platform: str) -> bool:
     return False
 
 
-def _xhs_cached_nickname() -> str:
-    """上次创作数据抓到的小红书昵称（没有就空）。之后又登录过（可能换了号）就不认这份旧昵称。"""
-    path = _analytics_latest_path('xiaohongshu')
+# 国内平台里需要起浏览器才能访问的（B站走 cookie API、不在此列）：每次后台访问都是一次自动化登录访问，
+# 2026-10 小红书账号就是因「第三方脚本」被封。这些平台只在用户手动点按钮时才起浏览器，
+# 其余时候（开页、切页签、定时器）一律读缓存/登录标记。
+DOMESTIC_BROWSER_PLATFORMS = frozenset({'xiaohongshu', 'douyin', 'kuaishou', 'zhihu', 'weixin-channels', 'wechat-oa'})
+
+
+def _cooldown_message(platform: str) -> str:
+    """该平台在发布闸门冷却期内则返回中文说明，否则空串（冷却期内不抓取该平台，免得加重处罚）。"""
     try:
-        marker = LOGIN_DIR / 'xiaohongshu.json'
+        import publish_guard
+        cd = publish_guard.active_cooldown(platform)
+        if not cd:
+            return ''
+        name = publish_guard.platform_display(platform)
+        until = cd.get('until') or '需用户手动解除'
+        return f"{name} 正处于冷却期（原因：{cd.get('reason') or '未记录'}；到期：{until}），已暂停抓取，以免加重处罚。"
+    except Exception:
+        return ''
+
+
+def _cached_account_nickname(platform: str) -> str:
+    """上次创作数据抓到的昵称（没有就空）。之后又登录过（可能换了号）就不认这份旧昵称。"""
+    path = _analytics_latest_path(platform)
+    try:
+        marker = LOGIN_DIR / f'{platform}.json'
         if marker.is_file() and marker.stat().st_mtime > path.stat().st_mtime:
             return ''
         d = json.loads(path.read_text(encoding='utf-8'))
@@ -3839,7 +3861,7 @@ def _xhs_cached_nickname() -> str:
         return ''
 
 
-async def _account_whoami(platform: str) -> dict:
+async def _account_whoami(platform: str, manual: bool = False) -> dict:
     cfg = LOGIN_RUNNERS.get(platform)
     if not cfg:
         raise HTTPException(404, '未知平台')
@@ -3857,10 +3879,15 @@ async def _account_whoami(platform: str) -> dict:
     # 登录结束标记一变，前端会重新校验。
     if await _login_runner_busy(platform):
         return {'loggedIn': _account_logged_in(platform, cfg), 'name': '', 'avatar': '', 'pending': True}
-    if backend == 'xhs':
-        # 小红书不在后台开浏览器校验：每次校验都是一次自动化登录访问，2026-10 账号就是因为
-        # 「第三方脚本」被封的。只读登录标记，昵称取上次手动刷新创作数据时抓到的。
-        return {'loggedIn': _account_logged_in(platform, cfg), 'name': _xhs_cached_nickname(), 'avatar': ''}
+    if backend == 'xhs' or (platform in DOMESTIC_BROWSER_PLATFORMS and not manual):
+        # 国内浏览器平台不在后台开浏览器校验：每次校验都是一次自动化登录访问，2026-10 小红书账号就是
+        # 因为「第三方脚本」被封的。只读登录标记，昵称取上次手动刷新创作数据时抓到的；
+        # 只有用户在账号页手动点「校验账号」（manual）才真起浏览器（小红书一律不起）。
+        return {'loggedIn': _account_logged_in(platform, cfg), 'name': _cached_account_nickname(platform), 'avatar': ''}
+    if platform in DOMESTIC_BROWSER_PLATFORMS:
+        cd_msg = _cooldown_message(platform)
+        if cd_msg:
+            raise HTTPException(409, cd_msg)
     # 命中未过期缓存直接返回。但登录标记跟缓存时记下的指纹不一样 = 之后有人登录/退出过（CLI 直跑
     # login、别的进程……），缓存里的「未登录」可能已经过时，重新真校验 —— 否则卡片要顶着「未登录」
     # 等满 TTL。只比相等不比先后，不受时钟影响。
@@ -4034,6 +4061,8 @@ async def api_analytics_platforms():
     ]
 
 
+_EXIT_COOLDOWN = 9   # = publish_guard.EXIT_COOLDOWN（不在模块级 import，避免拖慢启动）
+
 # 创作数据最近一次成功结果落盘目录（与 account_stats.py 的 ANALYTICS_DIR 同一目录）；模块级变量方便测试替换
 ANALYTICS_CACHE_DIR = PROJECT_ROOT / "outputs" / "_analytics"
 # 同平台抓取 single-flight：platform → 正在跑的 Task。后到的请求 await 同一个 Task，共享结果/异常
@@ -4071,7 +4100,7 @@ def _analytics_cmd(platform: str) -> list[str]:
     # 代理策略由 account_stats.py 按平台自定（xhs 直连、其它走 env），后端照常传 _proxy_env
     cmd = [sys.executable, str(SHARED_SCRIPTS / "account_stats.py"), "fetch", "--platform", platform]
     if platform == "xiaohongshu":
-        cmd.append("--manual")   # 前端只在用户点「刷新数据」时请求小红书（MANUAL_ONLY_ANALYTICS）
+        cmd.append("--manual")   # 能走到这里都是用户手动点「刷新数据」（?manual=1）；小红书的 account_stats 强制要求
     return cmd
 
 
@@ -4091,6 +4120,9 @@ async def _run_analytics(platform: str) -> dict:
                 proc = await _run()
     except subprocess.TimeoutExpired:
         raise HTTPException(504, "抓取超时（浏览器起不来或网络慢）")
+    if proc.returncode == _EXIT_COOLDOWN:
+        # account_stats 拒绝抓取处于冷却期的平台：把中文说明原样给前端，不当成通用错误
+        raise HTTPException(409, _cooldown_message(platform) or "该平台处于冷却期，已暂停抓取")
     for line in reversed((proc.stdout or "").strip().splitlines()):
         line = line.strip()
         if line.startswith("{"):
@@ -4107,14 +4139,22 @@ async def _run_analytics(platform: str) -> dict:
 
 
 @app.get("/api/analytics/{platform}")
-async def api_analytics(platform: str, cached: int = 0):
-    """抓取某平台已登录账号的创作数据（粉丝/获赞/作品 + 与上次快照的增长）。起浏览器，数秒
-    （小红书开 Chrome 窗口，且前端只在用户点「刷新数据」时才调用）。
+async def api_analytics(platform: str, cached: int = 0, manual: int = 0):
+    """抓取某平台已登录账号的创作数据（粉丝/获赞/作品 + 与上次快照的增长）。起浏览器，数秒。
 
+    国内浏览器平台（DOMESTIC_BROWSER_PLATFORMS）**不做后台抓取**：没带 `?manual=1`（用户点「刷新数据」
+    才带）一律只读落盘的最近一次结果，没有则 404；带 manual 才起浏览器，且冷却期内的平台返回 409。
+    B站（cookie API）与其它平台行为不变。
     `?cached=1` 只读落盘的最近一次成功结果（毫秒级，不起子进程）；没有则 404。
     同平台并发抓取共享同一次子进程（single-flight）。"""
     if platform not in ANALYTICS_PLATFORMS:
         raise HTTPException(404, "该平台暂不支持数据抓取")
+    if platform in DOMESTIC_BROWSER_PLATFORMS and not manual:
+        cached = 1
+    if platform in DOMESTIC_BROWSER_PLATFORMS and not cached:
+        cd_msg = _cooldown_message(platform)
+        if cd_msg:
+            raise HTTPException(409, cd_msg)
     if cached:
         try:
             return json.loads(_analytics_latest_path(platform).read_text(encoding="utf-8"))
@@ -4145,6 +4185,7 @@ class PublishRequest(BaseModel):
     media: list[str] = []
     tags: str = ''
     visibility: str = ''   # 海外平台可见范围：YouTube public/unlisted/private，TikTok everyone/friends/only_me
+    allowRepost: bool = False   # 仅当用户在前端确认「仍要重发同一内容？」后才为 True → 脚本加 --allow-repost
 
 
 def _write_publish_status(status_file: Path, state: str, message: str = '') -> None:
@@ -4170,19 +4211,41 @@ def _read_publish_status(platform: str) -> dict:
     return {'state': 'unknown', 'message': ''}
 
 
+_EXIT_DUPLICATE = 8   # = publish_guard.EXIT_DUPLICATE
+# 发布闸门拦截的状态（脚本 exit 8 / 9）：终态，前端据此区分「可确认重发」与「冷却、不可绕过」
+_PUBLISH_TERMINAL_STATES = ('success', 'error', 'duplicate', 'cooldown')
+
+
+def _guard_exit_message(rc: int, platform: str, stderr: str) -> str:
+    """把发布闸门（publish_guard）exit 8/9 的 stderr 整理成给人看的中文说明：
+    去掉「不要重试 / --allow-repost / publish_guard.py」这类写给 agent 的指令行。"""
+    lines = [ln.strip() for ln in (stderr or '').splitlines() if ln.strip()]
+    start = next((i for i, ln in enumerate(lines) if ln.startswith('⛔')), 0)
+    keep = [ln.lstrip('⛔ ').strip() for ln in lines[start:]
+            if not any(k in ln for k in ('不要重试', '--allow-repost', 'publish_guard.py', '默认不重复发布'))]
+    msg = '\n'.join(keep[:6]).strip()
+    if msg:
+        return msg
+    if rc == _EXIT_DUPLICATE:
+        return '检测到重复发布：这条内容此前已发过。'
+    return _cooldown_message(platform).replace('已暂停抓取，以免加重处罚。', '已停止发布。') or '该平台处于冷却期，已停止发布。'
+
+
 def _run_publish_bg(platform: str, cmd: list, title: str, body: str, cfg: dict,
-                    status_file: Path, code_file: Path) -> None:
+                    status_file: Path, code_file: Path, timeout: int = 900) -> None:
     """后台线程跑发布脚本（脚本自身把 starting/sms_required/verifying/success/error 写进 status_file）。
     结束后兜底补写终态 + 记 _publish.log + 成功则回流排期。"""
     ok = False
+    rc = None
     out = err = ''
     try:
         proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT), env=_publish_env(),
-                              capture_output=True, text=True, timeout=900)
+                              capture_output=True, text=True, timeout=timeout)
         ok = proc.returncode == 0
+        rc = proc.returncode
         out, err = proc.stdout or '', proc.stderr or ''
     except subprocess.TimeoutExpired:
-        err = '发布超时（>900s）'
+        err = f'发布超时（>{timeout}s）'
     except Exception as e:  # noqa: BLE001
         err = f'发布进程异常：{e}'
     try:
@@ -4191,10 +4254,23 @@ def _run_publish_bg(platform: str, cmd: list, title: str, body: str, cfg: dict,
             lf.write('CMD: ' + ' '.join(cmd) + '\nSTDOUT:\n' + out[-2000:] + '\nSTDERR:\n' + err[-2000:] + '\n')
     except Exception:
         pass
-    # 脚本正常会写终态；异常/超时没写到时兜底补一个
-    if _read_publish_status(platform)['state'] not in ('success', 'error'):
-        _write_publish_status(status_file, 'success' if ok else 'error',
-                              '发布成功' if ok else ('\n'.join((err or out).strip().splitlines()[-4:]) or '发布失败'))
+    # 发布闸门拦截：exit 8 = 重复（前端可让用户确认后 allowRepost 重发），exit 9 = 平台冷却（不可绕过）。
+    # 无论脚本有没有写过 error 状态都改写成专门的终态，让前端不把它当通用失败。
+    if rc == _EXIT_DUPLICATE or rc == _EXIT_COOLDOWN:
+        prior = _read_publish_status(platform)
+        msg = prior['message'] if (rc == _EXIT_COOLDOWN and prior['state'] == 'error' and prior['message']) \
+            else _guard_exit_message(rc, platform, err)
+        _write_publish_status(status_file, 'duplicate' if rc == _EXIT_DUPLICATE else 'cooldown', msg)
+    # 退出码非 0（含超时/进程异常）= 没有确认发布成功：无论状态文件里写的是 success / verifying /
+    # awaiting_user_click 等，都改写成终态 error（脚本自己已写 error/duplicate/cooldown 的保留其原因）。
+    elif not ok:
+        prior = _read_publish_status(platform)
+        if prior['state'] not in ('error', 'duplicate', 'cooldown'):
+            tail = '\n'.join((err or out).strip().splitlines()[-4:]) or '发布失败'
+            _write_publish_status(status_file, 'error', f"发布未确认成功：{tail}")
+    # 退出码 0：脚本正常会写终态 success；没写到（仍是非终态，如 verifying）时兜底补 success
+    elif _read_publish_status(platform)['state'] not in _PUBLISH_TERMINAL_STATES:
+        _write_publish_status(status_file, 'success', '发布成功')
     try:
         code_file.unlink()
     except OSError:
@@ -4215,7 +4291,8 @@ _PUBLISH_THREADS: dict[str, threading.Thread] = {}   # 平台 → 正在跑的�
 
 
 def _start_async_publish(platform: str, cmd: list, title: str, body: str, cfg: dict,
-                         status_file: Path, code_file: Path) -> dict:
+                         status_file: Path, code_file: Path, *, timeout: int = 900,
+                         start_message: str = '发布中…（若触发风控会要求短信验证）') -> dict:
     """启动异步发布：清旧码/状态 → 起后台线程 → 立即返回。前端轮询 /api/publish/{p}/status，
     遇 sms_required 弹输入框、提交到 /api/publish/{p}/sms。
     同一平台上一条还在发就 409：放第二条进来会盖掉状态文件，还会排队等登录目录锁、在第一条发完后再发一遍。"""
@@ -4226,9 +4303,9 @@ def _start_async_publish(platform: str, cmd: list, title: str, body: str, cfg: d
         code_file.unlink()
     except OSError:
         pass
-    _write_publish_status(status_file, 'starting', '发布中…（若触发风控会要求短信验证）')
+    _write_publish_status(status_file, 'starting', start_message)
     worker = threading.Thread(target=_run_publish_bg,
-                              args=(platform, cmd, title, body, cfg, status_file, code_file),
+                              args=(platform, cmd, title, body, cfg, status_file, code_file, timeout),
                               daemon=True)
     _PUBLISH_THREADS[platform] = worker
     worker.start()
@@ -4239,7 +4316,8 @@ def _start_async_publish(platform: str, cmd: list, title: str, body: str, cfg: d
 
 @app.get("/api/publish/{platform}/status")
 async def api_publish_status(platform: str):
-    """轮询异步发布状态：starting/sms_required/verifying/success/error。"""
+    """轮询异步发布状态：starting/sms_required/verifying/awaiting_user_click（等用户亲自点发布）/
+    success/error/duplicate（闸门拦截重复，可确认后 allowRepost 重发）/cooldown（平台冷却，不可绕过）。"""
     if platform not in LOGIN_RUNNERS:
         raise HTTPException(404, '未知平台')
     return {'mode': 'publish', **_read_publish_status(platform)}
@@ -4256,6 +4334,20 @@ async def api_publish_sms(platform: str, req: SmsCodeRequest):
     PUBLISH_DIR.mkdir(parents=True, exist_ok=True)
     (PUBLISH_DIR / f'{platform}.code').write_text(code, encoding='utf-8')
     return {'ok': True}
+
+
+_SEMI_AUTO_START_MESSAGE = '正在打开浏览器窗口并填写内容…填好后需要你亲自检查并点击『发布』（脚本不会替你点）。'
+
+
+def _semi_auto_publish(platform: str, cmd: list, title: str, req: 'PublishRequest', cfg: dict) -> dict:
+    """国内浏览器平台（小红书/快手/视频号/知乎）半自动发布：脚本在可见窗口里填好表单，停在发布按钮前，
+    等人亲自点（状态 awaiting_user_click）。耗时由人决定，所以异步跑 + 状态文件，前端轮询。"""
+    PUBLISH_DIR.mkdir(parents=True, exist_ok=True)
+    status_file = PUBLISH_DIR / f'{platform}.json'
+    code_file = PUBLISH_DIR / f'{platform}.code'
+    cmd += ['--handoff-timeout', str(PUBLISH_HANDOFF_TIMEOUT), '--status-file', str(status_file)]
+    return _start_async_publish(platform, cmd, title, req.body, cfg, status_file, code_file,
+                                timeout=TIMEOUT_PUBLISH_SEMI_AUTO, start_message=_SEMI_AUTO_START_MESSAGE)
 
 
 @app.post("/api/publish/{platform}")
@@ -4290,24 +4382,36 @@ async def api_publish(platform: str, req: PublishRequest):
         base = [py, str(SHARED_SCRIPTS / 'xhs_publish.py')]
         cmd = base + ['publish-video', '--no-proxy', '--video', vids[0]] if vids else base + ['publish', '--no-proxy', '--images', ','.join(imgs)]
         cmd += ['--title', title, '--content', req.body, '--tags', tags, '--exec']
+        if req.allowRepost:
+            cmd.append('--allow-repost')
+        # 半自动：填好表单后等用户亲自点「发布」，异步跑 + 轮询
+        return _semi_auto_publish(platform, cmd, title, req, cfg)
     elif platform == 'bilibili':
-        # B站投稿：直接调 biliup CLI（需 cookies.json，PATH 上有 biliup）。必须视频；
-        # tid=36「知识」；B站投稿必须≥1 标签，无则兜底「日常」。
+        # B站投稿：走 bili_upload.py（包装 biliup，带发布闸门 + 读回对账 + 发布账本；不再直调 biliup 绕过闸门）。
+        # 必须视频；tid=36「知识」；B站投稿必须≥1 标签，无则兜底「日常」。
         bili_tag = tags.replace('#', '').replace('，', ',').strip().strip(',') or '日常'
-        cmd = ['biliup', '-u', str(PROJECT_ROOT / 'cookies.json'), 'upload', vids[0],
-               '--title', title[:80], '--tid', '36', '--copyright', '1', '--tag', bili_tag]
+        cmd = [py, str(PROJECT_ROOT / 'skills' / 'openclaw' / 'skill-bilibili-upload' / 'scripts' / 'bili_upload.py'),
+               'upload', '--video', vids[0], '--title', title[:80], '--tid', '36', '--copyright', '1',
+               '--tag', bili_tag, '--cookie', str(PROJECT_ROOT / 'cookies.json')]
         if req.body.strip():
             cmd += ['--desc', req.body[:2000]]
+        cmd.append('--exec')
+        if req.allowRepost:
+            cmd.append('--allow-repost')
     elif platform == 'douyin':
         base = [py, str(SHARED_SCRIPTS / 'douyin_publish.py')]
         cmd = base + ['publish-video', '--no-proxy', '--video', vids[0]] if vids else base + ['publish', '--no-proxy', '--images', ','.join(imgs)]
         cmd += ['--title', title, '--content', req.body, '--tags', tags, '--exec']
+        if req.allowRepost:
+            cmd.append('--allow-repost')
+        cmd += ['--handoff-timeout', str(PUBLISH_HANDOFF_TIMEOUT)]
         # 抖音发布可能触发风控短信墙——异步跑 + 状态/验证码文件，前端轮询到 sms_required 时弹输入框
         PUBLISH_DIR.mkdir(parents=True, exist_ok=True)
         status_file = PUBLISH_DIR / 'douyin.json'
         code_file = PUBLISH_DIR / 'douyin.code'
         cmd += ['--status-file', str(status_file), '--sms-code-file', str(code_file)]
-        return _start_async_publish(platform, cmd, title, req.body, cfg, status_file, code_file)
+        return _start_async_publish(platform, cmd, title, req.body, cfg, status_file, code_file,
+                                    timeout=TIMEOUT_PUBLISH_SEMI_AUTO, start_message=_SEMI_AUTO_START_MESSAGE)
     elif backend == 'overseas':
         # 海外平台：上传 + 平台处理视频要几分钟，异步跑、前端轮询。
         # 标题原样传：发布中心对非 YouTube 平台故意传空（英文文案全在正文里），不能用正文前 20 字顶上。
@@ -4321,6 +4425,8 @@ async def api_publish(platform: str, req: PublishRequest):
             cmd += ['--media', m]
         if req.visibility:
             cmd += ['--visibility', req.visibility]
+        if req.allowRepost:
+            cmd.append('--allow-repost')
         return _start_async_publish(platform, cmd, title, req.body, cfg, status_file, code_file)
     elif platform == 'wechat-oa':
         # 微信公众号：走「后台会话」发布（免 AppID/AppSecret、免 IP 白名单）。
@@ -4358,9 +4464,13 @@ async def api_publish(platform: str, req: PublishRequest):
         media = vids[0] if vids else (imgs[0] if imgs else None)
         if media:
             cmd += ['--media', media]
+        if req.allowRepost:
+            cmd.append('--allow-repost')
+        # 视频号/快手/知乎：半自动，填好表单后等用户亲自点「发布」，异步跑 + 轮询
+        return _semi_auto_publish(platform, cmd, title, req, cfg)
     # 公众号走后台会话（Playwright，脚本自带 --proxy，默认直连）；其余平台走 _publish_env
     pub_env = _proxy_env() if platform == 'wechat-oa' else _publish_env()
-    pub_timeout = TIMEOUT_XHS_PUBLISH if platform == 'xiaohongshu' else TIMEOUT_PUBLISH
+    pub_timeout = TIMEOUT_PUBLISH
     try:
         proc = await asyncio.to_thread(subprocess.run, cmd, cwd=str(PROJECT_ROOT), env=pub_env,
                                        capture_output=True, text=True, timeout=pub_timeout)
@@ -4387,6 +4497,11 @@ async def api_publish(platform: str, req: PublishRequest):
             _write_schedule(items)
         except Exception:
             pass
+    if proc.returncode == _EXIT_DUPLICATE or proc.returncode == _EXIT_COOLDOWN:
+        # 发布闸门拦截（bilibili 同步路径）：duplicate 可由前端确认后 allowRepost 重发；cooldown 不可绕过
+        dup = proc.returncode == _EXIT_DUPLICATE
+        return {'ok': False, 'duplicate': dup, 'cooldown': not dup,
+                'message': _guard_exit_message(proc.returncode, platform, proc.stderr or ''), 'detail': detail}
     return {'ok': ok, 'message': '发布成功' if ok else '发布失败（见 detail）', 'detail': detail}
 
 

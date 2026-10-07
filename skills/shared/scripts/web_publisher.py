@@ -17,6 +17,12 @@
 ⚠️ 选择器时效性：各平台网页改版频繁，内置选择器为**最佳努力**，**首次使用需人工校验/更新**
    （见各平台 config 的 selector_caveat 与 SKILL 文档）。发布前务必先 `plan` 预览、`login` 目视确认。
 
+【半自动】默认（未设 EASEL_DOMESTIC_AUTO_PUBLISH=1）：脚本在可见的真实浏览器里填完表单，停在发布按钮前，
+由用户亲自点「发布」，脚本只被动观察结果；真发前过 publish_guard（冷却 exit 9 / 重复 exit 8）。
+浏览器内核同 xhs_publish：CloakBrowser → 本机 Chrome/Edge（环境变量 EASEL_CHANNELS_BROWSER /
+EASEL_KUAISHOU_BROWSER / EASEL_ZHIHU_BROWSER=chrome 可强制 Chrome；_HEADLESS=1 仅无桌面机器用）。
+换内核后该平台需要重新扫码登录一次。
+
 子命令：
     platforms  列出支持平台
     plan       解析并打印某平台的发布步骤（dry-run，不开浏览器）
@@ -29,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -38,6 +45,10 @@ import login_state  # noqa: E402
 import content_guard  # noqa: E402  出站内容安全闸门
 import platform_readback  # noqa: E402  发布读回对账（快手已接入，注册表见 _READBACK_VERIFIERS）
 import human_pace  # noqa: E402  人类节奏（提交前双停顿；EASEL_PACE_SKIP=1 跳过）
+import human_input  # noqa: E402  真人节奏的鼠标/键盘
+import real_browser  # noqa: E402  可见真实浏览器启动器（Cloak → 本机 Chrome/Edge）
+import publish_guard  # noqa: E402  发布闸门：平台冷却 + 重复发布拦截
+import semi_auto  # noqa: E402  半自动交接：填完表单停在发布按钮前，由人亲自点发布
 
 # ── 平台配置注册表 ────────────────────────────────────────────────────
 # 每个步骤：{"action": goto|upload|fill|click|wait|press|waitfor, "selector"?, "value"?}
@@ -50,6 +61,7 @@ PLATFORMS: dict[str, dict] = {
         "login_url": "https://cp.kuaishou.com",
         "publish_url": "https://cp.kuaishou.com/article/publish/video",
         "profile": "KuaishouProfile",
+        "env_prefix": "KUAISHOU",   # EASEL_KUAISHOU_BROWSER / EASEL_KUAISHOU_HEADLESS
         "media_kind": "video",  # 快手走视频发布流程（publish/video），只收视频；图片会晦涩超时
         # 已登录标志（2026-07 实测：快手创作者中心改版，旧 .cp-header .user-name 已失效）
         "login_check": ".user-info-avatar, .user-line, .vertical-menu, .setting-container",
@@ -171,7 +183,7 @@ PLATFORMS: dict[str, dict] = {
              "selector": "[class*=_description], [placeholder*=描述], [contenteditable=true]",
              "value": "{title}\n{desc}\n{tags}"},
             {"action": "wait", "value": "1500"},
-            {"action": "click",
+            {"action": "click", "commit": True,
              "selector": "[class*=button-primary]:has-text('发布'), "
                          "div[class*=_button]:has-text('发布'):not(:has-text('作品'))"},
             {"action": "wait", "value": "2500"},
@@ -195,6 +207,7 @@ PLATFORMS: dict[str, dict] = {
         "login_url": "https://channels.weixin.qq.com",
         "publish_url": "https://channels.weixin.qq.com/platform/post/create",
         "profile": "ChannelsProfile",
+        "env_prefix": "CHANNELS",   # EASEL_CHANNELS_BROWSER / EASEL_CHANNELS_HEADLESS
         "media_kind": "video",  # 视频号也走视频发布流程
         # 登录判定靠 URL：未登录一律重定向到 channels.weixin.qq.com/login.html（含 login 标记 → _is_logged_in 判未登录）；
         # login_check 为已登录主页的正向兜底（真机 2026-08 校准：登录后主页才有 finder-nickname/唯一ID/桌面导航）
@@ -213,7 +226,7 @@ PLATFORMS: dict[str, dict] = {
             {"action": "waitfor", "selector": "textarea,.input-editor", "value": "60000"},
             {"action": "fill", "selector": ".input-editor,textarea", "value": "{title}"},
             {"action": "wait", "value": "3000"},
-            {"action": "click", "selector": "button:has-text('发表')"},
+            {"action": "click", "commit": True, "selector": "button:has-text('发表')"},
         ],
         # 发布成功校验：成功后离开创作页（/platform/post/create → 作品列表）——避免"点了发表=成功"假阳性
         "publish_success": {"url_not_contains": "post/create", "selector": "text=发表成功"},
@@ -230,6 +243,7 @@ PLATFORMS: dict[str, dict] = {
         "login_url": "https://www.zhihu.com/signin",
         "publish_url": "https://zhuanlan.zhihu.com/write",
         "profile": "ZhihuProfile",
+        "env_prefix": "ZHIHU",      # EASEL_ZHIHU_BROWSER / EASEL_ZHIHU_HEADLESS
         "login_check": ".AppHeader-profile, .AppHeader-userInfo",
         "logged_out_selector": ".SignContainer, .Login-content, button:has-text('登录')",
         "me_name_selector": ".AppHeader-profile .name, .ProfileHeader-name, .AppHeader-userInfo .name",
@@ -240,7 +254,7 @@ PLATFORMS: dict[str, dict] = {
             {"action": "fill", "selector": ".WriteIndex-titleInput textarea,textarea[placeholder*='标题']", "value": "{title}"},
             {"action": "type", "selector": ".public-DraftEditor-content,[contenteditable=true]", "value": "{desc}"},
             {"action": "wait", "value": "2000"},
-            {"action": "click", "selector": "button:text-is('发布')"},
+            {"action": "click", "commit": True, "selector": "button:text-is('发布')"},
         ],
         # 发布成功校验：知乎发成功后跳到文章页 zhuanlan.zhihu.com/p/<id>（草稿是 /p/<id>/edit，需排除）
         "publish_success": {"url_contains": "/p/", "url_not_contains": "/edit"},
@@ -263,8 +277,31 @@ LAUNCH_ARGS = [
 ]
 
 
+# 发布失败现场（截图等）的落盘目录；测试可 monkeypatch，避免写进仓库 outputs/
+_LOGIN_DUMP_DIR = Path(__file__).resolve().parents[3] / "outputs" / "_login"
+# 本次发布使用的状态文件（仅 do_publish 时由 _run_browser 设置）：_die 退出前要把它写成终态 error，
+# 否则 verifying 等非终态会被留成假进行中/假成功
+_ACTIVE_PUBLISH_STATUS_FILE: str | None = None
+
+
+def _record_unconfirmed(platform: str, media, title_key: str) -> None:
+    """发布按钮已点过（自动点击逃生口，或用户在半自动里点了）但结果未确认：记一笔 unconfirmed 账，
+    让重复闸门挡住误二发。记账失败不影响退出。"""
+    try:
+        publish_guard.record_publish(platform, [media] if media else [], title_key, url="", unconfirmed=True)
+        print("⚠️ 发布结果未确认，已按「可能已发出」记账（unconfirmed）；再发同内容会被重复闸门拦下。", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠️ 未确认发布的记账失败：{e}", file=sys.stderr)
+
+
 def _die(msg: str, code: int = 1) -> None:
     print(f"ERROR: {msg}", file=sys.stderr)
+    semi_auto.note_exit_reason(msg)
+    if _ACTIVE_PUBLISH_STATUS_FILE:
+        try:
+            login_state.write_status(_ACTIVE_PUBLISH_STATUS_FILE, "error", msg[:300])
+        except OSError:
+            pass
     sys.exit(code)
 
 
@@ -296,6 +333,76 @@ def _steps_key_for(cfg: dict, media: str | None) -> str:
 def _profile_dir(platform: str, base: str | None) -> Path:
     root = Path(base).expanduser() if base else Path.home() / ".easel-browser-profiles"
     return root / PLATFORMS[platform]["profile"]
+
+
+def _launch(p, platform: str, base: str | None, *, headed: bool = True, headless_env: str | None = None):
+    """开该平台的浏览器（real_browser.launch：Cloak → 本机 Chrome/Edge → 自带 Chromium 告警）。
+    发布一律开窗口（headed=True）；每平台独立登录目录 + 固定指纹文件。登录 / login-qr / whoami / 发布共用这一入口，
+    保证同一套引擎 + 同一份登录态。EASEL_<PREFIX>_BROWSER 选内核，EASEL_<PREFIX>_HEADLESS=1 才允许无头。"""
+    cfg = PLATFORMS[platform]
+    pre = cfg["env_prefix"]
+    return real_browser.launch(
+        p, profile_dir=_profile_dir(platform, base), headed=headed, proxy=None,
+        platform_label=cfg["name"], headless_env=headless_env or f"EASEL_{pre}_HEADLESS",
+        browser_env=f"EASEL_{pre}_BROWSER",
+        chrome_hint=f"web_publisher.py login-qr --platform {platform}")
+
+
+# 各平台 toast / 通知容器（只取这些元素文本去判平台处罚，不看整页）
+# 只收确属 toast/通知的容器；不含 .weui-desktop-dialog / .Modal-wrapper / [class*=tips]（弹窗、须知常含规则文字，会误判）
+_TOAST_SELECTORS = tuple(semi_auto.DEFAULT_TOAST_SELECTORS) + (
+    ".weui-desktop-toast", ".Notification", ".Messages-notification",
+)
+
+
+def _scan_block_toasts(page, platform: str) -> None:
+    """扫 toast/通知文本：命中平台处罚/限制提示 → 设冷却并 exit 9（EXIT_COOLDOWN），不重试。"""
+    try:
+        texts = semi_auto._toast_texts(page, _TOAST_SELECTORS)
+    except Exception:
+        return
+    for text in texts:
+        if publish_guard.classify_block_text(text):
+            publish_guard.on_block_detected(platform, text)
+            sys.exit(publish_guard.EXIT_COOLDOWN)
+
+
+def _ui_published(page, chk: dict | None) -> bool:
+    """界面层发布成功判定（publish_success 配置：url_contains / url_not_contains / selector）。"""
+    if not chk:
+        return False
+    try:
+        url = (page.url or "").lower()
+    except Exception:
+        return False
+    uc, unc = chk.get("url_contains"), chk.get("url_not_contains")
+    if uc or unc:
+        if (uc in url if uc else True) and (unc not in url if unc else True):
+            return True
+    try:
+        if chk.get("selector") and page.query_selector(chk["selector"]):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _status_note_callback(status_file, note: str):
+    """on_status 回调：await_human_publish 写完 awaiting_user_click 后，把附加说明补进状态文件的 message。"""
+    if not note:
+        return None
+
+    def cb(state: str, message: str) -> None:
+        if state == "awaiting_user_click":
+            print(f"⚠️ {note}", flush=True)
+            try:
+                login_state.write_status(status_file, state, f"{message} {note}")
+            except OSError:
+                pass
+    return cb
+
+
+AI_DECLARE_REMINDER = "若内容是 AI 生成/合成的，请在窗口里手动勾选平台的 AI 内容声明。"
 
 
 def cmd_platforms(_a) -> int:
@@ -373,14 +480,42 @@ def _fill_first_visible(page, sel: str, val: str) -> None:
         editable = bool(el.evaluate("e => e.isContentEditable"))
     except Exception:
         pass
-    if editable:
+    _human_click(page, el)
+    human_input.pause(page, 200, 600)
+    if not editable:
+        page.keyboard.press("ControlOrMeta+A")   # 覆盖已有内容（input/textarea 原行为是 fill 覆盖）
+    _human_type(page, val)
+
+
+_HUMAN_TYPE_MAX = 600   # 超过这个长度的长文不逐词组敲（太慢），一行一行整段上屏
+
+
+def _human_click(page, el, *, strict: bool = False) -> None:
+    """真人节奏点击（human_input.click）。被遮挡点不了时：strict=False 退回元素原生点击；
+    strict=True（提交按钮）不退回，直接抛错——提交只许点一次，不重试。"""
+    try:
+        human_input.click(page, el)
+    except Exception:
+        if strict:
+            raise
         el.click()
-        page.keyboard.type(val)
-    else:
-        el.fill(val)
 
 
-def _publish_weixin_channels(page, ctx: dict) -> None:
+def _human_type(page, text: str) -> None:
+    """在当前焦点处输入：短文本按真人节奏，长文本按行整段上屏。"""
+    if len(text) <= _HUMAN_TYPE_MAX:
+        human_input.type_text(page, text)
+        return
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if line:
+            page.keyboard.insert_text(line)
+            page.wait_for_timeout(200)
+        if i < len(lines) - 1:
+            page.keyboard.press("Enter")
+
+
+def _publish_weixin_channels(page, ctx: dict, semi: bool = False) -> None:
     """视频号发布专用流程（与通用 steps 不同，真机 2026-08 校准）：
     - 直接 goto /platform/post/create 会被重定向回首页 → 必须 SPA 导航（首页→内容管理→发表视频）。
     - 创作器在同源 iframe /micro/content/post/create：描述框 div.input-editor、发表按钮
@@ -403,7 +538,7 @@ def _publish_weixin_channels(page, ctx: dict) -> None:
         try:
             el = loc.nth(i)
             if el.is_visible():
-                el.click()
+                _human_click(page, el)
                 clicked = True
                 break
         except Exception:
@@ -424,8 +559,9 @@ def _publish_weixin_channels(page, ctx: dict) -> None:
     desc = "\n".join(x for x in (ctx.get("title"), ctx.get("desc"), ctx.get("tags")) if x)
     deadline = time.time() + 300
     published = False
+    filled = False
     last_err = None
-    while time.time() < deadline and not published:
+    while time.time() < deadline and not published and not filled:
         fr = next((f for f in page.frames if "micro/content/post/create" in (f.url or "")), None)
         if fr is None:
             page.wait_for_timeout(3000)
@@ -450,6 +586,10 @@ def _publish_weixin_channels(page, ctx: dict) -> None:
                     }
                 }""", desc)
                 page.wait_for_timeout(1200)
+            if semi:
+                # 半自动：描述已填好，停在发表按钮前，由 await_human_publish 交给用户亲自点「发表」
+                filled = True
+                break
             # 真机 2026-08 验证的可靠提交法：该 composer 是 OOPIF——Playwright locator 解析不到、
             # evaluate 合成点击不被视频号信任（校验 isTrusted）。故 evaluate 聚焦发表按钮 →
             # page.keyboard 按 Enter（CDP 系统级注入的可信键盘事件，路由到聚焦元素触发真实提交）。
@@ -472,19 +612,25 @@ def _publish_weixin_channels(page, ctx: dict) -> None:
                 last_err = "未找到发表按钮"
                 page.wait_for_timeout(3000)
                 continue
-            page.keyboard.press("Enter")   # 可信提交
-            # 等 URL 离开创作页 = 提交成功（真机 ~6s 跳 /post/list）
+            page.keyboard.press("Enter")   # 可信提交（只按这一次，不重试）
+            # 等 URL 离开创作页 = 提交成功（真机 ~6s 跳 /post/list）；期间扫 toast，命中处罚提示 → 设冷却并 exit 9
             for _ in range(12):
                 page.wait_for_timeout(2000)
+                _scan_block_toasts(page, "weixin-channels")
                 if "post/create" not in (page.url or "").lower():
                     published = True
                     break
             if not published:
-                last_err = "发表后未跳转（可能未提交），换新 frame 重试"
+                # 已按过一次发表：结果未确认，绝不再按（避免重复发布）
+                raise RuntimeError("发表后未跳转，发布结果未确认（已按过一次发表，不重试；请到视频号助手核对）")
+        except SystemExit:
+            raise
         except Exception as e:
+            if "已按过一次发表" in str(e):
+                raise
             last_err = e
             page.wait_for_timeout(3000)   # 多半是 frame 刚重载，换新 frame 重试
-    if not published:
+    if not published and not filled:
         raise RuntimeError(f"视频号发表未成功（创作器反复重载或选择器失效）：{last_err}")
     page.wait_for_timeout(3000)
 
@@ -559,10 +705,14 @@ def _run_browser(a, headed: bool, do_publish: bool) -> int:
     cfg = PLATFORMS[a.platform]
     ctx = {"media": a.media or "", "title": a.title or "", "desc": a.desc or "",
            "tags": a.tags or "", "cover": a.cover or ""}
+    semi = do_publish and not semi_auto.auto_click_allowed(a.platform)
+    title_key = a.title or (a.desc or "")[:20]
+    global _ACTIVE_PUBLISH_STATUS_FILE
+    _ACTIVE_PUBLISH_STATUS_FILE = (getattr(a, "status_file", None) or None) if do_publish else None
+    _sf = _ACTIVE_PUBLISH_STATUS_FILE
     with sync_playwright() as p:
-        browser = p.chromium.launch_persistent_context(
-            str(profile), headless=not headed, args=LAUNCH_ARGS + ["--no-proxy-server"],
-            viewport={"width": 1440, "height": 900})
+        # 发布一律开可见窗口（real_browser：Cloak → 本机 Chrome/Edge）；登录同引擎同目录
+        browser = _launch(p, a.platform, a.profile_base, headed=True if do_publish else headed)
         page = browser.pages[0] if browser.pages else browser.new_page()
         if not do_publish:
             page.goto(cfg["login_url"])
@@ -610,12 +760,18 @@ def _run_browser(a, headed: bool, do_publish: bool) -> int:
             snapshot_ids = _readback_capture(a.platform, page)
         submitted_at_ms: int | None = None   # 「提交动作」时间戳（commit 标记步记录，读回时间窗基准）
         flow_started_ms = int(time.time() * 1000)
+        handed_off = False   # 半自动：已把发布交给用户亲自点
         try:
             if a.platform == "weixin-channels":
                 # 视频号走专用流程（SPA 导航 + iframe 创作器），通用 steps 不适用 → 跳过
-                _publish_weixin_channels(page, ctx)
+                _publish_weixin_channels(page, ctx, semi=semi)
+                handed_off = semi
                 steps = []
             for i, s in enumerate(steps, 1):
+                if semi and s.get("commit"):
+                    # 半自动：到提交步为止表单已填好，不执行提交（也不再执行之后的步骤），交给用户亲自点发布
+                    handed_off = True
+                    break
                 act = s["action"]
                 sel = s.get("selector", "")
                 val = s.get("value", "")
@@ -638,7 +794,7 @@ def _run_browser(a, headed: bool, do_publish: bool) -> int:
                             el = _first_visible_el(page, sel)
                             if el is None:
                                 raise RuntimeError(f"上传按钮未找到：{sel}")
-                            el.click()
+                            _human_click(page, el)
                         fc.value.set_files(val)
                     elif act == "fill":
                         _fill_first_visible(page, sel, val)
@@ -647,7 +803,7 @@ def _run_browser(a, headed: bool, do_publish: bool) -> int:
                         # 长文用剪贴板粘贴，避免逐字 type 超时
                         el = _first_visible_el(page, sel)
                         if el:
-                            el.click()
+                            _human_click(page, el)
                             try:
                                 page.evaluate("""(text) => {
                                     const dt = new DataTransfer();
@@ -662,8 +818,8 @@ def _run_browser(a, headed: bool, do_publish: bool) -> int:
                                 if not inner or len(inner.strip()) < 10:
                                     raise RuntimeError("clipboard inject failed")
                             except Exception:
-                                # 降级：键盘逐字输入（慢但兼容）
-                                page.keyboard.type(val)
+                                # 降级：按真人节奏键盘输入（慢但兼容）
+                                _human_type(page, val)
                     elif act == "js_click":
                         # JS dispatchEvent 点击（快手等框架按钮 Playwright click() 无效）
                         el = _first_visible_el(page, sel)
@@ -682,6 +838,8 @@ def _run_browser(a, headed: bool, do_publish: bool) -> int:
                         try:
                             el.click(force=True, timeout=5000)
                         except Exception:
+                            if s.get("commit"):
+                                raise   # 提交按钮只点一次：失败不再用事件链补点（避免重复发布）
                             # 回退：完整指针事件链（pointerdown→mousedown→mouseup→click）
                             page.evaluate("""
                                 el => {
@@ -694,7 +852,7 @@ def _run_browser(a, headed: bool, do_publish: bool) -> int:
                         # 截图到指定路径（相对工作目录）
                         import pathlib as _pl
                         _cwd = _pl.Path.cwd()
-                        _sp = _cwd / val if val else _cwd / "outputs/_login/debug-screenshot.png"
+                        _sp = _cwd / val if val else _LOGIN_DUMP_DIR / "debug-screenshot.png"
                         _sp.parent.mkdir(parents=True, exist_ok=True)
                         page.screenshot(path=str(_sp))
                     elif act == "js_eval":
@@ -709,7 +867,7 @@ def _run_browser(a, headed: bool, do_publish: bool) -> int:
                             el.scroll_into_view_if_needed()
                         except Exception:
                             pass
-                        el.click()
+                        _human_click(page, el, strict=bool(s.get("commit")))
                     elif act == "wait":
                         page.wait_for_timeout(int(val or 1000))
                     elif act == "press":
@@ -724,19 +882,30 @@ def _run_browser(a, headed: bool, do_publish: bool) -> int:
             # 发布结果校验（界面层，旁证）：配置了 publish_success 才验；未配的平台沿用"跑完即报"
             chk = cfg.get("publish_success")
             ui_ok = False
-            if chk:
+            if handed_off:
+                # 半自动：表单已填好，停在发布按钮前，等用户亲自点；脚本只被动观察结果
+                note = AI_DECLARE_REMINDER if getattr(a, "ai_declare", True) else ""
+                outcome = semi_auto.await_human_publish(
+                    page, platform=a.platform, is_published=lambda pg: _ui_published(pg, chk),
+                    toast_selectors=_TOAST_SELECTORS, status_file=getattr(a, "status_file", None),
+                    timeout_s=getattr(a, "handoff_timeout", 3600),
+                    on_status=_status_note_callback(getattr(a, "status_file", None), note))
+                if outcome == "blocked":
+                    sys.exit(publish_guard.EXIT_COOLDOWN)
+                if outcome != "published":
+                    why = "窗口已被关闭" if outcome == "closed" else "等待你点击发布超时"
+                    _die(f"{cfg['name']}未发布：{why}，没有确认发布成功。请先到创作者后台核对，不要自动重试。", 1)
+                ui_ok = True
+            elif chk:
                 deadline = time.time() + 30
                 while time.time() < deadline:
-                    url = (page.url or "").lower()
-                    uc, unc = chk.get("url_contains"), chk.get("url_not_contains")
-                    if uc or unc:  # 支持纯 url_not_contains（发布成功后离开发布页）
-                        if (uc in url if uc else True) and (unc not in url if unc else True):
-                            ui_ok = True
-                            break
-                    if chk.get("selector") and page.query_selector(chk["selector"]):
+                    _scan_block_toasts(page, a.platform)   # 自动点击逃生口：处罚提示 → 冷却 + exit 9
+                    if _ui_published(page, chk):
                         ui_ok = True
                         break
                     page.wait_for_timeout(500)
+                if not ui_ok:
+                    _scan_block_toasts(page, a.platform)
             # 读回对账（权威判定）：回到作品管理页读本人作品列表，标题+时间窗对上才算成功。
             # 界面判定只作旁证；四档结算（verified 才成功），未核实绝不冒报成功、不许盲目重发。
             if cfg.get("readback") and a.platform in _READBACK_VERIFIERS:
@@ -745,11 +914,13 @@ def _run_browser(a, headed: bool, do_publish: bool) -> int:
                                            snapshot_ids=snapshot_ids)
                 if verdict.outcome != "verified":
                     try:  # 失败留现场，供排错
-                        fp = Path(__file__).resolve().parents[3] / "outputs" / "_login" / f"{a.platform}-publish-fail.png"
+                        fp = _LOGIN_DUMP_DIR / f"{a.platform}-publish-fail.png"
                         fp.parent.mkdir(parents=True, exist_ok=True)
                         page.screenshot(path=str(fp))
                     except Exception:
                         pass
+                    if not semi or ui_ok:
+                        _record_unconfirmed(a.platform, a.media, title_key)
                     _ui = "界面判定通过" if ui_ok else "界面判定未通过"
                     _ev = _readback_evidence_summary(verdict)
                     _die(f"{cfg['name']}：{_ui}；{_READBACK_FAIL_HINTS.get(verdict.outcome, '读回未通过——发布结果未确认')}"
@@ -759,10 +930,12 @@ def _run_browser(a, headed: bool, do_publish: bool) -> int:
                 _acct = (verdict.evidence or {}).get("account") or {}
                 _who = f"；账号：{_acct.get('display_name')}" if _acct.get("display_name") else ""
                 print(f"✅ {cfg['name']}发布成功（读回核验：作品 {m.platform_content_id}，{m.status or 'published'}{_who}）")
+                publish_guard.record_publish(a.platform, [a.media] if a.media else [], title_key)
+                semi_auto.report_final(_sf, "success", f"发布成功（读回核验：作品 {m.platform_content_id}）")
             elif chk:
                 if not ui_ok:
                     try:  # 仅失败时截图，供排错（正常成功不截）
-                        fp = Path(__file__).resolve().parents[3] / "outputs" / "_login" / f"{a.platform}-publish-fail.png"
+                        fp = _LOGIN_DUMP_DIR / f"{a.platform}-publish-fail.png"
                         fp.parent.mkdir(parents=True, exist_ok=True)
                         page.screenshot(path=str(fp))
                     except Exception:
@@ -797,15 +970,19 @@ def _run_browser(a, headed: bool, do_publish: bool) -> int:
                               + (dlg or "(无弹窗按钮——可能没触发发布或已直接提交)"), file=sys.stderr)
                     except Exception:
                         pass
+                    if not semi:
+                        _record_unconfirmed(a.platform, a.media, title_key)
                     _die(f"发布未确认成功：步骤跑完但未跳到成功状态（当前 URL={page.url}）。"
                          f"可能『发布』按钮未生效或有二次确认弹窗——需核对选择器。", 5)
                 print(f"✅ 发布成功（已确认跳转：{page.url}）")
+                publish_guard.record_publish(a.platform, [a.media] if a.media else [], title_key, url=page.url or "")
+                semi_auto.report_final(_sf, "success", f"发布成功（已确认跳转：{page.url}）")
             else:
                 print("✅ 发布步骤执行完毕，请在浏览器/平台后台确认发布结果。")
         except PWTimeout as e:
             # 超时（常见：选择器失效 / 上传转码慢）——截图 + dump 当前可见输入控件，便于精修选择器
             try:
-                fp = Path(__file__).resolve().parents[3] / "outputs" / "_login" / f"{a.platform}-publish-fail.png"
+                fp = _LOGIN_DUMP_DIR / f"{a.platform}-publish-fail.png"
                 fp.parent.mkdir(parents=True, exist_ok=True)
                 page.screenshot(path=str(fp))
                 print(f"    失败截图：{fp}", file=sys.stderr)
@@ -833,6 +1010,7 @@ def _run_browser(a, headed: bool, do_publish: bool) -> int:
 
 
 def cmd_login(a) -> int:
+    publish_guard.warn_if_cooldown(a.platform)   # 登录由用户主动发起：冷却期内不拦，只警告
     return _run_browser(a, headed=True, do_publish=False)
 
 
@@ -1105,6 +1283,7 @@ def _probe_logged_in(browser, cfg: dict) -> bool:
 def cmd_login_qr(a) -> int:
     """headless 抠二维码登录（供 Web 前端）：截登录页二维码 → 轮询登录成功 → 持久化。
     状态写 login_state JSON 供后端轮询。同 xhs_publish.py login 的机制。"""
+    publish_guard.warn_if_cooldown(a.platform)   # 登录由用户主动发起：冷却期内不拦，只警告
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
@@ -1114,16 +1293,15 @@ def cmd_login_qr(a) -> int:
         _die(f"未知平台：{a.platform}（支持：{', '.join(PLATFORMS)}）")
     profile = _profile_dir(a.platform, a.profile_base)
     profile.mkdir(parents=True, exist_ok=True)
-    root = Path(__file__).resolve().parents[3] / "outputs" / "_login"
+    root = _LOGIN_DUMP_DIR
     qr_out = Path(a.qr_out).expanduser() if a.qr_out else root / f"{a.platform}.png"
     sf = a.status_file or str(root / f"{a.platform}.json")
     timeout_s = a.timeout or 180
 
     login_state.write_status(sf, "starting")
     with sync_playwright() as p:
-        browser = p.chromium.launch_persistent_context(
-            str(profile), headless=True, locale="zh-CN",
-            args=LAUNCH_ARGS + ["--no-proxy-server"])
+        # 与发布同一套引擎 + 登录目录（real_browser）：默认开窗口，EASEL_<平台>_HEADLESS=1 才无头
+        browser = _launch(p, a.platform, a.profile_base, headed=True)
         page = browser.pages[0] if browser.pages else browser.new_page()
         try:
             page.goto(cfg["login_url"], wait_until="domcontentloaded")
@@ -1219,7 +1397,11 @@ def cmd_publish(a) -> int:
     content_guard.guard_or_die([a.title, a.desc, a.tags], exec_mode=True,
                                allow_unsafe=getattr(a, "allow_unsafe", False),
                                label=f"{cfg.get('name', a.platform)}发布内容")
-    rc = _run_browser(a, headed=a.headed, do_publish=True)
+    # 发布闸门：平台冷却（exit 9）+ 重复发布（exit 8）；放在起浏览器之前
+    publish_guard.guard_before_publish(a.platform, [a.media] if a.media else [],
+                                       a.title or (a.desc or "")[:20],
+                                       allow_repost=getattr(a, "allow_repost", False))
+    rc = _run_browser(a, headed=True, do_publish=True)
     if rc == 0:
         # 发布成功 → 落统一内容日历（对话页自动；发布页 web 设 AUTORECORD=0 跳过防重复）
         try:
@@ -1238,7 +1420,9 @@ def cmd_publish(a) -> int:
 def cmd_whoami(a) -> int:
     """真校验登录态 + 读昵称/头像，输出单行 JSON（供 Web 后端解析）。
     走发布页判定（比 avatar 选择器可靠）：URL 落登录页 / 登出浮层可见 → 未登录。
-    昵称/头像选择器为 best-effort，各平台登录后需校验。"""
+    昵称/头像选择器为 best-effort，各平台登录后需校验。冷却期内不起浏览器（exit 9）。"""
+    publish_guard.exit_if_cooldown(a.platform, "登录态校验",
+                                   stdout_json={"loggedIn": False, "name": "", "avatar": ""})
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
@@ -1253,9 +1437,10 @@ def cmd_whoami(a) -> int:
         with sync_playwright() as p:
             profile = _profile_dir(a.platform, a.profile_base)
             profile.mkdir(parents=True, exist_ok=True)
-            browser = p.chromium.launch_persistent_context(
-                str(profile), headless=True, locale="zh-CN",
-                args=LAUNCH_ARGS + ["--no-proxy-server"])
+            # 校验登录态不弹窗：只读检查走无头（同引擎同目录，登录态共用；发布/登录仍是可见窗口）
+            os.environ.setdefault("EASEL_WEBPUB_WHOAMI_HEADLESS", "1")
+            browser = _launch(p, a.platform, a.profile_base, headed=False,
+                              headless_env="EASEL_WEBPUB_WHOAMI_HEADLESS")
             page = browser.pages[0] if browser.pages else browser.new_page()
             try:
                 page.goto(cfg["publish_url"], wait_until="domcontentloaded", timeout=30000)
@@ -1458,8 +1643,15 @@ def main() -> int:
     p.add_argument("--exec", action="store_true", help="真正发布（默认 dry-run）")
     p.add_argument("--allow-unsafe", action="store_true",
                    help="放行内容安全闸门（检出内部设置泄露也照发，谨慎）")
-    p.add_argument("--headed", action="store_true", help="有头模式执行（便于观察/首次校验）")
+    p.add_argument("--headed", action="store_true", help="（兼容保留）发布一律开可见窗口")
     p.add_argument("--keep-open", action="store_true", help="发布后不关闭浏览器")
+    p.add_argument("--allow-repost", action="store_true",
+                   help="放行重复发布拦截（仅当用户明确要求重发同一内容）")
+    p.add_argument("--handoff-timeout", type=float, default=3600,
+                   help="半自动：等用户亲自点「发布」的最长秒数（默认 3600）")
+    p.add_argument("--status-file", help="半自动状态 JSON 输出路径（awaiting_user_click / success / error）")
+    p.add_argument("--ai-declare", action=argparse.BooleanOptionalAction, default=True,
+                   help="内容是 AI 生成时，交接提示里提醒在窗口里手动勾 AI 声明（默认开；仅影响提醒文案）")
     p.set_defaults(func=cmd_publish)
 
     p = sub.add_parser("whoami", help="真校验登录态 + 读昵称/头像（输出 JSON）")

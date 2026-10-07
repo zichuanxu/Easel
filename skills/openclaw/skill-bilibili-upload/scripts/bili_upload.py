@@ -34,6 +34,7 @@ SHARED_SCRIPTS = Path(__file__).resolve().parents[3] / "shared" / "scripts"
 sys.path.insert(0, str(SHARED_SCRIPTS))
 import content_guard  # noqa: E402
 import platform_readback  # noqa: E402  发布读回对账（B站 reader）
+import publish_guard  # noqa: E402  发布前闸门：重复拦截 + 平台冷却
 
 
 def _direct_env() -> dict:
@@ -159,6 +160,9 @@ def cmd_upload(a) -> int:
         exec_mode=True,
         label="B站投稿内容",
     )
+    # 发布闸门：平台冷却（exit 9）/ 重复投稿（exit 8）；只放行用户明确要求的 --allow-repost
+    publish_guard.guard_before_publish("bilibili", [a.video], a.title or Path(a.video).stem,
+                                       allow_repost=getattr(a, "allow_repost", False))
     print("投稿中 ...", file=sys.stderr)
     # 发前快照 + 时间窗基准（读回对账用；快照失败自动退化为标题+时间窗）
     snapshot = platform_readback.capture_bilibili_snapshot(cookie)
@@ -183,6 +187,11 @@ def cmd_upload(a) -> int:
                 "readback_error": f"读回通道故障（{result.error}）",
             }
             _die(f"投稿已提交但读回未核实（{result.outcome}）：{hints.get(result.outcome, '')}——去创作中心核对，先别重发。", 4)
+        # 读回核实成功 → 记发布账本（重复拦截的依据）；记账失败不影响投稿结果
+        try:
+            publish_guard.record_publish("bilibili", [a.video], title, url=f"https://www.bilibili.com/video/{m.platform_content_id}")
+        except Exception as e:  # noqa: BLE001
+            print(f"记发布账本失败（忽略）：{e}", file=sys.stderr)
         # 投稿成功 → 落统一内容日历（对话页自动；发布页 B 站走 biliup CLI 由 web 记录，路径不同不重复）
         try:
             import calendar_ops
@@ -263,6 +272,8 @@ def main() -> int:
     pu.add_argument("--dtime", type=int, help="定时发布 10 位时间戳（距今>4h）")
     pu.add_argument("--cookie", help="cookie 文件（默认 cookies.json）")
     pu.add_argument("--proxy", help="代理")
+    pu.add_argument("--allow-repost", action="store_true",
+                    help="仅当用户明确要求「再发一次同样的内容」时才加：放行重复投稿拦截（冷却期不受影响）")
     pu.add_argument("--exec", action="store_true", help="真正投稿（默认 dry-run 预览）")
     pu.set_defaults(func=cmd_upload)
 

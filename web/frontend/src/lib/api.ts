@@ -486,9 +486,12 @@ export interface AccountWhoami {
   loginTs?: number | null;   // 校验那一刻的登录标记指纹，见 AccountItem.loginTs
 }
 
-/** 真校验某平台登录态 + 拉昵称/头像（后端起 headless 浏览器，数秒）。 */
-export function accountWhoami(platform: string): Promise<AccountWhoami> {
-  return request<AccountWhoami>(`/api/accounts/${encodeURIComponent(platform)}/whoami`);
+/**
+ * 校验某平台登录态 + 拉昵称/头像。海外平台后端起 headless 浏览器真校验（数秒）；
+ * 国内浏览器平台默认只读登录标记/缓存，manual=true（用户点「校验账号」）才真校验。
+ */
+export function accountWhoami(platform: string, manual = false): Promise<AccountWhoami> {
+  return request<AccountWhoami>(`/api/accounts/${encodeURIComponent(platform)}/whoami${manual ? '?manual=1' : ''}`);
 }
 
 /** 退出登录：删该平台持久化登录态。 */
@@ -500,15 +503,18 @@ export interface PublishResult {
   ok?: boolean;
   message: string;
   detail?: string;
-  async?: boolean;   // true = 异步发布（抖音，可能触发短信验证），需轮询 publishStatus
+  async?: boolean;   // true = 异步发布（国内浏览器平台半自动 / 海外平台），需轮询 publishStatus
   pending?: boolean;
+  duplicate?: boolean;   // 发布闸门拦下重复内容（exit 8）：确认后带 allowRepost 才能重发
+  cooldown?: boolean;    // 平台冷却中（exit 9）：不可绕过，只显示 message
 }
 
-/** 一键发布到某平台（真发布，--exec）。media 为 outputs 相对路径数组。
- * 抖音返回 {async:true}，需轮询 publishStatus；其他平台同步返回结果。 */
+/** 一键发布到某平台。国内浏览器平台是半自动：脚本在窗口里填好表单，等用户亲自点「发布」。
+ * 除 B站 / 公众号外都返回 {async:true}，需轮询 publishStatus；其他平台同步返回结果。
+ * allowRepost 仅在用户确认「仍要重发同一内容」后才传 true。 */
 export function publishNow(
   platform: string,
-  payload: { title: string; body: string; media: string[]; tags?: string; visibility?: string },
+  payload: { title: string; body: string; media: string[]; tags?: string; visibility?: string; allowRepost?: boolean },
 ): Promise<PublishResult> {
   return request<PublishResult>(`/api/publish/${encodeURIComponent(platform)}`, {
     method: 'POST',
@@ -519,11 +525,13 @@ export function publishNow(
 
 export interface PublishStatus {
   mode: 'publish';
-  state: string;     // starting | sms_required | verifying | success | error | unknown
+  // starting | sms_required | verifying | awaiting_user_click（等用户亲自点发布）
+  // | success | error | duplicate（重复，可确认后重发）| cooldown（平台冷却，不可绕过）| unknown
+  state: string;
   message: string;
 }
 
-/** 轮询异步发布状态（抖音）。 */
+/** 轮询异步发布状态。 */
 export function publishStatus(platform: string): Promise<PublishStatus> {
   return request<PublishStatus>(`/api/publish/${encodeURIComponent(platform)}/status`);
 }
@@ -573,9 +581,12 @@ export function fetchAnalyticsPlatforms(): Promise<AnalyticsPlatform[]> {
   return request<AnalyticsPlatform[]>('/api/analytics/platforms');
 }
 
-/** 抓某平台已登录账号的创作数据（后端起 headless 浏览器，数秒）。 */
-export function fetchAccountAnalytics(platform: string): Promise<AccountAnalytics> {
-  return request<AccountAnalytics>(`/api/analytics/${encodeURIComponent(platform)}`);
+/**
+ * 抓某平台已登录账号的创作数据（后端起 headless 浏览器，数秒）。
+ * manual=true 表示用户点了「刷新数据」：国内浏览器平台后端只认这个标志才会真抓，否则只回缓存。
+ */
+export function fetchAccountAnalytics(platform: string, manual = false): Promise<AccountAnalytics> {
+  return request<AccountAnalytics>(`/api/analytics/${encodeURIComponent(platform)}${manual ? '?manual=1' : ''}`);
 }
 
 /** 读后端落盘的最近一次抓取结果（毫秒级，不起浏览器）。还没有缓存（404）返回 null，其它错误照常抛。 */

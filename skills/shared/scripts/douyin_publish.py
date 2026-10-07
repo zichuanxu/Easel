@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""douyin_publish.py — 抖音发布（Playwright，headless 可用）.
+"""douyin_publish.py — 抖音发布（Playwright，**半自动**：可见真实浏览器里填表，人亲自点「发布」）.
+
+2026-10 抖音投稿功能因脚本/AI 托管被封，现改为半自动：real_browser 开可见窗口（Cloak 优先 → 本机 Chrome →
+自带 Chromium 告警），human_input 真人节奏点击/输入，填完标题/简介/话题/封面/AI 声明后停在发布按钮前，
+由用户亲自点击（semi_auto.await_human_publish）；脚本只被动观察结果。发布前过 publish_guard 重复/冷却闸门，
+toast 命中处罚提示即设冷却并退出 9。仅当用户自己设了 EASEL_DOMESTIC_AUTO_PUBLISH=1 才会脚本点发布。
 
 替代旧的 CDP/puppeteer/MCP Node 死栈（那套需真实 Chrome + MCP，本 Linux 环境跑不了）。
-用 Playwright + 持久化登录态，headless 即可发布；创作者平台流程与选择器移植自
+用 Playwright + 持久化登录态（可见窗口）驱动创作者后台；创作者平台流程与选择器移植自
 WJZ-P/douyin-upload-mcp-skill（src/douyin-ops.js）。确定性 IO 在脚本，文案/策略交给上层。
 
 移植的关键流程（REF = douyin-ops.js）：
@@ -31,6 +36,10 @@ import login_state  # noqa: E402
 import content_guard  # noqa: E402  出站内容安全闸门
 import platform_readback  # noqa: E402  发布读回对账（快照+列表对账协议）
 import human_pace  # noqa: E402  人类节奏（分档随机停顿）
+import human_input  # noqa: E402  真人节奏的鼠标/键盘
+import real_browser  # noqa: E402  可见真实浏览器启动器（Cloak/Chrome）
+import publish_guard  # noqa: E402  重复发布 / 冷却闸门
+import semi_auto  # noqa: E402  半自动交接（人点发布）
 
 HOME_URL = "https://creator.douyin.com/"
 TITLE_MAX = 30  # 抖音作品标题上限（字符）
@@ -100,21 +109,32 @@ SMS_MODAL_SELS = ("[class*='semi-modal-content']", "[class*='semi-modal']",
 WALL_KEYWORDS = ("身份验证", "接收短信", "短信验证", "验证方式", "短信已发送",
                  "验证码已发送", "获取验证码", "验证并登录", "手机刷脸")
 
-# Chromium 启动性能参数（提速冷启动；勿禁用图片——二维码是图片）
-# 注意：**不加** --disable-dev-shm-usage——本机 /dev/shm 有 360G，禁用会让 Chromium 把共享内存
-# 写到 overlay /tmp，发布页这类重页面下会触发渲染进程崩溃（"Page crashed"，真机实测）。
-LAUNCH_ARGS = [
-    "--disable-blink-features=AutomationControlled",
-    "--no-sandbox", "--disable-gpu", "--disable-software-rasterizer",
-    "--disable-extensions", "--disable-background-networking",
-    "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
-    "--disable-features=TranslateUI,BackForwardCache",
-    "--mute-audio", "--no-first-run", "--no-default-browser-check",
-]
+# 浏览器启动统一走 real_browser.launch（Cloak → 本机 Chrome → 自带 Chromium 告警），
+# 环境变量：EASEL_DOUYIN_BROWSER=chrome 跳过 Cloak；EASEL_DOUYIN_HEADLESS=1 才允许无头（仅限无桌面机器）。
+HEADLESS_ENV = "EASEL_DOUYIN_HEADLESS"
+BROWSER_ENV = "EASEL_DOUYIN_BROWSER"
+
+# 退出码：6=AI 声明没勾上（自动点击模式 fail-closed）；5=发布未确认/窗口关闭/等待超时；
+# 8=重复发布(publish_guard)；9=冷却/平台处罚提示(publish_guard)。
+EXIT_AI_DECLARE = 6
+EXIT_UNCONFIRMED = 5
+
+# 「自主声明 → 内容由AI生成」。⚠️ 以下选择器按文字猜的，**尚未在真机上校准**（账号被封期间无法试）：
+# 半自动模式下勾不上不报错，只在交接提示里让用户手动勾；自动点击模式下勾不上则 fail-closed（退出 6）。
+AI_DECLARE_ENTRY_TEXTS = ("自主声明", "添加自主声明", "内容自主声明")
+AI_DECLARE_MORE_TEXTS = ("更多设置", "高级设置")
+AI_DECLARE_OPTION_TEXT = "内容由AI生成"
+AI_DECLARE_CONFIRM_TEXTS = ("确定", "确认", "保存", "完成")
+AI_DECLARE_MANUAL_HINT = "请在窗口里手动勾选『自主声明 → 内容由AI生成』"
+AI_DECLARE_FAILED_MSG = ("没能勾上「自主声明 → 内容由AI生成」，已停在发布前、没有发出去（页面可能改版，选择器未校准）。"
+                         "可手动在窗口里勾选后自己点发布；确认内容不是 AI 生成的，加 --no-ai-declare 再发。")
+# semi_auto 轮询用的 toast/通知选择器：通用集合 + 抖音 semi 设计体系的 toast 文本节点
+TOAST_SELECTORS = tuple(semi_auto.DEFAULT_TOAST_SELECTORS) + (SELECTORS["toast"],)
 
 
 def _die(msg: str, code: int = 1) -> None:
     print(f"ERROR: {msg}", file=sys.stderr)
+    semi_auto.note_exit_reason(msg)
     sys.exit(code)
 
 
@@ -147,18 +167,20 @@ def _proxy(explicit: str | None, disable: bool) -> str | None:
         or os.environ.get("EASEL_PROXY")
 
 
+def _allow_headless() -> bool:
+    """EASEL_DOUYIN_HEADLESS=1：允许无头（只给没有桌面的机器用，很容易被抖音识别成脚本）。"""
+    return real_browser.allow_headless(HEADLESS_ENV)
+
+
 def _launch(p, headed: bool, base: str | None, proxy: str | None):
-    profile = _profile_dir(base)
-    profile.mkdir(parents=True, exist_ok=True)
-    args = list(LAUNCH_ARGS)
-    if not proxy:
-        # 显式直连：忽略环境里可能存在的 http_proxy/https_proxy
-        #（国内平台发布/登录必须直连；web 侧 _proxy_env 可能注入代理变量，这里兜底）
-        args.append("--no-proxy-server")
-    kwargs = dict(headless=not headed, locale="zh-CN", args=args)
-    if proxy:
-        kwargs["proxy"] = {"server": proxy}
-    return p.chromium.launch_persistent_context(str(profile), **kwargs)
+    """开抖音用的浏览器（实现见 real_browser.launch）。默认一律开窗口；headed=False 只在
+    EASEL_DOUYIN_HEADLESS=1 时才真无头。内核优先 CloakBrowser（账号固定指纹，数据在登录目录的
+    cloak-browser/ 子目录），其次本机 Chrome / Edge，最后才是 Playwright 自带 Chromium。
+    登录（login）与发布共用同一套引擎/登录目录；切换内核后需重新扫码登录一次。"""
+    return real_browser.launch(
+        p, profile_dir=_profile_dir(base), headed=headed, proxy=proxy,
+        platform_label="抖音", headless_env=HEADLESS_ENV, browser_env=BROWSER_ENV,
+        chrome_hint="douyin_publish.py login 或 Web 账号页「登录」")
 
 
 def _wait_ready(page, timeout_ms: int = 15000) -> None:
@@ -278,17 +300,28 @@ def _refresh_qr_if_expired(page) -> bool:
     return False
 
 
+def _select_all_key() -> str:
+    return "Meta+a" if sys.platform == "darwin" else "Control+a"
+
+
 def _human_type(page, el, text: str, delay_ms: tuple[int, int] | None = None) -> None:
-    """聚焦→Ctrl+A 清空→逐字输入（REF fillTitle/fillDescription）。
-    delay_ms=(lo, hi) 时逐字随机延迟（逐字随机 65~140ms，更像手打）；
-    默认 None 保持登录等场景的快速输入。"""
+    """聚焦→全选清空→输入（REF fillTitle/fillDescription）。
+    delay_ms 不为 None（发布表单）：human_input 曲线移动鼠标点进去 + 按词组输入；
+    为 None（登录验证码等）：快速逐字输入。"""
+    if delay_ms is not None:
+        human_input.click(page, el)
+        human_input.pause(page, 200, 600)
+        page.keyboard.press(_select_all_key())
+        page.keyboard.press("Delete")
+        human_input.type_text(page, text)
+        return
     el.click()
     page.wait_for_timeout(200)
-    page.keyboard.press("Control+a")
+    page.keyboard.press(_select_all_key())
     page.keyboard.press("Delete")
     for ch in text:
         page.keyboard.type(ch)
-        page.wait_for_timeout(random.randint(*delay_ms) if delay_ms else 15)
+        page.wait_for_timeout(15)
 
 
 def _go_upload(page):
@@ -298,7 +331,7 @@ def _go_upload(page):
     btn = page.query_selector(SELECTORS["hd_publish"])
     if not btn:
         _die("未找到「高清发布」按钮（检查 SELECTORS.hd_publish，或未登录）")
-    btn.click()
+    human_input.click(page, btn)
     deadline = time.time() + 15
     while time.time() < deadline:
         if "content/upload" in page.url:
@@ -315,7 +348,11 @@ def _switch_tab(page, kind: str):
         page.wait_for_selector(sel, timeout=10000)
     except Exception:
         _die(f"未找到发布 tab（{kind}），检查 SELECTORS.tab_*")
-    page.click(sel)
+    el = page.query_selector(sel)
+    if el:
+        human_input.click(page, el)
+    else:
+        page.click(sel)
     page.wait_for_timeout(400)
 
 
@@ -379,12 +416,137 @@ def _select_ai_cover(page):
         page.wait_for_timeout(1000)
     cover = page.query_selector(SELECTORS["cover_first"])
     if cover:
-        cover.click()
+        human_input.click(page, cover)
         page.wait_for_timeout(300)
         confirm = page.query_selector(SELECTORS["cover_confirm"])
         if confirm:
-            confirm.click()
+            human_input.click(page, confirm)
             page.wait_for_timeout(300)
+
+
+def _set_dual_cover(page):
+    """抖音 2026-10 起发布页提示『横/竖双封面缺失』，发布点击无反应。打开封面弹窗 →
+    横封面页签（自动同步竖封面底图）→ 完成。best-effort：无该入口则跳过。"""
+    try:
+        btn = page.get_by_text("选择封面").first
+        if not btn.count():
+            return
+        human_input.click(page, btn)
+        page.wait_for_timeout(2500)
+        human_input.click(page, page.get_by_text("设置横封面").last)
+        page.wait_for_timeout(2000)
+        human_input.click(page, page.get_by_role("button", name="完成").last)
+        page.wait_for_timeout(1500)
+    except Exception as e:
+        print(f"⚠️ 双封面设置跳过：{type(e).__name__}", file=sys.stderr)
+
+
+# 「内容由AI生成」出现在表单上（不在还开着的弹层/下拉/弹窗里）= 已选上。
+_AI_DECLARED_JS = """(text) => {
+    const pop = "[role=listbox],[role=option],[role=menu],[role=dialog],[class*=dropdown],[class*=popover],"
+        + "[class*=option],[class*=menu],[class*=modal]";
+    return Array.from(document.querySelectorAll('body *')).some(e =>
+        e.children.length === 0 && (e.textContent || '').trim() === text
+        && e.offsetParent !== null && !e.closest(pop));
+}"""
+
+
+def _visible_text(page, text: str):
+    """页面上文字恰好是 text 的第一个可见元素（Locator），没有返回 None。"""
+    try:
+        loc = page.get_by_text(text, exact=True)
+        for i in range(min(loc.count(), 6)):
+            el = loc.nth(i)
+            if el.is_visible():
+                return el
+    except Exception:
+        return None
+    return None
+
+
+def _first_visible_text(page, texts):
+    for t in texts:
+        el = _visible_text(page, t)
+        if el:
+            return el
+    return None
+
+
+def _ai_declared(page) -> bool:
+    try:
+        return bool(page.evaluate(_AI_DECLARED_JS, AI_DECLARE_OPTION_TEXT))
+    except Exception:
+        return False
+
+
+def _declare_ai(page) -> bool:
+    """勾上「自主声明 → 内容由AI生成」。只有确认表单上显示了选中值才返回 True；任何异常/判断不了都
+    返回 False（调用方决定：半自动提示用户手动勾，自动点击模式 fail-closed）。
+    ⚠️ 选择器按文字猜的，未在真机校准。"""
+    try:
+        if _ai_declared(page):
+            return True
+        entry = None
+        for _ in range(2):
+            entry = _first_visible_text(page, AI_DECLARE_ENTRY_TEXTS)
+            if entry:
+                break
+            more = _first_visible_text(page, AI_DECLARE_MORE_TEXTS)
+            if not more:
+                human_input.scroll(page, 600)
+                continue
+            human_input.click(page, more)
+            human_input.pause(page, 500, 1000)
+        if not entry:
+            return False
+        human_input.click(page, entry)
+        human_input.pause(page, 500, 1000)
+        option = _visible_text(page, AI_DECLARE_OPTION_TEXT)
+        if not option:
+            return False
+        human_input.click(page, option)
+        human_input.pause(page, 600, 1200)
+        # 若弹的是带「确定」的对话框，点确定（没有就跳过）
+        for t in AI_DECLARE_CONFIRM_TEXTS:
+            try:
+                btn = page.get_by_role("button", name=t).last
+                if btn.count() and btn.is_visible():
+                    human_input.click(page, btn)
+                    human_input.pause(page, 600, 1200)
+                    break
+            except Exception:
+                continue
+        return _ai_declared(page)
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠️ AI 声明未能自动设置：{type(e).__name__}", file=sys.stderr)
+        return False
+
+
+def _check_block(page, sf=None) -> None:
+    """扫一遍页面 toast/通知文本：命中平台处罚/限制提示 → 设冷却 + 写状态 + sys.exit(9)，不重试。
+    只读文本，页面已关/选择器瞬时失效一律忽略。"""
+    try:
+        texts = semi_auto._toast_texts(page, TOAST_SELECTORS)
+    except Exception:
+        return
+    for text in texts:
+        if publish_guard.classify_block_text(text):
+            publish_guard.on_block_detected("douyin", text)
+            login_state.write_status(sf, "error", f"抖音提示处罚/限制：{text[:120]}。已设为冷却，请勿重试，先向用户汇报。")
+            sys.exit(publish_guard.EXIT_COOLDOWN)
+
+
+def _is_published(page) -> bool:
+    """人点发布后的成功判定：跳到内容管理页（enter_from=pub）或出现「发布成功」toast。"""
+    try:
+        if "content/manage" in page.url:
+            return True
+    except Exception:
+        return False
+    try:
+        return any("发布成功" in t for t in semi_auto._toast_texts(page, TOAST_SELECTORS))
+    except Exception:
+        return False
 
 
 def _fill_title_desc(page, title: str, desc: str, tags: list[str]):
@@ -445,9 +607,8 @@ def _click_publish(page, content_length: int = 0):
     点前等按钮就绪 → 复核/提交双停顿 → 点击。REF publishVideo step8。"""
     btn = _wait_publish_button_ready(page)
     human_pace.pause_before_commit(content_length)
-    btn.scroll_into_view_if_needed()
     page.wait_for_timeout(300)
-    btn.click()
+    human_input.click(page, btn)
 
 
 def _dump_publish_fail(page, tag: str = "publish-fail") -> None:
@@ -476,6 +637,7 @@ def _wait_toast(page, timeout_s: int = 20) -> None:
                                            and url != start_url):
                 print(f"✅ 发布成功（已跳转：{url[:70]}）")
                 return
+            _check_block(page)          # 处罚提示 → 冷却 + 退出 9（SystemExit，调用方不得吞）
             t = page.query_selector(SELECTORS["toast"])
             if t:
                 txt = (t.inner_text() or "").strip()
@@ -936,19 +1098,33 @@ def cmd_check(_a) -> int:
     try:
         from playwright.sync_api import sync_playwright
         print("✅ playwright 已安装")
-        with sync_playwright() as p:
-            path = p.chromium.executable_path
-            if path and Path(path).exists():
-                print(f"✅ chromium 内核：{path}")
-            else:
-                print("❌ 未安装浏览器内核（playwright install chromium）"); ok = False
     except Exception as e:
-        print(f"❌ playwright/内核不可用：{e}"); ok = False
+        print(f"❌ playwright 不可用：{e}")
+        return 3
+    engine, path = real_browser.resolve_engine(BROWSER_ENV)
+    if engine == "cloak":
+        print(f"✅ 浏览器内核：CloakBrowser（{path}）")
+    elif engine in ("chrome", "msedge"):
+        print(f"✅ 浏览器内核：本机 {engine}（建议安装 CloakBrowser 以固定账号指纹）")
+    else:
+        try:
+            with sync_playwright() as p:
+                bpath = p.chromium.executable_path
+            if bpath and Path(bpath).exists():
+                print(f"⚠️ 只有 Playwright 自带 Chromium：{bpath}（更容易被识别成脚本，建议装 Chrome 或 CloakBrowser）")
+            else:
+                print("❌ 未找到任何浏览器内核（装 Google Chrome / CloakBrowser，或 playwright install chromium）")
+                ok = False
+        except Exception as e:
+            print(f"❌ 浏览器内核不可用：{e}")
+            ok = False
+    print("注意：换浏览器内核后需重新扫码登录一次（登录态按内核分开存）")
     print(f"登录态目录：{_profile_dir(None)}")
     return 0 if ok else 3
 
 
 def cmd_login(a) -> int:
+    publish_guard.warn_if_cooldown("douyin")   # 登录由用户主动发起：冷却期内不拦，只警告
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
@@ -960,12 +1136,14 @@ def cmd_login(a) -> int:
                  else qr_out.parent / "douyin.code")
     login_state.read_sms_code(str(code_file))  # 清理陈旧验证码文件
     login_state.write_status(sf, "starting")
-    if a.headed:
+    # 与小红书一致：默认开窗口（登录态才和发布同一套引擎/指纹）；仅 EASEL_DOUYIN_HEADLESS=1 才无头
+    headed = bool(a.headed) or not _allow_headless()
+    if headed:
         login_state.write_status(sf, "window_login",
                                "请在弹出的浏览器窗口里用抖音 App 扫码，不要关掉那个窗口。")
 
     with sync_playwright() as p:
-        ctx = _launch(p, headed=a.headed, base=a.profile_base, proxy=_proxy(a.proxy, a.no_proxy))
+        ctx = _launch(p, headed=headed, base=a.profile_base, proxy=_proxy(a.proxy, a.no_proxy))
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         try:
             try:
@@ -1009,7 +1187,7 @@ def cmd_login(a) -> int:
                             pass
                         return 0
                     return 4
-                if not a.headed:
+                if not headed:
                     login_state.write_status(sf, "error", "未找到二维码")
                     _die("未找到登录二维码（登录页可能改版；可加 --headed 观察）", 1)
                 login_state.write_status(
@@ -1018,7 +1196,7 @@ def cmd_login(a) -> int:
             if qr:
                 qr_out.parent.mkdir(parents=True, exist_ok=True)
                 _shot_qr(page, qr, qr_out)
-                if a.headed:
+                if headed:
                     login_state.write_status(
                         sf, "window_login",
                         "请在弹出的浏览器窗口里用抖音 App 扫码，不要关掉那个窗口。",
@@ -1062,7 +1240,7 @@ def cmd_login(a) -> int:
                     q = _find_qr(page)
                     if q:
                         _shot_qr(page, q, qr_out)
-                        if a.headed:
+                        if headed:
                             login_state.write_status(
                                 sf, "window_login",
                                 "请在弹出的浏览器窗口里用抖音 App 扫码，不要关掉那个窗口。",
@@ -1095,20 +1273,41 @@ def cmd_login(a) -> int:
             ctx.close()
 
 
+def _guard_status_lines(media, title) -> list[str]:
+    """闸门状态（只读，不退出）：冷却 / 重复，供 dry-run 与 plan 展示。"""
+    lines = []
+    try:
+        cd = publish_guard.active_cooldown("douyin")
+        if cd:
+            lines.append(f"⛔ 闸门：抖音处于冷却期（{cd.get('reason') or '未记录'}），真发会以退出码 9 拒绝；只有用户能解除")
+        dup = publish_guard.find_duplicate("douyin", media, title)
+        if dup:
+            lines.append(f"⛔ 闸门：检测到重复发布（{dup.get('published_at')} 已发过「{dup.get('title')}」），"
+                         "真发会以退出码 8 拒绝（用户明确要求重发才可加 --allow-repost）")
+        if not lines:
+            lines.append("✅ 闸门：无冷却、无重复，可发布")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"⚠️ 闸门状态读取失败：{type(e).__name__}")
+    return lines
+
+
 def _plan_lines(kind, title, desc, media, tags):
     tab = "发布视频" if kind == "video" else "发布图文"
     over = "  ⚠️超限" if len(title) > TITLE_MAX else ""
     return [
-        f"发布类型：{kind}    平台：抖音 creator.douyin.com",
+        f"发布类型：{kind}    平台：抖音 creator.douyin.com（半自动：可见窗口，人亲自点发布）",
         f"标题：{title}（{len(title)}/{TITLE_MAX}{over}）",
         f"简介：{desc[:40]}{'...' if len(desc) > 40 else ''}",
         f"媒体：{media}", f"话题（写入简介）：{tags}",
         "步骤：",
+        "  0. 闸门：重复发布 / 冷却检查（publish_guard）",
         "  1. 首页点「高清发布」→ 进 content/upload",
         f"  2. 切 tab「{tab}」",
-        f"  3. {'上传视频等转码(≤5min)+选AI封面' if kind == 'video' else '上传图片'}",
-        "  4. 填标题/简介（Ctrl+A 清空再逐字输入）+ # 话题",
-        "  5. 点「发布」→ 发布后读回作品列表对账（标题+时间窗对上才算发布成功）",
+        f"  3. {'上传视频等转码(≤5min)+选AI封面+双封面' if kind == 'video' else '上传图片'}",
+        "  4. 填标题/简介（真人节奏）+ # 话题 + 自主声明「内容由AI生成」（选择器未校准）",
+        "  5. 停在发布按钮前（状态 awaiting_user_click），用户检查后亲自点「发布」；"
+        "（仅 EASEL_DOMESTIC_AUTO_PUBLISH=1 时脚本才点）",
+        "  6. 发布后读回作品列表对账（标题+时间窗对上才算发布成功）→ 记入发布台账",
     ]
 
 
@@ -1118,6 +1317,8 @@ def cmd_plan(a) -> int:
         [s.strip() for s in (a.images or "").split(",") if s.strip()])
     tags = [t.strip() for t in (a.tags or "").split(",") if t.strip()]
     for ln in _plan_lines(kind, a.title or "<title>", a.content or "", media, tags):
+        print(ln)
+    for ln in _guard_status_lines(media, a.title or ""):
         print(ln)
     return 0
 
@@ -1176,20 +1377,31 @@ def _publish(a, kind: str) -> int:
         print("dry-run（加 --exec 真正发布）：\n")
         for ln in _plan_lines(kind, a.title, a.content or "", media, tags):
             print(ln)
+        for ln in _guard_status_lines(media, a.title):   # dry-run 只展示闸门状态，不退出
+            print(ln)
         return 0
+
+    # 重复发布 / 冷却闸门：在开浏览器之前拦（冷却 → 退出 9，重复 → 退出 8）。
+    publish_guard.guard_before_publish("douyin", media, a.title,
+                                       allow_repost=getattr(a, "allow_repost", False))
 
     try:
         from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout, Error as PWError
     except Exception as e:
         _die(f"需要 playwright：{e}", 3)
     sf = getattr(a, "status_file", None)
+    auto = semi_auto.auto_click_allowed("douyin")   # 逃生口：用户自己设了 EASEL_DOMESTIC_AUTO_PUBLISH=1
+    declare_ai = bool(getattr(a, "ai_declare", True))
+    handoff_timeout = float(getattr(a, "handoff_timeout", 3600) or 3600)
     login_state.write_status(sf, "starting", "发布中…")
     started_ms = int(time.time() * 1000)
     published = None   # None=未确认（崩溃/超时→重开核验）；True/False=界面层已判定
     readback = None    # 读回对账（权威判定）：platform_readback.ReadbackResult
+    abort = None       # 半自动交接结局：blocked / closed / timeout（不再读回，直接按未发布退出）
     snapshot_ids: set[str] = set()   # 发前快照（发布前作品 id 集；发布动作前在页面里抓）
     with sync_playwright() as p:
-        ctx = _launch(p, headed=a.headed, base=a.profile_base, proxy=_proxy(a.proxy, a.no_proxy))
+        # 发布一律开窗口（半自动要有窗口给人点；EASEL_DOUYIN_HEADLESS 对发布无效）
+        ctx = _launch(p, headed=True, base=a.profile_base, proxy=_proxy(a.proxy, a.no_proxy))
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.set_default_timeout(300000)
         try:
@@ -1197,6 +1409,7 @@ def _publish(a, kind: str) -> int:
             _wait_ready(page)
             if not _logged_in(page):
                 _die("未登录，请先 `login` 扫码")
+            _check_block(page, sf)
             # 发前快照：记录当前作品 id 集，读回时用于排除旧作品
             snapshot_ids = platform_readback.capture_douyin_snapshot(page)
             _go_upload(page)
@@ -1206,53 +1419,89 @@ def _publish(a, kind: str) -> int:
             human_pace.pace("field-switch")              # 上传后到填写前
             if kind == "video":
                 _wait_video_processed(page)
+                _check_block(page, sf)
                 _select_ai_cover(page)
+                _set_dual_cover(page)
             _fill_title_desc(page, a.title, a.content or "", tags)
-            _click_publish(page, len(a.title) + len(a.content or ""))
-            # 点击后轮询等风控墙浮现（2026-09-12 真机发现：墙的渲染晚于 2.5s，
-            # 单次检查会扑空 → 漏进收尾 → 对着被墙遮挡的按钮空点超时。≤12s 窗口）
-            wall_up = False
-            for _ in range(6):
-                page.wait_for_timeout(2000)
-                if _verify_wall(page):
-                    wall_up = True
-                    break
-            # 发布也可能触发风控短信验证墙（真机实测：点发布后弹「接收短信验证码」）
-            if wall_up:
-                code_file = (Path(a.sms_code_file).expanduser()
-                             if getattr(a, "sms_code_file", None)
-                             else DEFAULT_QR_OUT.parent / "douyin.code")
-                if not _handle_publish_sms(page, code_file, sf):
-                    _dump_publish_fail(page, "publish-sms-fail")
-                    published = False
-            # 收尾（验证通过后抖音自动提交，此阶段偶发渲染进程崩溃/上下文销毁）——抗错，
-            # 崩了不判失败，交给下面「重开干净浏览器查内容管理页」权威核验。
-            if published is None:
-                try:
-                    page.wait_for_timeout(1500)
+            # AI 声明（选择器未校准）：半自动勾不上只提示人手动勾；自动点击模式勾不上 fail-closed
+            ai_manual = False
+            if declare_ai and not _declare_ai(page):
+                if auto:
+                    login_state.write_status(sf, "error", AI_DECLARE_FAILED_MSG)
+                    _die(AI_DECLARE_FAILED_MSG, EXIT_AI_DECLARE)
+                ai_manual = True
+            _check_block(page, sf)
+
+            if not auto:
+                # ---- 半自动：停在发布前，人亲自点「发布」，脚本只被动观察 ----
+                hint = (semi_auto.AWAITING_MESSAGE
+                        + (f"另外：{AI_DECLARE_MANUAL_HINT}。" if ai_manual else ""))
+
+                def _on_status(state, _msg):
+                    if state == "awaiting_user_click" and ai_manual:
+                        login_state.write_status(sf, state, hint)   # 把「手动勾 AI 声明」并进交接提示
+
+                if ai_manual:
+                    print(f"✋ {AI_DECLARE_MANUAL_HINT}", flush=True)
+                handoff = semi_auto.await_human_publish(
+                    page, platform="douyin", is_published=_is_published,
+                    toast_selectors=TOAST_SELECTORS, status_file=sf,
+                    timeout_s=handoff_timeout, on_status=_on_status)
+                if handoff == "published":
+                    published = True
+                else:
+                    abort = handoff
+            else:
+                # ---- 逃生口：脚本点发布（单次点击，无自动重试）----
+                _click_publish(page, len(a.title) + len(a.content or ""))
+                page.wait_for_timeout(1500)
+                _check_block(page, sf)
+                # 点击后轮询等风控墙浮现（2026-09-12 真机发现：墙的渲染晚于 2.5s，
+                # 单次检查会扑空 → 漏进收尾 → 对着被墙遮挡的按钮空点超时。≤12s 窗口）
+                wall_up = False
+                for _ in range(6):
+                    page.wait_for_timeout(2000)
                     if _verify_wall(page):
-                        # 收尾阶段才发现墙（渲染更晚）——立即进短信流程，绝不对着墙空点
-                        code_file = (Path(a.sms_code_file).expanduser()
-                                     if getattr(a, "sms_code_file", None)
-                                     else DEFAULT_QR_OUT.parent / "douyin.code")
-                        if not _handle_publish_sms(page, code_file, sf):
-                            _dump_publish_fail(page, "publish-sms-fail")
-                            published = False
-                    if published is None:
-                        if "post/video" in page.url or "post/image" in page.url:
-                            try:
-                                _click_publish(page)
-                            except SystemExit:
-                                pass
-                        _wait_toast(page, timeout_s=40)
-                        published = True
-                except (PWTimeout, PWError, SystemExit) as e:
-                    print(f"⚠️ 收尾阶段异常（{type(e).__name__}）——将读回作品列表核验", file=sys.stderr)
-                    _dump_publish_fail(page, "tail-anomaly")   # 点击后现场留档（诊断「发布未跳转」）
-                    published = None
+                        wall_up = True
+                        break
+                # 发布也可能触发风控短信验证墙（真机实测：点发布后弹「接收短信验证码」）
+                if wall_up:
+                    code_file = (Path(a.sms_code_file).expanduser()
+                                 if getattr(a, "sms_code_file", None)
+                                 else DEFAULT_QR_OUT.parent / "douyin.code")
+                    if not _handle_publish_sms(page, code_file, sf):
+                        _dump_publish_fail(page, "publish-sms-fail")
+                        published = False
+                # 收尾（验证通过后抖音自动提交，此阶段偶发渲染进程崩溃/上下文销毁）——抗错，
+                # 崩了不判失败，交给下面「重开干净浏览器查内容管理页」权威核验。
+                # 注意：不再对发布按钮做任何自动重点——整个流程只点一次。
+                if published is None:
+                    try:
+                        page.wait_for_timeout(1500)
+                        if _verify_wall(page):
+                            # 收尾阶段才发现墙（渲染更晚）——立即进短信流程，绝不对着墙空点
+                            code_file = (Path(a.sms_code_file).expanduser()
+                                         if getattr(a, "sms_code_file", None)
+                                         else DEFAULT_QR_OUT.parent / "douyin.code")
+                            if not _handle_publish_sms(page, code_file, sf):
+                                _dump_publish_fail(page, "publish-sms-fail")
+                                published = False
+                        if published is None:
+                            _wait_toast(page, timeout_s=40)
+                            published = True
+                    except SystemExit as e:
+                        if e.code == publish_guard.EXIT_COOLDOWN:
+                            raise                                  # 平台处罚提示：不得吞掉、不得重试
+                        print("⚠️ 收尾阶段异常（SystemExit）——将读回作品列表核验", file=sys.stderr)
+                        _dump_publish_fail(page, "tail-anomaly")
+                        published = None
+                    except (PWTimeout, PWError) as e:
+                        print(f"⚠️ 收尾阶段异常（{type(e).__name__}）——将读回作品列表核验", file=sys.stderr)
+                        _dump_publish_fail(page, "tail-anomaly")   # 点击后现场留档（诊断「发布未跳转」）
+                        published = None
             # 读回对账（权威判定）：界面判定只说明「提交动作被接受」，以平台侧作品列表为准。
             # keep_open 也必须就地读回：同一 user-data-dir 不能再开第二个 context。
-            if readback is None:
+            if readback is None and abort is None:
                 try:
                     readback = platform_readback.verify_douyin_publish(
                         page, title=a.title, since_ms=started_ms,
@@ -1275,10 +1524,18 @@ def _publish(a, kind: str) -> int:
                 pass
         # 就地读回没拿到结论（崩溃/超时/通道错）→ 重开干净 context。
         # --keep-open 时窗口还占着 profile，禁止再 launch_persistent_context。
-        if (not a.keep_open
+        if (abort is None and not a.keep_open
                 and (readback is None or readback.outcome == "readback_error")):
             readback = _readback_verify(p, a, a.title, since_ms=started_ms,
                                         snapshot_ids=snapshot_ids)
+    # 半自动交接没走到「已发布」：不重试、不读回，明确报「未发布」
+    if abort == "blocked":
+        sys.exit(publish_guard.EXIT_COOLDOWN)       # on_block_detected 已设冷却并打印，状态文件已写 error
+    if abort in ("closed", "timeout"):
+        why = "窗口已关闭" if abort == "closed" else "等待超时"
+        msg = f"未发布：{why}（没有确认发布成功；请到创作者中心内容管理页核对，不要自动重试）"
+        login_state.write_status(sf, "error", msg)
+        _die(msg, EXIT_UNCONFIRMED)
     # 结算：以读回对账为权威（四档），界面判定仅作旁证。
     outcome = readback.outcome if readback else "readback_error"
     if outcome == "verified":
@@ -1288,6 +1545,7 @@ def _publish(a, kind: str) -> int:
         login_state.write_status(sf, "success",
                                  f"发布成功（读回核验：作品 {m.platform_content_id}，{m.status}{_who}）")
         print(f"✅ 抖音发布成功（读回核验：{m.platform_content_id}{_who}）")
+        _record_ledger(media, a.title)
         # 落统一内容日历（对话页自动；发布页由 web 设 AUTORECORD=0 跳过防重复）
         try:
             import calendar_ops
@@ -1297,6 +1555,11 @@ def _publish(a, kind: str) -> int:
         except Exception:
             pass
         return 0
+    if published is True:
+        _record_ledger(media, a.title)   # 界面已确认发布（跳转/成功提示）但读回没对上：也记账，防止误重发
+    elif auto:
+        # 逃生口路径：发布按钮已点过但结果未确认——也记一笔 unconfirmed，防止误二发
+        _record_ledger(media, a.title, unconfirmed=True)
     if outcome == "login_required":
         login_state.write_status(sf, "error",
                                  "发布未核验：读回时登录态已失效——请重新登录后到内容管理页核对是否已发出")
@@ -1311,6 +1574,15 @@ def _publish(a, kind: str) -> int:
     _die(f"发布未确认成功（{reason}；见截图/日志）", 5)
 
 
+def _record_ledger(media, title: str, unconfirmed: bool = False) -> None:
+    """记入发布台账（publish_guard），之后同内容/同标题默认拦截。台账写失败不影响发布结果。
+    unconfirmed=True：已点发布但结果未确认（url 留空，账本带 unconfirmed 标记）。"""
+    try:
+        publish_guard.record_publish("douyin", media, title, url="", unconfirmed=unconfirmed)
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠️ 发布台账写入失败：{e}", file=sys.stderr)
+
+
 def cmd_publish(a) -> int:
     return _publish(a, "imagetext")
 
@@ -1321,7 +1593,10 @@ def cmd_publish_video(a) -> int:
 
 def cmd_whoami(a) -> int:
     """真校验登录态 + 读昵称/头像，输出单行 JSON（供 Web 后端解析）。
-    复用 _logged_in（无二维码 + 有「高清发布」）。昵称/头像选择器 best-effort，登录后需校验。"""
+    复用 _logged_in（无二维码 + 有「高清发布」）。昵称/头像选择器 best-effort，登录后需校验。
+    冷却期内不起浏览器（exit 9）。"""
+    publish_guard.exit_if_cooldown("douyin", "登录态校验",
+                                   stdout_json={"loggedIn": False, "name": "", "avatar": ""})
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
@@ -1431,13 +1706,21 @@ def cmd_selftest(_a) -> int:
     _src = _ins.getsource(_click_publish)
     assert "_wait_publish_button_ready" in _src and "pause_before_commit" in _src
     assert callable(_wait_publish_button_ready)
-    print("✅ selftest 通过（短信选择器 + 弹窗定位 + 墙判定 + 路径/代理/路由 + plan + 验证码文件协议 + 读回对账 + 发前快照 + 人类节奏 + 单次提交契约）")
+    # 半自动 / 闸门 / AI 声明 / 浏览器引擎（离线静态检查）
+    import inspect as _ins2
+    _ps = _ins2.getsource(_publish)
+    assert "publish_guard.guard_before_publish" in _ps and "semi_auto.await_human_publish" in _ps
+    assert "semi_auto.auto_click_allowed" in _ps and "_record_ledger" in _ps
+    assert _ps.count("_click_publish(") == 1, "发布按钮只允许在自动逃生口里点一次"
+    assert AI_DECLARE_OPTION_TEXT == "内容由AI生成" and "自主声明" in AI_DECLARE_ENTRY_TEXTS
+    assert "real_browser.launch" in _ins2.getsource(_launch)
+    print("✅ selftest 通过（短信选择器 + 弹窗定位 + 墙判定 + 路径/代理/路由 + plan + 验证码文件协议 + 读回对账 + 发前快照 + 人类节奏 + 单次提交契约 + 半自动/闸门/AI声明）")
     return 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="抖音发布（Playwright，headless 可用；流程移植自 douyin-upload-mcp-skill）",
+        description="抖音发布（Playwright，半自动：可见窗口填表、人亲自点发布；流程移植自 douyin-upload-mcp-skill）",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd")
 
@@ -1455,20 +1738,29 @@ def main() -> int:
         p.add_argument("--exec", action="store_true", help="真正发布（默认 dry-run）")
         p.add_argument("--allow-unsafe", action="store_true",
                        help="放行内容安全闸门（检出内部设置泄露也照发，谨慎）")
-        p.add_argument("--headed", action="store_true", help="有头模式（首次校验选择器）")
+        p.add_argument("--headed", action="store_true",
+                       help="开窗口（兼容保留：发布一律开窗口，登录默认也开；仅 EASEL_DOUYIN_HEADLESS=1 时 login 才可能无头）")
+        p.add_argument("--allow-repost", action="store_true",
+                       help="放行重复发布闸门（仅当用户明确要求重发同一内容时才加）")
+        p.add_argument("--ai-declare", dest="ai_declare", action="store_true", default=True,
+                       help="发布页勾选「自主声明→内容由AI生成」（默认开）")
+        p.add_argument("--no-ai-declare", dest="ai_declare", action="store_false",
+                       help="不勾 AI 声明（仅内容确非 AI 生成时）")
+        p.add_argument("--handoff-timeout", type=float, default=3600,
+                       help="半自动：等用户亲自点发布的超时秒数（默认 3600）")
         p.add_argument("--keep-open", action="store_true", help="发布后不关浏览器")
         p.add_argument("--sms-code-file", help="发布触发短信验证时的验证码回填文件（默认 <_login>/douyin.code）")
         p.add_argument("--status-file", help="登录/验证状态 JSON 输出路径（供 Web 后端轮询短信墙）")
 
     sub.add_parser("check", help="检查 playwright/内核").set_defaults(func=cmd_check)
 
-    p = sub.add_parser("login", help="扫码登录并持久化（headless 抠二维码）")
+    p = sub.add_parser("login", help="扫码登录并持久化（默认开窗口，同时抠二维码图）")
     add_common(p)
     p.add_argument("--qr-out", help=f"二维码图片输出路径（默认 {DEFAULT_QR_OUT}）")
     p.add_argument("--status-file", help="登录状态 JSON 输出路径（供 Web 后端轮询）")
     p.add_argument("--sms-code-file", help="短信验证码回填文件（默认 <qr目录>/douyin.code）")
     p.add_argument("--timeout", type=int, help="等待扫码超时秒数（默认 180）")
-    p.add_argument("--headed", action="store_true", help="有头模式")
+    p.add_argument("--headed", action="store_true", help="开窗口（默认就开；仅 EASEL_DOUYIN_HEADLESS=1 时有区别）")
     p.set_defaults(func=cmd_login)
 
     p = sub.add_parser("plan", help="发布步骤预览（离线）")

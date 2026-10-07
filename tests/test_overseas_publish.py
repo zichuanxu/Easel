@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "skills" / "shared" / "scripts"))
 
 import overseas_publisher as op  # noqa: E402
+import publish_guard  # noqa: E402
 from overseas import base  # noqa: E402
 from overseas.post import Limits, Post, PostError, caption_text  # noqa: E402
 
@@ -61,6 +62,15 @@ def make_mod(world):
         KINDS=frozenset({"video", "text"}), READY_KINDS=frozenset({"video"}),
         LIMITS=Limits(caption=100), VISIBILITY=(), compose=lambda p: {"caption": caption_text(p)},
         publish=publish)
+
+
+@pytest.fixture(autouse=True)
+def _guard_sandbox(tmp_path_factory, monkeypatch):
+    """发布闸门的账本 / 冷却 / 发布日志全部指到临时目录，绝不碰真实 outputs/。"""
+    d = tmp_path_factory.mktemp("guard")
+    monkeypatch.setattr(publish_guard, "LEDGER_PATH", d / "ledger.jsonl")
+    monkeypatch.setattr(publish_guard, "COOLDOWN_PATH", d / "cooldown.json")
+    monkeypatch.setattr(publish_guard, "PUBLISH_LOG_PATH", d / "publish-log.json")
 
 
 @pytest.fixture
@@ -264,3 +274,62 @@ def test_exec_hands_post_to_run_publish(monkeypatch, tmp_path):
 
 def test_selftest_checks_ready_kinds(capsys):
     assert op.main(["selftest"]) == 0
+
+
+# ---------------------------------------------------------------- 发布闸门：重复 / 冷却 / 记账 / 处罚提示
+def test_platform_block_text_sets_cooldown_and_exits_9(env):
+    """平台结果里是明确的处罚提示：进入冷却、退出码 9、只发一次不重试。"""
+    tmp_path, video = env
+    world = World(result=base.Result("failed", message="你的发布功能已被限制"))
+    rc, status, recorded = run(world, tmp_path, video)
+    assert rc == publish_guard.EXIT_COOLDOWN == 9
+    assert world.published == 1 and recorded == []
+    assert publish_guard.active_cooldown("demo") is not None
+
+
+def _exec(monkeypatch, video, *extra):
+    calls = []
+    monkeypatch.setattr(op, "run_publish", lambda *a, **k: calls.append(1) or 0)
+    try:
+        rc = op.main(["publish", "--platform", "x", "--media", str(video), "--desc", "Hi", "--exec", *extra])
+    except SystemExit as e:
+        rc = e.code
+    return rc, calls
+
+
+def test_exec_blocked_by_cooldown(monkeypatch, tmp_path):
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"\x00")
+    publish_guard.set_cooldown("x", "测试冷却")
+    rc, calls = _exec(monkeypatch, video)
+    assert rc == publish_guard.EXIT_COOLDOWN and calls == []
+    rc, calls = _exec(monkeypatch, video, "--allow-repost")     # --allow-repost 绕不过冷却
+    assert rc == publish_guard.EXIT_COOLDOWN and calls == []
+
+
+def test_exec_blocks_duplicate_unless_allow_repost(monkeypatch, tmp_path):
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"\x01\x02")
+    publish_guard.record_publish("x", [str(video)], "Hi")
+    rc, calls = _exec(monkeypatch, video)
+    assert rc == publish_guard.EXIT_DUPLICATE and calls == []
+    rc, calls = _exec(monkeypatch, video, "--allow-repost")
+    assert rc == 0 and calls == [1]
+
+
+def test_dry_run_does_not_hit_guard(monkeypatch, tmp_path, capsys):
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"\x01")
+    publish_guard.set_cooldown("x", "测试冷却")
+    monkeypatch.setattr(op, "run_publish", lambda *a, **k: pytest.fail("不该真发"))
+    assert op.main(["publish", "--platform", "x", "--media", str(video), "--desc", "Hi"]) == 0
+
+
+def test_record_writes_ledger_for_next_duplicate_check(env, monkeypatch):
+    tmp_path, video = env
+    monkeypatch.setattr(op.calendar_ops, "record_publish", lambda *a, **k: None)   # 不写真实内容日历
+    mod = make_mod(World())
+    p = Post(media=[video], desc="Hello", tags="ai")
+    op._record(mod, p, mod.compose(p), base.Result("success", url="https://demo.test/p/1"))
+    dup = publish_guard.find_duplicate("demo", [str(video)], op._guard_title(p))
+    assert dup and dup["url"] == "https://demo.test/p/1"

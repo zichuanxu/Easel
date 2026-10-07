@@ -21,6 +21,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "web"))
 
 import app as web  # noqa: E402
+import publish_guard  # noqa: E402  web/app 已把 skills/shared/scripts 放进 sys.path
 
 PF = "weixin-channels"
 
@@ -50,6 +51,7 @@ def env(monkeypatch, tmp_path):
     d = tmp_path / "_login"
     d.mkdir()
     monkeypatch.setattr(web, "LOGIN_DIR", d)
+    monkeypatch.setattr(publish_guard, "COOLDOWN_PATH", tmp_path / "cooldown.json")   # 不碰真实冷却记录
     monkeypatch.setattr(web, "LOGIN_PROCESSES", {})
     monkeypatch.setattr(web, "_WHOAMI_CACHE", {})
     calls: list[list[str]] = []
@@ -67,7 +69,7 @@ def env(monkeypatch, tmp_path):
 
 
 def _whoami() -> dict:
-    return asyncio.run(web.api_account_whoami(PF))
+    return asyncio.run(web.api_account_whoami(PF, manual=1))
 
 
 def _start_runner(d: Path) -> None:
@@ -153,3 +155,24 @@ def test_whoami_without_login_still_clears_stale_marker(env):
     assert res["loggedIn"] is False
     assert _state(d) is None
     assert web._WHOAMI_CACHE[PF][1]["loggedIn"] is False
+
+
+@pytest.mark.parametrize("pf", ["douyin", "kuaishou", "zhihu", "weixin-channels", "xiaohongshu"])
+def test_domestic_whoami_without_manual_never_launches_browser(env, pf):
+    """国内浏览器平台：开页/定时的 whoami 只读登录标记，不起浏览器（防被判第三方脚本封号）。"""
+    d, calls, _answer, _during = env
+    (d / f"{pf}.json").write_text(json.dumps({"state": "success", "message": "", "qr": "", "ts": 0}), encoding="utf-8")
+    web.LOGIN_PROCESSES.pop(pf, None)
+    res = asyncio.run(web.api_account_whoami(pf))
+    assert calls == []
+    assert res["loggedIn"] is True
+
+
+def test_domestic_manual_whoami_refused_in_cooldown(env):
+    d, calls, _answer, _during = env
+    _write_status(d, "success", "")
+    publish_guard.set_cooldown(PF, "平台提示处罚")
+    with pytest.raises(web.HTTPException) as e:
+        asyncio.run(web.api_account_whoami(PF, manual=1))
+    assert e.value.status_code == 409
+    assert calls == []

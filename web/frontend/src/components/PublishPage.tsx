@@ -56,7 +56,11 @@ function parseSections(text: string): Record<string, string> {
   return map;
 }
 
-type PubState = { status: 'publishing' | 'ok' | 'fail'; msg: string };
+// awaiting = 窗口里已填好、等用户亲自点「发布」（半自动）；duplicate = 闸门拦下重复内容，等用户确认是否重发
+type PubState = { status: 'publishing' | 'awaiting' | 'ok' | 'fail' | 'duplicate'; msg: string };
+
+// 半自动发布的前端总等待：后端等人点发布最长 1 小时 + 填表/上传 + 余量
+const PUBLISH_POLL_MAX_MS = 100 * 60 * 1000;
 
 export default function PublishPage({ persona }: PublishPageProps) {
   const draft0 = loadPublishDraft();
@@ -193,6 +197,32 @@ export default function PublishPage({ persona }: PublishPageProps) {
     } finally { setChecking(false); }
   };
 
+  // 发布一个平台并把结果写进卡片状态；返回是否被重复闸门拦下（duplicate）及说明
+  const publishOne = async (t: { key: string; label: string }, allowRepost: boolean)
+    : Promise<{ duplicate: boolean; message: string }> => {
+    setPub((r) => ({ ...r, [t.key]: { status: 'publishing', msg: '发布中…' } }));
+    try {
+      const payload = isOverseas(t.key)
+        ? { ...overseasPayload(t.key, effective(t.key)), media: selectedMedia, visibility: visibility[t.key] || '' }
+        : { title, body: effective(t.key), media: selectedMedia, tags };
+      const res = await publishNow(t.key, { ...payload, allowRepost });
+      if (res.async) {
+        // 异步发布：轮询状态；国内平台会先进入 awaiting_user_click（等你亲自点发布），抖音可能弹短信验证
+        return await pollAsyncPublish(t.key, t.label);
+      }
+      if (res.duplicate) return { duplicate: true, message: res.message };
+      setPub((r) => ({
+        ...r,
+        [t.key]: res.ok
+          ? { status: 'ok', msg: '已发布' }
+          : { status: 'fail', msg: res.cooldown ? res.message : (res.detail || res.message || '发布失败') },
+      }));
+    } catch (e) {
+      setPub((r) => ({ ...r, [t.key]: { status: 'fail', msg: e instanceof Error ? e.message : '发布失败' } }));
+    }
+    return { duplicate: false, message: '' };
+  };
+
   // D. 一键发布（真发布，二次确认）
   const publishAll = async () => {
     if (empty || publishing || checking) return;
@@ -212,7 +242,8 @@ export default function PublishPage({ persona }: PublishPageProps) {
     const okToSend = window.confirm(
       `发布前预检已执行，结果已显示在页面中。人设评分只做提醒，不会阻止发布。\n\n` +
       `即将【真实发布】到：${targets.map((t) => t.label).join('、')}。\n` +
-      `这会公开发布到你的账号，确定继续？`);
+      `国内浏览器平台（小红书/抖音/快手/视频号/知乎）是半自动：脚本只在弹出的窗口里把内容填好，` +
+      `需要你检查后亲自点击『发布』。\n这会公开发布到你的账号，确定继续？`);
     if (!okToSend) return;
 
     setPublishing(true);
@@ -229,53 +260,56 @@ export default function PublishPage({ persona }: PublishPageProps) {
         setPub((r) => ({ ...r, [t.key]: { status: 'fail', msg: `${t.label}只能发视频，请从内容库选一个视频` } }));
         continue;
       }
-      setPub((r) => ({ ...r, [t.key]: { status: 'publishing', msg: '发布中…可能需 1-2 分钟' } }));
-      try {
-        const payload = isOverseas(t.key)
-          ? { ...overseasPayload(t.key, effective(t.key)), media: selectedMedia, visibility: visibility[t.key] || '' }
-          : { title, body: effective(t.key), media: selectedMedia, tags };
-        const res = await publishNow(t.key, payload);
-        if (res.async) {
-          // 抖音：异步发布，轮询状态；风控触发短信墙时弹输入框（条件触发，没触发就直接跑完）
-          await pollAsyncPublish(t.key, t.label);
-        } else {
-          setPub((r) => ({
-            ...r,
-            [t.key]: res.ok
-              ? { status: 'ok', msg: '已发布' }
-              : { status: 'fail', msg: res.detail || res.message || '发布失败' },
-          }));
-        }
-      } catch (e) {
-        setPub((r) => ({ ...r, [t.key]: { status: 'fail', msg: e instanceof Error ? e.message : '发布失败' } }));
+      let outcome = await publishOne(t, false);
+      if (outcome.duplicate) {
+        // 闸门拦下重复内容：必须用户明确确认才带 allowRepost 重发（冷却不走这里，不可绕过）
+        const again = window.confirm(`${outcome.message}\n\n仍要重发同一内容？`);
+        if (again) outcome = await publishOne(t, true);
+        else setPub((r) => ({ ...r, [t.key]: { status: 'fail', msg: `已取消重发：${outcome.message}` } }));
       }
     }
     setPublishing(false);
     showToast('发布流程结束，见各平台卡片状态');
   };
 
-  // 异步发布轮询（抖音）：直到 success/error；遇 sms_required/verifying 弹短信窗口
-  const pollAsyncPublish = (key: string, label: string) => new Promise<void>((resolve) => {
+  // 异步发布轮询：直到终态（success/error/duplicate/cooldown）。
+  // awaiting_user_click：脚本已在窗口里填好，等用户亲自点发布，继续轮询；sms_required/verifying 弹短信窗口。
+  const pollAsyncPublish = (key: string, label: string) => new Promise<{ duplicate: boolean; message: string }>((resolve) => {
     const started = Date.now();
+    const done = (duplicate = false, message = '') => resolve({ duplicate, message });
     const iv = setInterval(async () => {
-      if (Date.now() - started > 15 * 60 * 1000) {   // 15min 兜底
+      if (Date.now() - started > PUBLISH_POLL_MAX_MS) {
         clearInterval(iv); setPubSms(null);
-        setPub((r) => ({ ...r, [key]: { status: 'fail', msg: '发布超时' } }));
-        resolve(); return;
+        setPub((r) => ({ ...r, [key]: { status: 'fail', msg: '等待发布结果超时，请到平台后台核对，不要自动重试' } }));
+        done(); return;
       }
       let s;
       try { s = await publishStatus(key); } catch { return; }  // 单次失败忽略
-      if (s.state === 'sms_required' || s.state === 'verifying') {
+      // verifying 有两种：短信验证流程（消息含验证码/短信，弹窗）；半自动「已检测到发布，正在核对…」（非终态，
+      // 只在卡片上显示消息并继续轮询，直到脚本核对完写 success / error）
+      const smsFlow = s.state === 'sms_required' || (s.state === 'verifying' && /验证码|短信/.test(s.message || ''));
+      if (s.state === 'verifying' && !smsFlow) {
+        setPubSms(null);
+        setPub((r) => ({ ...r, [key]: { status: 'publishing', msg: s.message || '已检测到发布，正在核对…' } }));
+      } else if (smsFlow) {
         setPubSms({ platform: key, name: label, state: s.state, message: s.message });
         setPub((r) => ({ ...r, [key]: { status: 'publishing', msg: s.message || '需短信验证' } }));
+      } else if (s.state === 'awaiting_user_click') {
+        setPubSms(null);
+        setPub((r) => ({ ...r, [key]: { status: 'awaiting', msg: s.message || '已在窗口里填好，请检查后亲自点击『发布』' } }));
       } else if (s.state === 'success') {
         clearInterval(iv); setPubSms(null);
         setPub((r) => ({ ...r, [key]: { status: 'ok', msg: '已发布' } }));
-        resolve();
-      } else if (s.state === 'error') {
+        done();
+      } else if (s.state === 'duplicate') {
+        clearInterval(iv); setPubSms(null);
+        setPub((r) => ({ ...r, [key]: { status: 'duplicate', msg: s.message || '检测到重复发布' } }));
+        done(true, s.message || '检测到重复发布');
+      } else if (s.state === 'cooldown' || s.state === 'error') {
+        // cooldown：平台冷却/处罚，不提供任何绕过，只显示说明
         clearInterval(iv); setPubSms(null);
         setPub((r) => ({ ...r, [key]: { status: 'fail', msg: s.message || '发布失败' } }));
-        resolve();
+        done();
       } else {
         setPub((r) => ({ ...r, [key]: { status: 'publishing', msg: s.message || '发布中…' } }));
       }
@@ -453,6 +487,7 @@ export default function PublishPage({ persona }: PublishPageProps) {
               {ps && (
                 <div className={`pv-pubstate ${ps.status}`}>
                   {ps.status === 'publishing' && <span className="live-pulse" />}
+                  {ps.status === 'awaiting' && <strong className="pv-awaiting-title">请在弹出的浏览器窗口里点击『发布』</strong>}
                   {ps.msg}
                 </div>
               )}

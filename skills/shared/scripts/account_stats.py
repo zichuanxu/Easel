@@ -19,6 +19,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import real_browser  # noqa: E402  与发布脚本同一套浏览器引擎/登录目录
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ANALYTICS_DIR = PROJECT_ROOT / "outputs" / "_analytics"
 # 分层保留：近 KEEP_FULL_DAYS 天全部变化一条不丢；90~DAILY_DAYS 天每天≤1条；更老每周≤1条。
@@ -371,10 +374,9 @@ def _scrape(platform: str, headed: bool, base: str | None, proxy: str | None) ->
                 # 与发布/登录共用同一个浏览器（Cloak / 本机 Chrome）和启动参数；残留锁由 _launch 自己按实际数据目录清。
                 ctx = _xhs_launch(p, headed, base, proxy)
             else:
-                kwargs = dict(headless=not headed, locale="zh-CN", args=LAUNCH_ARGS)
-                if proxy:
-                    kwargs["proxy"] = {"server": proxy}
-                ctx = p.chromium.launch_persistent_context(str(profile), **kwargs)
+                # 与该平台发布脚本同引擎（Cloak → 本机 Chrome）+ 同登录目录/指纹；
+                # 只有 EASEL_<平台>_HEADLESS=1 才真无头，否则开窗口（国内平台只在用户手动触发时抓）
+                ctx = real_browser.launch_platform(p, platform, headed=headed, proxy=proxy, base=base)
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             try:
                 page.goto(cfg["url"], wait_until="domcontentloaded", timeout=30000)
@@ -798,6 +800,20 @@ MANUAL_ONLY = {"xiaohongshu"}
 def cmd_fetch(a) -> int:
     if a.platform not in PLATFORMS:
         _die(f"未知平台：{a.platform}（支持：{', '.join(PLATFORMS)}）")
+    # 平台处于发布冷却期（被处罚/限流）：不再抓取，免得多一次自动化访问加重处罚。
+    # 只读缓存即可（outputs/_analytics/<平台>-latest.json），解除冷却须用户在对话里明确要求。
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import publish_guard
+    cd = publish_guard.active_cooldown(a.platform)
+    if cd:
+        name = publish_guard.platform_display(a.platform)
+        msg = (f"{name} 正处于冷却期（原因：{cd.get('reason') or '未记录'}；"
+               f"到期：{cd.get('until') or '需用户手动解除'}），已拒绝抓取。"
+               "不要重试，请向用户说明；只能读 outputs/_analytics 里的缓存结果。")
+        print(f"⛔ {msg}", file=sys.stderr)
+        print(json.dumps({"platform": a.platform, "loggedIn": False, "error": msg, "cooldown": True},
+                         ensure_ascii=False))
+        return publish_guard.EXIT_COOLDOWN
     if a.platform in MANUAL_ONLY and not getattr(a, "manual", False):
         print(json.dumps({"platform": a.platform, "loggedIn": False,
                           "error": "manual-only：小红书数据只在用户明确要求时抓取（加 --manual）"},

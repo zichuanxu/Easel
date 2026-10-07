@@ -645,7 +645,9 @@ def test_login_status_does_not_miss_final_success(login_dir):
 
 
 @pytest.fixture
-def whoami_env(monkeypatch, login_dir):
+def whoami_env(monkeypatch, login_dir, tmp_path):
+    import publish_guard
+    monkeypatch.setattr(publish_guard, "COOLDOWN_PATH", tmp_path / "cooldown.json")   # 不碰真实冷却记录
     monkeypatch.setattr(web, "_WHOAMI_CACHE", {})
     calls: list[list[str]] = []
     answer = {"loggedIn": False, "name": "", "avatar": ""}
@@ -659,7 +661,7 @@ def whoami_env(monkeypatch, login_dir):
 
 
 def _whoami() -> dict:
-    return asyncio.run(web.api_account_whoami("douyin"))
+    return asyncio.run(web.api_account_whoami("douyin", manual=1))
 
 
 def _simulate_cli_login(marker: Path) -> None:

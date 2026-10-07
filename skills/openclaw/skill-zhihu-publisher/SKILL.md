@@ -21,6 +21,19 @@ layer: publish
 
 无浏览器环境可用 `platforms` / `plan` / `check`。
 
+## 半自动发布与发布闸门（默认，必读）
+
+- **半自动**：`--exec` 后脚本在**可见的真实浏览器窗口**里把内容全部填好，**停在「发布」前**，由用户亲自检查并点击；
+  脚本只被动观察结果（成功才记账）。**agent 不得替用户点发布，也不得设置/建议设置 `EASEL_DOMESTIC_AUTO_PUBLISH=1`**
+  （该逃生口只能用户自己开）。状态文件（`--status-file`）会出现 `awaiting_user_click`；等用户点的最长时间 `--handoff-timeout`（默认 3600 秒）。
+- **发布闸门**（起浏览器前）：同平台 30 天内媒体/标题重复 → 退出码 **8**（仅当用户明确要求重发才加 `--allow-repost`）；
+  平台冷却 → 退出码 **9**，任何参数都绕不过，**只有用户能解除**（`python skills/shared/scripts/publish_guard.py cooldown clear --platform <平台>`，agent 不要主动清）。
+- **fail-stop**：窗口被关/等点击超时 → 提示「未发布」并非零退出，**不要自动重试**；检测到平台处罚/限流 toast → 设冷却并退出 9，先向用户汇报。
+- 冷却期内**所有自动起浏览器的子命令**（whoami --live、评论/抓取等）也一律退出 9；`login` 由用户发起，只警告不拦。状态文件 `verifying` 是非终态，核对通过才写 `success`，失败写 `error`。
+- 不做发布频率限制（小红书原有间隔闸门保持不变）。
+- **浏览器内核**：同 `real_browser`（CloakBrowser → 本机 Chrome/Edge，`EASEL_ZHIHU_BROWSER=chrome` 强制 Chrome，`EASEL_ZHIHU_HEADLESS=1` 仅无桌面机器）。
+  **从旧版升级后需重新扫码登录一次**。内容含 AI 生成时，交接提示会提醒手动勾选 AI 声明（`--no-ai-declare` 关闭提醒）。
+
 ## 执行
 
 ```bash
@@ -28,7 +41,7 @@ ROOT=<项目根>; WP=$ROOT/skills/shared/scripts/web_publisher.py
 python $WP check
 python $WP login   --platform zhihu
 python $WP plan    --platform zhihu --title "标题" --desc "正文..."
-python $WP publish --platform zhihu --title "标题" --desc "正文..." --exec --headed
+python $WP publish --platform zhihu --title "标题" --desc "正文..." --exec   # 开窗口填好，停在『发布』前等你点
 ```
 
 ## Profile 感知

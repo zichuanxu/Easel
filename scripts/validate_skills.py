@@ -24,9 +24,12 @@ LEGACY_OUTPUT_DIRS = {
     "subtitle-translate", "tts-voiceover", "video-chapters", "video-highlights",
     "video-intro-outro", "video-reframe", "video-to-article", "voice-clone",
 }
+# 每个发布脚本必须：真发前过 content_guard（敏感信息）、publish_guard（重复拦截 + 平台冷却），默认 dry-run（--exec 才真发）。
+# 公众号 publish.py / multi_publish.py 只建草稿、不对外发布，免 publish_guard。
 PUBLISH_SCRIPT_CONTRACTS = {
     "skills/openclaw/skill-bilibili-upload/scripts/bili_upload.py": (
-        "content_guard.guard_or_die", 'add_argument("--exec"',
+        "content_guard.guard_or_die", "publish_guard.guard_before_publish",
+        'add_argument("--exec"',
     ),
     "skills/openclaw/skill-wechat-publisher/scripts/publish.py": (
         "content_guard.guard_or_die", '"--exec"',
@@ -35,19 +38,24 @@ PUBLISH_SCRIPT_CONTRACTS = {
         "content_guard.guard_or_die", '"--exec"',
     ),
     "skills/shared/scripts/xhs_publish.py": (
-        "content_guard.guard_or_die", 'add_argument("--exec"',
+        "content_guard.guard_or_die", "publish_guard.guard_before_publish",
+        'add_argument("--exec"',
     ),
     "skills/shared/scripts/douyin_publish.py": (
-        "content_guard.guard_or_die", 'add_argument("--exec"',
+        "content_guard.guard_or_die", "publish_guard.guard_before_publish",
+        'add_argument("--exec"',
     ),
     "skills/shared/scripts/web_publisher.py": (
-        "content_guard.guard_or_die", 'add_argument("--exec"',
+        "content_guard.guard_or_die", "publish_guard.guard_before_publish",
+        'add_argument("--exec"',
     ),
     "skills/shared/scripts/zhihu_answer.py": (
-        "content_guard.guard_or_die", 'add_argument("--exec"',
+        "content_guard.guard_or_die", "publish_guard.guard_before_publish",
+        'add_argument("--exec"',
     ),
     "skills/shared/scripts/overseas_publisher.py": (
-        "content_guard.guard_or_die", 'add_argument("--exec"',
+        "content_guard.guard_or_die", "publish_guard.guard_before_publish",
+        'add_argument("--exec"',
     ),
 }
 OUTPUT_SCAN_SUFFIXES = {".md", ".py", ".sh"}

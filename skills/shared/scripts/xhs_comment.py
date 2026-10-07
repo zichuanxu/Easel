@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import content_guard  # noqa: E402  出站内容安全闸门
 import human_input  # noqa: E402  真人节奏的鼠标/键盘
 import xhs_publish  # noqa: E402  共用浏览器启动与频率闸门
+import publish_guard  # noqa: E402  平台冷却：冷却期内不自动访问（exit 9）
 
 PROFILE_NAME = "XiaohongshuProfile"
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -478,6 +479,7 @@ def cmd_check(_a) -> int:
 
 
 def cmd_fetch(a) -> int:
+    publish_guard.exit_if_cooldown("xiaohongshu", "评论操作")   # 冷却期内不起浏览器（exit 9）
     nid, tok = _resolve_note(a)
     try:
         from playwright.sync_api import sync_playwright
@@ -540,6 +542,7 @@ _XHS_MY_NOTES_JS = """() => {
 def cmd_notes(a) -> int:
     """列出「我」已发布的笔记（标题 + note_id + xsec_token），把「我的笔记→抓评论」一步打通。
     token 优先从**接口 JSON 响应**取（可靠，接口本就带），DOM 的 <a href> 仅作兜底。"""
+    publish_guard.exit_if_cooldown("xiaohongshu", "评论操作")   # 冷却期内不起浏览器（exit 9）
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
@@ -615,6 +618,7 @@ def cmd_plan(a) -> int:
 
 
 def cmd_reply(a) -> int:
+    publish_guard.exit_if_cooldown("xiaohongshu", "评论操作")   # 冷却期内不起浏览器（exit 9）
     replies = _parse_replies(a.replies_json)
     replied = _load_replied(a.replied_file)
     todo = [r for r in replies if not (r["id"] and r["id"] in replied)]
@@ -682,6 +686,7 @@ def cmd_reply(a) -> int:
 
 def cmd_delete(a) -> int:
     """删除自己笔记下的评论（含自己发的回复）。**默认 dry-run**，加 --exec 才真删——删除不可恢复。"""
+    publish_guard.exit_if_cooldown("xiaohongshu", "评论操作")   # 冷却期内不起浏览器（exit 9）
     targets = _parse_targets(a.targets_json, a.nickname, a.content)
 
     if not a.exec:  # 默认 dry-run：只列不删
@@ -837,6 +842,7 @@ def _do_post_comment(page, text: str) -> bool:
 def cmd_post(a) -> int:
     """在指定 XHS 笔记下发顶层评论（非回复某人）。默认 dry-run，加 --exec 才真发。
     支持 --batch-json '[{"url":"...","text":"..."}]' 批量；或 --url + --text 单条。"""
+    publish_guard.exit_if_cooldown("xiaohongshu", "评论操作")   # 冷却期内不起浏览器（exit 9）
     # 解析批量任务
     tasks: list[dict] = []
     if a.batch_json:

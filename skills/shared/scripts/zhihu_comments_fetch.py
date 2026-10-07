@@ -10,11 +10,16 @@ from __future__ import annotations
 import argparse, json, sys, time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import real_browser  # noqa: E402  与 web_publisher 同一套引擎/登录目录
+import publish_guard  # noqa: E402  平台冷却：冷却期内不自动访问（exit 9）
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-PROFILE_DIR = Path.home() / ".easel-browser-profiles" / "ZhihuProfile"
+PROFILE_DIR = real_browser.platform_profile_dir("zhihu")
 
 def fetch_comments(article_url: str, limit: int = 100):
-    """通过访问文章页并拦截评论 API 响应来获取评论。"""
+    """通过访问文章页并拦截评论 API 响应来获取评论。知乎在冷却期内直接 exit 9，不启动浏览器。"""
+    publish_guard.exit_if_cooldown("zhihu", "抓取评论")
     from playwright.sync_api import sync_playwright
 
     captured = []
@@ -39,11 +44,8 @@ def fetch_comments(article_url: str, limit: int = 100):
                 print(f"[WARN] 解析响应失败: {e}", file=sys.stderr)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch_persistent_context(
-            str(PROFILE_DIR),
-            headless=True,
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-        )
+        # 与知乎发布同引擎（Cloak → 本机 Chrome）+ 同登录目录；仅 EASEL_ZHIHU_HEADLESS=1 才无头，否则开窗口
+        browser = real_browser.launch_platform(p, "zhihu", headed=False)
         page = browser.new_page()
         page.on("response", on_response)
 

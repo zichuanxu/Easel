@@ -187,6 +187,7 @@ python3 skills/openclaw/skill-publish-analytics/scripts/analyze.py --profile 画
 
 ## 规则
 
+0. **不后台抓取** — 本 SKILL 只读 publish-log.json 与 `outputs/_analytics/` 缓存，不为取数而启动浏览器访问国内平台（会被判第三方脚本封号）；要最新数据让用户在 Web「创作数据」页点「刷新数据」
 1. **不捏造数据** — 所有数字必须来自 publish-log.json，不得推测或补全
 2. **报告样本量** — 每个分析桶必须标注条目数
 3. **关联非因果** — 时段和标签分析中必须注明"关联性不等于因果性"

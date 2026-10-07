@@ -17,6 +17,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "skills" / "shared" / "scripts"))
 
 import human_input  # noqa: E402
+import publish_guard  # noqa: E402
+import semi_auto  # noqa: E402
 import xhs_comment  # noqa: E402
 import xhs_publish as xhs  # noqa: E402
 
@@ -273,13 +275,30 @@ def test_publish_dry_run_reports_rate_and_ai_declare(tmp_path, monkeypatch, caps
     assert "笔记含AI合成内容" in out and "频率闸门" in out
 
 
-def test_ai_declare_failure_stops_before_publish_click(monkeypatch):
+@pytest.fixture(autouse=True)
+def _guard_sandbox(tmp_path, monkeypatch):
+    """发布闸门的账本/冷却写到临时目录；默认半自动（不设逃生口环境变量）。"""
+    monkeypatch.setattr(publish_guard, "LEDGER_PATH", tmp_path / "ledger.jsonl")
+    monkeypatch.setattr(publish_guard, "COOLDOWN_PATH", tmp_path / "cooldown.json")
+    monkeypatch.setattr(publish_guard, "PUBLISH_LOG_PATH", tmp_path / "publish-log.json")
+    monkeypatch.delenv(semi_auto.AUTO_PUBLISH_ENV, raising=False)
+
+
+def _stub_form(monkeypatch, page_cls=None):
     page = types.SimpleNamespace(query_selector=lambda _s: object(), wait_for_timeout=lambda _ms: None)
     monkeypatch.setattr(xhs, "_human_type", lambda *_a: None)
     monkeypatch.setattr(xhs, "_content_element", lambda _p: object())
     monkeypatch.setattr(xhs, "_input_tags", lambda *_a: None)
+    monkeypatch.setattr(xhs, "_check_overflow", lambda _p: None)
     monkeypatch.setattr(xhs.human_input, "click", lambda *_a, **_k: None)
     monkeypatch.setattr(xhs.human_input, "pause", lambda *_a: None)
+    return page
+
+
+def test_ai_declare_failure_stops_before_publish_click_in_auto_mode(monkeypatch):
+    """自动逃生口模式：AI 声明勾不上仍然 exit 6，绝不去点发布。"""
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "1")
+    page = _stub_form(monkeypatch)
     monkeypatch.setattr(xhs, "_declare_ai", lambda _p: False)
 
     def no_publish(*_a, **_k):
@@ -289,6 +308,91 @@ def test_ai_declare_failure_stops_before_publish_click(monkeypatch):
     with pytest.raises(SystemExit) as e:
         xhs._fill_and_submit(page, "标题", "正文", [], declare_ai=True)
     assert e.value.code == 6
+
+
+def test_ai_declare_failure_in_semi_mode_hands_off_with_manual_note(monkeypatch, tmp_path):
+    """半自动：AI 声明勾不上不退出，状态消息提醒用户手动勾；脚本从不点发布按钮。"""
+    page = _stub_form(monkeypatch)
+    monkeypatch.setattr(xhs, "_declare_ai", lambda _p: False)
+    monkeypatch.setattr(xhs, "_wait_publish_clickable",
+                        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("半自动不许找/点发布按钮")))
+    seen = {}
+
+    def fake_await(pg, **kw):
+        seen.update(kw)
+        kw["on_status"]("awaiting_user_click", semi_auto.AWAITING_MESSAGE)
+        return "published"
+
+    monkeypatch.setattr(semi_auto, "await_human_publish", fake_await)
+    sf = tmp_path / "st.json"
+    assert xhs._fill_and_submit(page, "标题", "正文", [], declare_ai=True, status_file=str(sf)) == "published"
+    assert seen["platform"] == "xiaohongshu"
+    assert xhs.AI_DECLARE_MANUAL_NOTE in json.loads(sf.read_text(encoding="utf-8"))["message"]
+
+
+@pytest.mark.parametrize("outcome,code", [("blocked", publish_guard.EXIT_COOLDOWN), ("closed", 1), ("timeout", 1)])
+def test_semi_non_published_outcomes_exit_nonzero_without_retry(monkeypatch, outcome, code):
+    page = _stub_form(monkeypatch)
+    monkeypatch.setattr(xhs, "_declare_ai", lambda _p: True)
+    monkeypatch.setattr(semi_auto, "await_human_publish", lambda *_a, **_k: outcome)
+    called = []
+    with pytest.raises(SystemExit) as e:
+        xhs._fill_and_submit(page, "标题", "正文", [], on_click=lambda: called.append(1))
+    assert e.value.code == code
+    assert not called   # 未发布不记频率
+
+
+def test_semi_published_records_activity(monkeypatch):
+    page = _stub_form(monkeypatch)
+    monkeypatch.setattr(xhs, "_declare_ai", lambda _p: True)
+    monkeypatch.setattr(semi_auto, "await_human_publish", lambda *_a, **_k: "published")
+    called = []
+    assert xhs._fill_and_submit(page, "标题", "正文", [], on_click=lambda: called.append(1)) == "published"
+    assert called == [1]
+
+
+def test_publish_succeeded_signals():
+    page = types.SimpleNamespace(url="https://creator.xiaohongshu.com/publish/success",
+                                 query_selector=lambda _s: None)
+    assert xhs._publish_succeeded(page)
+    still = types.SimpleNamespace(url="https://creator.xiaohongshu.com/publish/publish?x=1",
+                                  query_selector=lambda _s: object())
+    assert xhs._publish_succeeded(still) == ""
+
+
+def test_auto_mode_block_toast_sets_cooldown_and_exits_9(monkeypatch):
+    monkeypatch.setattr(semi_auto, "_toast_texts", lambda *_a: ["你的发布功能已被限制"])
+    page = types.SimpleNamespace(url="https://creator.xiaohongshu.com/publish/publish",
+                                 query_selector=lambda _s: object(), wait_for_timeout=lambda _ms: None)
+    with pytest.raises(SystemExit) as e:
+        xhs._wait_publish_success(page, 1)
+    assert e.value.code == publish_guard.EXIT_COOLDOWN
+    assert publish_guard.active_cooldown("xiaohongshu")
+
+
+def test_publish_duplicate_blocked_before_browser(tmp_path, monkeypatch):
+    args = _pub_args(tmp_path)
+    publish_guard.record_publish("xiaohongshu", [args.images], args.title)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", None)   # 真走到起浏览器会 ImportError
+    with pytest.raises(SystemExit) as e:
+        xhs.cmd_publish(args)
+    assert e.value.code == publish_guard.EXIT_DUPLICATE
+
+
+def test_publish_cooldown_blocked_before_browser(tmp_path, monkeypatch):
+    publish_guard.set_cooldown("xiaohongshu", "测试")
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", None)
+    with pytest.raises(SystemExit) as e:
+        xhs.cmd_publish(_pub_args(tmp_path, allow_repost=True))   # --allow-repost 绕不过冷却
+    assert e.value.code == publish_guard.EXIT_COOLDOWN
+
+
+def test_publish_cli_has_new_flags():
+    import subprocess
+    out = subprocess.run([sys.executable, str(PROJECT_ROOT / "skills/shared/scripts/xhs_publish.py"),
+                          "publish", "--help"], capture_output=True, text=True).stdout
+    for flag in ("--allow-repost", "--handoff-timeout", "--status-file"):
+        assert flag in out
 
 
 # ── 评论：间隔下限 + 闸门 ────────────────────────────────────────────
@@ -341,3 +445,104 @@ def test_one_bad_reply_does_not_abort_batch(capsys):
         raise RuntimeError("元素被别的东西挡住了")
     assert xhs_comment._safe(bad, "page", "n", "r") is False
     assert "跳过" in capsys.readouterr().err
+
+
+# ---------------- 审查修复：半自动严格成功判定 / 未确认记账 / 冷却 ----------------
+def _xhs_page(url, query=lambda _s: None):
+    return types.SimpleNamespace(url=url, query_selector=query)
+
+
+def test_strict_success_requires_publish_success_toast_or_success_page(monkeypatch):
+    monkeypatch.setattr(semi_auto, "_toast_texts", lambda *_a: ["发布成功"])
+    assert xhs._publish_succeeded_strict(_xhs_page("https://creator.xiaohongshu.com/publish/publish"))
+    monkeypatch.setattr(semi_auto, "_toast_texts", lambda *_a: [])
+    assert xhs._publish_succeeded_strict(_xhs_page("https://creator.xiaohongshu.com/publish/success?x=1"))
+
+
+@pytest.mark.parametrize("toasts", [["上传成功"], ["保存成功"], ["成功"], []])
+def test_strict_success_rejects_generic_success_toast_and_form_reset(monkeypatch, toasts):
+    monkeypatch.setattr(semi_auto, "_toast_texts", lambda *_a: toasts)
+    # 表单已清空（标题框/预览都不在）+ 仍在发布页：宽松的 _publish_succeeded 会认，严格的不认
+    page = _xhs_page("https://creator.xiaohongshu.com/publish/publish")
+    assert xhs._publish_succeeded_strict(page) == ""
+
+
+def test_strict_success_rejects_session_expiry_redirect(monkeypatch):
+    monkeypatch.setattr(semi_auto, "_toast_texts", lambda *_a: [])
+    for url in ("https://creator.xiaohongshu.com/login?redirectReason=401",
+                "https://www.xiaohongshu.com/explore", "https://creator.xiaohongshu.com/new/home"):
+        assert xhs._publish_succeeded_strict(_xhs_page(url)) == ""
+        assert xhs._publish_succeeded(_xhs_page(url))   # 宽松判定（自动路径，行为不变）会把跳走当成功
+
+
+def test_semi_mode_uses_strict_check(monkeypatch):
+    page = _stub_form(monkeypatch)
+    monkeypatch.setattr(xhs, "_declare_ai", lambda _p: True)
+    got = {}
+    monkeypatch.setattr(semi_auto, "await_human_publish",
+                        lambda pg, **kw: got.update(kw) or "published")
+    xhs._fill_and_submit(page, "标题", "正文", [])
+    monkeypatch.setattr(semi_auto, "_toast_texts", lambda *_a: ["上传成功"])
+    assert got["is_published"](_xhs_page("https://creator.xiaohongshu.com/login")) is False
+
+
+def test_xhs_toast_selectors_not_broad():
+    assert not any("message]" in s for s in xhs.XHS_TOAST_SELECTORS)
+
+
+def _auto_submit(monkeypatch, wait_exit):
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "1")
+    page = _stub_form(monkeypatch)
+    monkeypatch.setattr(xhs, "_declare_ai", lambda _p: True)
+    monkeypatch.setattr(xhs, "_wait_publish_clickable", lambda *_a, **_k: ("old", object()))
+    monkeypatch.setattr(xhs, "_confirm_publish_dialog", lambda *_a: None)
+    page.wait_for_timeout = lambda _ms: None
+    monkeypatch.setattr(xhs, "_wait_publish_success", lambda *_a: (_ for _ in ()).throw(SystemExit(wait_exit)))
+    called = []
+    with pytest.raises(SystemExit) as e:
+        xhs._fill_and_submit(page, "标题", "正文", [], on_unconfirmed=lambda: called.append(1))
+    return e.value.code, called
+
+
+def test_auto_unconfirmed_triggers_ledger_callback(monkeypatch):
+    code, called = _auto_submit(monkeypatch, 1)
+    assert code == 1 and called == [1]
+
+
+def test_auto_block_toast_exit_does_not_record_unconfirmed(monkeypatch):
+    code, called = _auto_submit(monkeypatch, publish_guard.EXIT_COOLDOWN)
+    assert code == publish_guard.EXIT_COOLDOWN and called == []
+
+
+def test_record_unconfirmed_writes_flagged_ledger_row(tmp_path):
+    xhs._record_unconfirmed([], "周末露营")
+    last = json.loads(publish_guard.ledger_path().read_text(encoding="utf-8").splitlines()[-1])
+    assert last["unconfirmed"] is True and last["platform"] == "xiaohongshu"
+    assert publish_guard.find_duplicate("xiaohongshu", [], "周末露营")
+
+
+def test_xhs_live_whoami_blocked_in_cooldown(tmp_path, monkeypatch):
+    publish_guard.set_cooldown("xiaohongshu", "测试冷却")
+    monkeypatch.setattr(xhs, "_launch", lambda *_a, **_k: pytest.fail("冷却期不许起浏览器"))
+    with pytest.raises(SystemExit) as e:
+        xhs.cmd_whoami(types.SimpleNamespace(live=True, profile_base=str(tmp_path)))
+    assert e.value.code == publish_guard.EXIT_COOLDOWN
+
+
+@pytest.mark.parametrize("cmd,extra", [("cmd_fetch", {}), ("cmd_notes", {}), ("cmd_reply", {}),
+                                       ("cmd_delete", {}), ("cmd_post", {})])
+def test_xhs_comment_subcommands_blocked_in_cooldown(monkeypatch, cmd, extra):
+    publish_guard.set_cooldown("xiaohongshu", "测试冷却")
+    monkeypatch.setattr(xhs_comment, "_launch", lambda *_a, **_k: pytest.fail("冷却期不许起浏览器"))
+    with pytest.raises(SystemExit) as e:
+        getattr(xhs_comment, cmd)(types.SimpleNamespace(**extra))
+    assert e.value.code == publish_guard.EXIT_COOLDOWN
+
+
+def test_zhihu_comments_fetch_blocked_in_cooldown(monkeypatch):
+    import zhihu_comments_fetch
+    publish_guard.set_cooldown("zhihu", "测试冷却")
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", None)
+    with pytest.raises(SystemExit) as e:
+        zhihu_comments_fetch.fetch_comments("https://zhuanlan.zhihu.com/p/1")
+    assert e.value.code == publish_guard.EXIT_COOLDOWN
