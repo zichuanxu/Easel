@@ -10,6 +10,7 @@ import {
 import { IconGear } from './settingsIcons';
 import Swatch from './ui/Swatch';
 import SelectMenu from './ui/SelectMenu';
+import ThemeToggle from './ThemeToggle';
 
 export type { Page } from '../lib/layers';
 
@@ -52,6 +53,7 @@ export default function Sidebar({
       <div className="sidebar-brand">
         <img className="sidebar-logo-icon" src="./static/easel-icon-transparent.png" alt="" />
         <span className="sidebar-wordmark">Easel</span>
+        <ThemeToggle />
       </div>
 
       <SelectMenu

@@ -83,10 +83,30 @@
 .settings-modal .add-row:hover { border-color: var(--c-ink-3); color: var(--c-ink); }
 
 /* 模型列：输入框 + 「拉取」按钮（datalist 补全端点返回的模型名）。flex 贴住按钮，不改 prow 的列结构 */
-.settings-modal .model-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.settings-modal .model-cell { display: flex; align-items: center; gap: 6px; min-width: 0; position: relative; }
 .settings-modal .model-cell .field.mock { flex: 1 1 auto; }
 .settings-modal .model-cell .btn { flex: none; }
+.settings-modal .fetch-btn { color: var(--c-ink-2); }
+.settings-modal .fetch-btn.ok { color: var(--c-ok-text); border-color: var(--c-ok); padding: 0 8px; }
+.settings-modal .fetch-btn .spin { width: 10px; height: 10px; border-width: 1.5px; }
 .settings-modal .model-err { flex: none; color: var(--c-warn); font-size: var(--fs-12); cursor: help; }
+/* 自定义供应商行的上游协议选择：收成行内紧凑尺寸，与相邻 mock 输入同高 */
+.settings-modal .prow .proto-sel { height: var(--h-ctl-sm); padding: 0 8px; font-size: var(--fs-12); }
+
+/* 模型下拉面板：portal 到 body，所以不挂在 .settings-modal 下；层级高于弹窗（overlay.css 1000） */
+.model-dd {
+  z-index: 3000; min-width: 240px; max-width: 380px; max-height: 240px; overflow: auto; padding: 4px;
+  background: var(--c-surface); border: 1px solid var(--c-rule); border-radius: var(--r-panel);
+  box-shadow: var(--shadow-pop); color: var(--c-ink);
+}
+.model-dd .dd-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 9px; border-radius: var(--r-control); font-size: var(--fs-12); cursor: pointer; }
+.model-dd .dd-item:hover, .model-dd .dd-item.active { background: var(--c-hover); }
+.model-dd .dd-item small { color: var(--c-ink-3); font-size: var(--fs-12); }
+.model-dd .dd-empty { padding: 10px; display: flex; flex-direction: column; align-items: center; gap: 8px; color: var(--c-ink-3); font-size: var(--fs-12); }
+.model-dd .dd-pull { display: inline-flex; align-items: center; gap: 5px; height: var(--h-ctl-sm); padding: 0 12px; border: 1px solid var(--c-rule-strong); border-radius: var(--r-control); background: var(--c-surface); color: var(--c-ink); font: inherit; font-size: var(--fs-12); font-weight: 500; cursor: pointer; }
+.model-dd .dd-pull:hover:not(:disabled) { background: var(--c-hover); }
+.model-dd .dd-pull:disabled { opacity: .6; cursor: default; }
+.model-dd .spin { width: 10px; height: 10px; flex: none; border: 1.5px solid var(--c-rule-strong); border-top-color: var(--c-ink); border-radius: 50%; animation: spin 0.8s linear infinite; }
 
 /* 本机 Agent（对话通道）：装了 CLI agent 时的免 Key 一键接入。列：名称 / 状态 / 模型 / 操作 / 说明 */
 .settings-modal .local-agents { margin-top: 12px; padding: 10px 16px; border: 1px solid var(--c-rule); border-radius: var(--r-panel); background: var(--c-surface); }
