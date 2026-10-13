@@ -17,7 +17,9 @@
 
 `tts.py` 经 `skills/shared/scripts/edge_tts_compat.py` 调 edge-tts：装的 edge-tts 仍是「旧地址 + v1 令牌」时，把合成地址换成新版 Edge 用的 `api.msedgeservices.com`（它还接受旧令牌，做法同上游 [PR #491](https://github.com/rany2/edge-tts/pull/491)）。上游改了地址或改发 v2 令牌后，兼容层自动不再生效。
 
-上游发版修复后：`pip install -U edge-tts`，删掉 `edge_tts_compat.py` 和 `tts.py` 里的 `_edge_tts_cmd` / `_has_module`。
+找不到装了 edge_tts 的 Python 时，会在 stderr 提示「跳过兼容层」并直接调 edge-tts 命令，那样仍会 403。
+
+上游发版修复后：`pip install -U edge-tts`，删掉 `edge_tts_compat.py`、`tests/test_edge_tts_compat.py`，以及 `tts.py` 里的 `_edge_tts_cmd` / `_has_module` / `_shebang_python`，`tts.py` 与 `asr.py` 改回直接调 `edge-tts` 命令。
 
 ---
 

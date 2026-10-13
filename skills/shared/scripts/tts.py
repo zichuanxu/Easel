@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -111,17 +112,39 @@ def _has_module(python: str, module: str) -> bool:
     return r.returncode == 0
 
 
+def _shebang_python(binp: Path) -> str | None:
+    """console script 首行 #! 指向的 python（pip --user 装的 edge-tts 旁边没有 python）。"""
+    try:
+        with open(binp, "rb") as f:
+            first = f.readline(512)
+    except OSError:
+        return None
+    if not first.startswith(b"#!"):
+        return None
+    parts = first[2:].decode("utf-8", "ignore").split()
+    return parts[0] if parts and Path(parts[0]).name.startswith("python") else None
+
+
 def _edge_tts_cmd(binp: str) -> list[str]:
     """调 edge-tts 的命令前缀。
 
     优先经 edge_tts_compat.py 跑（修 2026-10 起合成 403，见该文件），这需要一个装了 edge_tts 的
-    解释器：当前解释器，或 edge-tts 同目录（venv）里的 python。都没有就直接调 edge-tts 命令。
+    解释器。先找 edge-tts 自己的：同目录（venv）、软链目标目录（pipx / uv tool）、#! 行；
+    再找当前解释器。都没有就直接调 edge-tts 命令。
     """
     compat = str(Path(__file__).resolve().parent / "edge_tts_compat.py")
-    d = Path(binp).parent
-    for py in [sys.executable] + [str(d / n) for n in ("python", "python3", "python.exe")]:
+    b = Path(binp)
+    cands = [str(d / n) for d in dict.fromkeys((b.parent, b.resolve().parent))
+             for n in ("python", "python3", "python.exe")]
+    sb = _shebang_python(b)
+    if sb:
+        cands.append(sb)
+    cands.append(sys.executable)
+    for py in dict.fromkeys(cands):
         if (py == sys.executable or Path(py).is_file()) and _has_module(py, "edge_tts"):
             return [py, compat]
+    print("⚠️ 没找到装了 edge_tts 的 Python，跳过兼容层直接调 edge-tts"
+          "（2026-10 起可能 403，见 docs/known-issues.md）", file=sys.stderr)
     return [binp]
 
 
@@ -217,15 +240,16 @@ def _run_edge_tts(
         err = (proc.stderr or proc.stdout or "").strip()
         hint = ""
         low = err.lower()
-        # 先判 403：它的 URL 带 ConnectionId=，会误中下面的「connection」把人引去查代理
-        if "403" in err and "handshake" in low:
+        # 握手拿到了 HTTP 状态 = 网络是通的，不给代理提示（其 URL 带 ConnectionId=，会误中「connection」）
+        handshake = re.search(r"WSServerHandshakeError: (\d{3})\b", err)
+        if handshake and handshake.group(1) == "403":
             hint = (
                 "\n提示：403 是微软拒绝了合成请求，与网络/代理无关。2026-10 起微软改了合成接口鉴权"
                 "（rany2/edge-tts#490）；若仍 403，先 `pip install -U edge-tts`，再看 docs/known-issues.md。"
             )
-        elif any(k in low for k in ("timed out", "connection", "getaddrinfo",
-                                  "network", "ssl", "proxy", "resolve",
-                                  "cannot connect", "no route")):
+        elif not handshake and any(k in low for k in (
+                "timed out", "connection", "getaddrinfo", "network", "ssl",
+                "proxy", "resolve", "cannot connect", "no route")):
             hint = (
                 "\n提示：edge-tts 需访问微软在线服务，请确认已设置外网代理：\n"
                 "  export https_proxy=http://host:port http_proxy=http://host:port"
