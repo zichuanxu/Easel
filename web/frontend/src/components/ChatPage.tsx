@@ -7,10 +7,12 @@ import { uploadFiles, adoptOversize } from '../lib/api';
 import type { UploadedFile } from '../lib/api';
 import type { LayerKey } from '../lib/layers';
 import Swatch from './ui/Swatch';
+import Tag from './ui/Tag';
 import { IconArrowUp, IconStop, IconPlus, IconFile } from './icons';
 import { isSubmitEnter } from '../lib/ime';
 
 interface ChatPageProps {
+  apiDirect: boolean;
   session: ChatSession;
   stream?: StreamState;          // 进行中的流式态（来自 App，切页也不丢）
   onSend: (displayText: string, attachments?: UploadedFile[]) => void;
@@ -32,13 +34,16 @@ const SUGGESTIONS: { layer: LayerKey; title: string; prompt: string }[] = [
   { layer: 'produce', title: '口播脚本', prompt: '帮我写一条 60 秒的口播短视频脚本，主题先问我' },
 ];
 
+// API 直连（仅聊天）模式没有本机工具，只保留纯文字创作类的起步建议
+const API_DIRECT_STARTERS = ['写小红书文案', '口播脚本'];
+
 function greeting(): string {
   const h = new Date().getHours();
   const g = h < 6 ? '夜深了' : h < 12 ? '上午好' : h < 14 ? '中午好' : h < 18 ? '下午好' : '晚上好';
   return `${g}，想创作点什么？`;
 }
 
-export default function ChatPage({ session, stream, onSend, onStop, onResend, onQuestionAnswered }: ChatPageProps) {
+export default function ChatPage({ apiDirect, session, stream, onSend, onStop, onResend, onQuestionAnswered }: ChatPageProps) {
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -143,7 +148,8 @@ export default function ChatPage({ session, stream, onSend, onStop, onResend, on
         </div>
       )}
       <div className="composer-top">
-        <BrushEntry onPick={(t) => { setInput(t); requestAnimationFrame(() => textareaRef.current?.focus()); }} />
+        {apiDirect ? <Tag>API 直连 · 文字与附件分析</Tag>
+          : <BrushEntry onPick={(t) => { setInput(t); requestAnimationFrame(() => textareaRef.current?.focus()); }} />}
         <textarea
           ref={textareaRef}
           className="chat-input"
@@ -186,10 +192,11 @@ export default function ChatPage({ session, stream, onSend, onStop, onResend, on
             <span>Easel</span>
           </div>
           <h1 className="chat-hero-title">{greeting()}</h1>
-          <p className="chat-hero-sub">从选题到发布，把想法做成能发的内容。</p>
+          <p className="chat-hero-sub">{apiDirect ? 'API 直连：写文案、策划选题、分析附件。本机工具和自动发布未启用。'
+            : '从选题到发布，把想法做成能发的内容。'}</p>
           {inputBox(true)}
           <ul className="starters" aria-label="起步建议">
-            {SUGGESTIONS.map((s) => (
+            {SUGGESTIONS.filter((s) => !apiDirect || API_DIRECT_STARTERS.includes(s.title)).map((s) => (
               <li key={s.title}>
                 <button type="button" className="starter" disabled={isStreaming}
                   onClick={() => { if (!isStreaming) onSend(s.prompt); }}>

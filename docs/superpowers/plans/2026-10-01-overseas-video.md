@@ -46,9 +46,9 @@
 | `web/frontend/src/lib/overseasPublish.ts` | 海外平台元数据、可见范围选项、发送载荷、适配提示 |
 | `web/frontend/src/lib/api.ts` | `publishNow` 载荷加 `visibility` |
 | `web/frontend/src/components/PublishPage.tsx` | 平台分组、海外平台卡片可见范围、适配提示、海外载荷 |
-| `skills/openclaw/skill-overseas-publish/` | 新技能：SKILL.md、EASEL-META.md、references/platforms.md |
-| `skills/openclaw/skill-cross-platform-publish/` | 平台表 + `publish_dispatch.py` 路由 |
-| `skills/openclaw/skill-my-account/SKILL.md` | 海外平台 whoami 说明 |
+| `skills/builtin/skill-overseas-publish/` | 新技能：SKILL.md、EASEL-META.md、references/platforms.md |
+| `skills/builtin/skill-cross-platform-publish/` | 平台表 + `publish_dispatch.py` 路由 |
+| `skills/builtin/skill-my-account/SKILL.md` | 海外平台 whoami 说明 |
 | `scripts/validate_skills.py` | `PUBLISH_SCRIPT_CONTRACTS` 加 `overseas_publisher.py` |
 | `docs/skill-function-mapping.md`、`web/frontend/src/lib/skillDisplayNames.ts`、`web/frontend/src/lib/capabilityMenu.ts` | 登记新技能 |
 | 测试 | `tests/test_overseas_driver.py`、`tests/test_overseas_flows.py`、`tests/test_overseas_publish.py`、`tests/test_overseas_web.py`（追加）、`web/frontend/src/lib/overseasPublish.test.ts`、`web/frontend/src/components/PublishPage.test.tsx` |
@@ -2024,9 +2024,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 8: 对话技能、跨平台路由与登记
 
 **Files:**
-- Create: `skills/openclaw/skill-overseas-publish/SKILL.md`、`EASEL-META.md`、`references/platforms.md`
-- Modify: `skills/openclaw/skill-cross-platform-publish/scripts/publish_dispatch.py`、`skills/openclaw/skill-cross-platform-publish/SKILL.md`
-- Modify: `skills/openclaw/skill-my-account/SKILL.md`
+- Create: `skills/builtin/skill-overseas-publish/SKILL.md`、`EASEL-META.md`、`references/platforms.md`
+- Modify: `skills/builtin/skill-cross-platform-publish/scripts/publish_dispatch.py`、`skills/builtin/skill-cross-platform-publish/SKILL.md`
+- Modify: `skills/builtin/skill-my-account/SKILL.md`
 - Modify: `scripts/validate_skills.py`、`docs/skill-function-mapping.md`、`web/frontend/src/lib/skillDisplayNames.ts`、`web/frontend/src/lib/capabilityMenu.ts`
 
 **Interfaces:**
@@ -2043,7 +2043,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
     assert PLATFORMS["youtube"]["title"] == 100 and PLATFORMS["x"]["body"] == 280
 ```
 
-Run: `.venv/bin/python skills/openclaw/skill-cross-platform-publish/scripts/publish_dispatch.py selftest`
+Run: `.venv/bin/python skills/builtin/skill-cross-platform-publish/scripts/publish_dispatch.py selftest`
 Expected: FAIL，`KeyError: 'tiktok'`
 
 - [ ] **Step 2: 加路由**
@@ -2073,7 +2073,7 @@ Run 同上，Expected: `✅ selftest 通过`
 
 - [ ] **Step 3: 写技能**
 
-`skills/openclaw/skill-overseas-publish/SKILL.md`：
+`skills/builtin/skill-overseas-publish/SKILL.md`：
 
 ````markdown
 ---
@@ -2122,7 +2122,7 @@ python skills/shared/scripts/overseas_publisher.py publish --platform youtube --
 4. 账号被要求人工验证时，脚本会弹出浏览器窗口，提醒用户在窗口里完成。
 ````
 
-`skills/openclaw/skill-overseas-publish/references/platforms.md`：
+`skills/builtin/skill-overseas-publish/references/platforms.md`：
 
 ```markdown
 # 海外平台规格（与 overseas/<平台>.py 的 LIMITS 一致）
@@ -2141,7 +2141,7 @@ python skills/shared/scripts/overseas_publisher.py publish --platform youtube --
 真发测试结果见 PR 2 的 PR 描述。页面改版时对照 `outputs/_login/<平台>-publish-fail.*` 更新模块里的选择器。
 ```
 
-`skills/openclaw/skill-overseas-publish/EASEL-META.md`：
+`skills/builtin/skill-overseas-publish/EASEL-META.md`：
 
 ```markdown
 # Easel SKILL 元数据
@@ -2205,7 +2205,7 @@ Run:
 ```bash
 .venv/bin/python scripts/validate_skills.py
 .venv/bin/python scripts/validate_skill_commands.py
-.venv/bin/python skills/openclaw/skill-cross-platform-publish/scripts/publish_dispatch.py selftest
+.venv/bin/python skills/builtin/skill-cross-platform-publish/scripts/publish_dispatch.py selftest
 cd web/frontend && npm test && npm run build
 ```
 Expected: `OK: 115 skills ...`；命令校验 OK；selftest ✅；前端通过
@@ -2213,7 +2213,7 @@ Expected: `OK: 115 skills ...`；命令校验 OK；selftest ✅；前端通过
 - [ ] **Step 7: 提交**
 
 ```bash
-git add skills/openclaw/skill-overseas-publish skills/openclaw/skill-cross-platform-publish skills/openclaw/skill-my-account scripts/validate_skills.py docs/skill-function-mapping.md web/frontend/src/lib/skillDisplayNames.ts web/frontend/src/lib/capabilityMenu.ts
+git add skills/builtin/skill-overseas-publish skills/builtin/skill-cross-platform-publish skills/builtin/skill-my-account scripts/validate_skills.py docs/skill-function-mapping.md web/frontend/src/lib/skillDisplayNames.ts web/frontend/src/lib/capabilityMenu.ts
 git commit -m "feat(publish): 对话技能 skill-overseas-publish，跨平台发布路由到海外平台
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -2260,7 +2260,7 @@ Run: `.venv/bin/python -m pytest tests/test_overseas_flows.py tests/test_oversea
 Expected: 全部 PASS
 
 ```bash
-git add skills/shared/scripts/overseas/ skills/openclaw/skill-overseas-publish/references/platforms.md tests/
+git add skills/shared/scripts/overseas/ skills/builtin/skill-overseas-publish/references/platforms.md tests/
 git commit -m "fix(overseas): 真机测试发布校准成功信号
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -2277,7 +2277,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 .venv/bin/python scripts/validate_skills.py
 .venv/bin/python scripts/validate_skill_commands.py
 .venv/bin/python skills/shared/scripts/overseas_publisher.py selftest
-.venv/bin/python skills/openclaw/skill-cross-platform-publish/scripts/publish_dispatch.py selftest
+.venv/bin/python skills/builtin/skill-cross-platform-publish/scripts/publish_dispatch.py selftest
 cd web/frontend && npm test && npm run build && npm run lint
 ```
 Expected：全部通过；lint 无 error。
@@ -2294,4 +2294,4 @@ gh pr create --base main --title "feat(overseas): 海外平台视频发布（Tik
 gh pr merge --merge
 ```
 
-合并后：删 worktree 软链 → `git worktree remove ../Easel-wt-ov` → 主目录 `git pull --ff-only` → 删本地与远端分支 → 重建前端 → 提醒用户：后端有改动，任务结束后重启 `easel web`；新技能要 `bash openclaw/sync.sh` 同步给智能体（会写 OpenClaw 工作区，由用户执行）。
+合并后：删 worktree 软链 → `git worktree remove ../Easel-wt-ov` → 主目录 `git pull --ff-only` → 删本地与远端分支 → 重建前端 → 提醒用户：后端有改动，任务结束后重启 `easel web`；新技能要 `bash agents/sync.sh` 同步给智能体（会写 OpenClaw 工作区，由用户执行）。

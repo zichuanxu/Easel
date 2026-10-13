@@ -15,7 +15,7 @@ import publish_guard  # noqa: E402
 import platform_readback  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
-    "bili_upload", ROOT / "skills" / "openclaw" / "skill-bilibili-upload" / "scripts" / "bili_upload.py")
+    "bili_upload", ROOT / "skills" / "builtin" / "skill-bilibili-upload" / "scripts" / "bili_upload.py")
 bu = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(bu)
 

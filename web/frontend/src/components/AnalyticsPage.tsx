@@ -105,7 +105,7 @@ export default function AnalyticsPage({ onNavigate }: { onNavigate: (page: Page)
             </div>
           )}
           {!d && updating && (
-            <div className="ana-skel-note">首次拉取这个平台的数据，需要启动浏览器，约十几秒。</div>
+            <div className="ana-skel-note">首次拉取这个平台的数据：正在校验登录态并读取平台数据，约十几秒。</div>
           )}
           <div className="analytics-body">
             {!d && !updating && !failed && (MANUAL_ONLY_ANALYTICS.has(anaSel)
@@ -137,6 +137,7 @@ export default function AnalyticsPage({ onNavigate }: { onNavigate: (page: Page)
               />
             ) : (
               <>
+                {d.warning && <div className="ana-warning" role="status">{d.warning}</div>}
                 <div className="ana-col ana-col-main">
                   <Panel title="概览">
                     <div className="ana-id">{d.nickname ? `@${d.nickname}` : d.name}</div>

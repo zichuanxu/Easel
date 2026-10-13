@@ -152,6 +152,44 @@ describe('useAnalyticsData', () => {
     expect(stored.bilibili.followers).toBe(1);
   });
 
+  it('localStorage 里键与 platform 对不上、loggedIn 不是布尔的残缺条目被丢弃', () => {
+    seed({
+      bilibili: mk('bilibili', 0),
+      zhihu: mk('xiaohongshu', 0),
+      kuaishou: { ...mk('kuaishou', 0), loggedIn: 'yes' },
+    });
+    const { result } = renderHook(() => useAnalyticsData());
+    expect(result.current.entry('bilibili').data?.platform).toBe('bilibili');
+    expect(result.current.entry('zhihu').data).toBeUndefined();
+    expect(result.current.entry('kuaishou').data).toBeUndefined();
+  });
+
+  it('同一平台重复点「刷新」共用一次抓取，完成后可再次刷新', async () => {
+    const pending: Array<(v: AccountAnalytics) => void> = [];
+    fetchA.mockImplementation(() => new Promise<AccountAnalytics>((resolve) => { pending.push(resolve); }));
+    const { result } = renderHook(() => useAnalyticsData());
+    act(() => { result.current.refresh('xiaohongshu'); result.current.refresh('xiaohongshu'); });
+    await waitFor(() => expect(fetchA).toHaveBeenCalledTimes(1));
+    await act(async () => { pending[0](mk('xiaohongshu', 0, 0)); });
+    await waitFor(() => expect(result.current.entry('xiaohongshu').updating).toBe(false));
+    expect(result.current.entry('xiaohongshu').data?.followers).toBe(0);
+    act(() => result.current.refresh('xiaohongshu'));
+    await waitFor(() => expect(fetchA).toHaveBeenCalledTimes(2));
+  });
+
+  it('抓取失败显示后端给的原因，重试时清掉旧错误', async () => {
+    fetchA.mockRejectedValueOnce(new Error('登录目录正被占用'));
+    const { result } = renderHook(() => useAnalyticsData());
+    act(() => result.current.refresh('xiaohongshu'));
+    await waitFor(() => expect(result.current.entry('xiaohongshu').failed).toBe(true));
+    expect(result.current.entry('xiaohongshu').error).toBe('登录目录正被占用');
+    fetchA.mockReturnValue(new Promise(() => {}));
+    act(() => result.current.refresh('xiaohongshu'));
+    await waitFor(() => expect(fetchA).toHaveBeenCalledTimes(2));
+    expect(result.current.entry('xiaohongshu').error).toBeUndefined();
+    expect(result.current.entry('xiaohongshu').failed).toBe(false);
+  });
+
   it('去重：A -> B -> A，A 只抓一次', async () => {
     fetchA.mockReturnValue(new Promise(() => {}));
     const { result } = renderHook(() => useAnalyticsData());

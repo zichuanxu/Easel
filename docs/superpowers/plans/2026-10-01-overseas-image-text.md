@@ -484,7 +484,7 @@ VIDEO_ONLY_PUBLISH = {"douyin", "weixin-channels", "bilibili", "youtube"}
 
 ### Task 8: 技能文档与路由登记
 
-**Files:** Modify `skills/openclaw/skill-overseas-publish/SKILL.md`、`skills/openclaw/skill-overseas-publish/references/platforms.md`、`skills/openclaw/skill-cross-platform-publish/scripts/publish_dispatch.py`
+**Files:** Modify `skills/builtin/skill-overseas-publish/SKILL.md`、`skills/builtin/skill-overseas-publish/references/platforms.md`、`skills/builtin/skill-cross-platform-publish/scripts/publish_dispatch.py`
 
 - [ ] **Step 1: 写失败的 selftest 断言** — `publish_dispatch.py` selftest 加：
 
@@ -494,7 +494,7 @@ VIDEO_ONLY_PUBLISH = {"douyin", "weixin-channels", "bilibili", "youtube"}
     assert PLATFORMS["youtube"]["types"] == ["video"]
 ```
 
-- [ ] **Step 2: 确认失败** — `python skills/openclaw/skill-cross-platform-publish/scripts/publish_dispatch.py selftest` → AssertionError
+- [ ] **Step 2: 确认失败** — `python skills/builtin/skill-cross-platform-publish/scripts/publish_dispatch.py selftest` → AssertionError
 - [ ] **Step 3: 实现** — 改 `types` 与 `note`；SKILL.md 的描述与提示改成「视频 / 图文 / 纯文字」，命令加一条图文、一条纯文字示例：
 
 ```bash
@@ -516,4 +516,4 @@ python skills/shared/scripts/overseas_publisher.py publish --platform x --desc "
 
 - [ ] **Step 1:** 全量验证（pytest、两个 validator、两个 selftest、前端 test / build / lint）。
 - [ ] **Step 2:** review-package → 独立审查（sonnet，只读）→ 按 executing-plans 终审流程修正。
-- [ ] **Step 3:** push `feat/overseas-image-text` → PR → merge；清理 worktree 与分支；main `git pull --ff-only` 并重建前端；运行 `bash openclaw/sync.sh`（用户已授权）。
+- [ ] **Step 3:** push `feat/overseas-image-text` → PR → merge；清理 worktree 与分支；main `git pull --ff-only` 并重建前端；运行 `bash agents/sync.sh`（用户已授权）。

@@ -37,8 +37,9 @@
 .sidebar-status { display: flex; align-items: center; gap: var(--sp-2); padding: 8px 6px 0; border-top: 1px solid var(--c-rule); font-size: var(--fs-12); color: var(--c-ink-3); }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c-ok); flex: none; box-shadow: none; }
 .status-dot.offline { background: var(--c-danger); }
-.sidebar-status-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.settings-gear { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; background: none; border: 1px solid transparent; border-radius: var(--r-control); color: var(--c-ink-2); font-size: var(--fs-12); cursor: pointer; }
+/* 状态文案按引擎会变长（「xxx CLI 未配置」…）：文字可收缩截断，「设置」按钮永不换行、不被挤扁 */
+.sidebar-status-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.settings-gear { flex-shrink: 0; white-space: nowrap; margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; background: none; border: 1px solid transparent; border-radius: var(--r-control); color: var(--c-ink-2); font-size: var(--fs-12); cursor: pointer; }
 .settings-gear:hover { background: var(--c-hover); color: var(--c-ink); }
 
 /* ---- 窄屏：侧栏收成图标条 ---- */

@@ -1,6 +1,7 @@
-"""创作数据接口：single-flight、落盘、?cached=1 读缓存、与 whoami 共用浏览器锁。
+"""创作数据接口：single-flight、落盘、?cached=1 读缓存、与 whoami 共用浏览器锁、有时限的抓取子进程。
 
-全部 monkeypatch 掉 subprocess.run，绝不起浏览器、不碰真实平台；落盘目录一律用 tmp_path。
+全部 monkeypatch 掉抓取/校验子进程，绝不起浏览器、不碰真实平台；落盘目录一律用 tmp_path。
+国内浏览器平台（小红书等）不做后台抓取，要抓必须带 manual=1，所以涉及小红书抓取的用例都显式带上。
 
 运行：pytest tests/test_web_analytics.py -q
 """
@@ -8,11 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import signal
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from fastapi import HTTPException
@@ -29,7 +33,7 @@ SAMPLE = {"platform": "douyin", "loggedIn": True, "fetched_at": 1_700_000_000, "
 
 
 class FakeRun:
-    """假的 subprocess.run：记录调用次数与同时在跑的数量。"""
+    """假的 subprocess.run / _run_analytics_command：记录调用次数与同时在跑的数量。"""
 
     def __init__(self, stdout: str | None = None, delay: float = 0.05):
         self.stdout = json.dumps(SAMPLE) if stdout is None else stdout
@@ -50,18 +54,24 @@ class FakeRun:
         return subprocess.CompletedProcess(cmd, 0, stdout=self.stdout, stderr="boom" if not self.stdout else "")
 
 
-@pytest.fixture()
+@pytest.fixture(autouse=True)
 def env(tmp_path, monkeypatch):
+    """每个用例都落进临时目录：创作数据落盘、冷却记录、浏览器锁、whoami 缓存、single-flight 登记全部隔离。"""
     monkeypatch.setattr(web, "ANALYTICS_CACHE_DIR", tmp_path / "_analytics")
     monkeypatch.setattr(publish_guard, "COOLDOWN_PATH", tmp_path / "cooldown.json")   # 不碰真实冷却记录
-    web._BROWSER_LOCKS.clear()
-    web._ANALYTICS_INFLIGHT.clear()
-    web._WHOAMI_CACHE.clear()
+    monkeypatch.setattr(web, "_analytics_inflight", {})
+    monkeypatch.setattr(web, "_BROWSER_LOCKS", {})
+    monkeypatch.setattr(web, "_WHOAMI_CACHE", {})
+    monkeypatch.setattr(web, "LOGIN_DIR", tmp_path / "_login")
+    monkeypatch.setattr(web, "LOGIN_PROCESSES", {})
     return tmp_path
 
 
 def _patch(monkeypatch, fake):
+    """校验走 subprocess.run，抓取走 _run_analytics_command(cmd, env, timeout)：两处都换成同一个假的。"""
     monkeypatch.setattr(web.subprocess, "run", fake)
+    monkeypatch.setattr(web, "_run_analytics_command",
+                        lambda cmd, env, timeout: fake(cmd, env=env, timeout=timeout))
 
 
 def test_single_flight(env, monkeypatch):
@@ -141,14 +151,27 @@ def test_whoami_and_analytics_serialized(env, monkeypatch):
     assert fake.max_running == 1
 
 
-@pytest.mark.parametrize("bad", [{"loggedIn": False, "followers": None}, {"loggedIn": True, "error": "x"}])
-def test_not_logged_in_or_error_does_not_overwrite_latest(env, monkeypatch, bad):
+def test_not_logged_in_does_not_overwrite_latest(env, monkeypatch):
     d = env / "_analytics"
     d.mkdir()
     old = d / "douyin-latest.json"
     old.write_text(json.dumps(SAMPLE), encoding="utf-8")
+    bad = {"loggedIn": False, "followers": None}
     _patch(monkeypatch, FakeRun(stdout=json.dumps(bad)))
     assert asyncio.run(web.api_analytics("douyin", manual=1)) == bad   # 返回值照旧
+    assert json.loads(old.read_text(encoding="utf-8")) == SAMPLE
+
+
+def test_error_payload_is_502_and_does_not_overwrite_latest(env, monkeypatch):
+    """脚本报 error（平台维护、网络抖动……）：按失败返回 502 + 原因，不当成一份数据，也不覆盖旧缓存。"""
+    d = env / "_analytics"
+    d.mkdir()
+    old = d / "douyin-latest.json"
+    old.write_text(json.dumps(SAMPLE), encoding="utf-8")
+    _patch(monkeypatch, FakeRun(stdout=json.dumps({"loggedIn": True, "error": "x"})))
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(web.api_analytics("douyin", manual=1))
+    assert e.value.status_code == 502 and e.value.detail == "x"
     assert json.loads(old.read_text(encoding="utf-8")) == SAMPLE
 
 
@@ -164,7 +187,7 @@ def test_concurrent_waiters_share_error_and_inflight_cleared(env, monkeypatch):
     async def go():
         rs = await asyncio.gather(web.api_analytics("douyin", manual=1), web.api_analytics("douyin", manual=1), return_exceptions=True)
         await asyncio.sleep(0)
-        return rs, dict(web._ANALYTICS_INFLIGHT)
+        return rs, dict(web._analytics_inflight)
 
     rs, inflight = asyncio.run(go())
     assert fake.calls == 1
@@ -183,7 +206,7 @@ def test_timeout_504_and_inflight_cleared(env, monkeypatch):
     async def go():
         rs = await asyncio.gather(web.api_analytics("douyin", manual=1), web.api_analytics("douyin", manual=1), return_exceptions=True)
         await asyncio.sleep(0)
-        return rs, dict(web._ANALYTICS_INFLIGHT)
+        return rs, dict(web._analytics_inflight)
 
     rs, inflight = asyncio.run(go())
     assert all(isinstance(r, HTTPException) and r.status_code == 504 for r in rs)
@@ -236,9 +259,134 @@ def test_manual_refused_during_cooldown(env, monkeypatch):
 
 def test_subprocess_cooldown_exit_surfaces_chinese_message(env, monkeypatch):
     """account_stats 自己拒绝（退出码 9）时，后端把中文说明给前端，而不是通用 502 / 把错误 JSON 当数据。"""
-    def fake_run(cmd, **kw):
-        return subprocess.CompletedProcess(cmd, 9, stdout=json.dumps({"error": "冷却", "loggedIn": False}), stderr="")
-    monkeypatch.setattr(web.subprocess, "run", fake_run)
+    monkeypatch.setattr(web, "_run_analytics_command", lambda cmd, env, timeout: subprocess.CompletedProcess(
+        cmd, 9, stdout=json.dumps({"error": "冷却", "loggedIn": False}), stderr=""))
     with pytest.raises(HTTPException) as e:
-        asyncio.run(web._run_analytics("douyin"))
+        asyncio.run(web._fetch_analytics("douyin"))
     assert e.value.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# 抓取有时限、结果可信：并发共享、取消不连累、失败可重试、空数据 / 脚本失败不算成功
+# ---------------------------------------------------------------------------
+def test_concurrent_refreshes_share_one_fetch(monkeypatch):
+    async def scenario():
+        started, finish = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def fetch(platform):
+            calls.append(platform)
+            started.set()
+            await finish.wait()
+            return {"platform": platform}
+
+        monkeypatch.setattr(web, "_fetch_analytics", fetch)
+        first = asyncio.create_task(web.api_analytics("xiaohongshu", manual=1))
+        await started.wait()
+        second = asyncio.create_task(web.api_analytics("xiaohongshu", manual=1))
+        await asyncio.sleep(0)
+        finish.set()
+        assert await first == await second == {"platform": "xiaohongshu"}
+        assert calls == ["xiaohongshu"]
+        await asyncio.sleep(0)
+        assert web._analytics_inflight == {}
+        assert await web.api_analytics("xiaohongshu", manual=1) == {"platform": "xiaohongshu"}
+        assert calls == ["xiaohongshu", "xiaohongshu"]
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_client_does_not_cancel_shared_fetch(monkeypatch):
+    async def scenario():
+        finish = asyncio.Event()
+
+        async def fetch(platform):
+            await finish.wait()
+            return {"platform": platform}
+
+        monkeypatch.setattr(web, "_fetch_analytics", fetch)
+        client = asyncio.create_task(web.api_analytics("xiaohongshu", manual=1))
+        await asyncio.sleep(0)
+        client.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await client
+        assert not web._analytics_inflight["xiaohongshu"].cancelled()
+        other = asyncio.create_task(web.api_analytics("xiaohongshu", manual=1))
+        finish.set()
+        assert await other == {"platform": "xiaohongshu"}
+
+    asyncio.run(scenario())
+
+
+def test_failed_refresh_can_be_retried(monkeypatch):
+    async def scenario():
+        async def fetch(platform):
+            raise HTTPException(502, "Unavailable")
+
+        monkeypatch.setattr(web, "_fetch_analytics", fetch)
+        for attempt in range(2):
+            with pytest.raises(HTTPException):
+                await web.api_analytics("xiaohongshu", manual=1)
+            await asyncio.sleep(0)
+            assert web._analytics_inflight == {}
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("code,payload,status", [
+    (0, {"loggedIn": True, "followers": None, "likes": None, "metrics": [], "notes": []}, 502),
+    (1, {"loggedIn": True, "followers": 7}, 502),
+    (0, {"error": "Platform maintenance"}, 502),
+    (0, {"loggedIn": True, "followers": 0}, None),
+    (0, {"loggedIn": False}, None),
+])
+def test_failed_or_empty_payload_is_not_success(monkeypatch, code, payload, status):
+    monkeypatch.setattr(web, "_run_analytics_command", lambda *args: subprocess.CompletedProcess(
+        [], code, json.dumps(payload), ""))
+    if status:
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(web._fetch_analytics("xiaohongshu"))
+        assert error.value.status_code == status
+    else:
+        assert asyncio.run(web._fetch_analytics("xiaohongshu")) == payload
+
+
+def test_fetch_propagates_actionable_script_error(monkeypatch):
+    monkeypatch.setattr(web, "_run_analytics_command", lambda *args: subprocess.CompletedProcess(
+        [], 1, "", "ERROR: 小红书登录目录正被占用"))
+    with pytest.raises(HTTPException, match="登录目录正被占用"):
+        asyncio.run(web._fetch_analytics("xiaohongshu"))
+
+
+def test_fetch_reports_bounded_timeout(monkeypatch):
+    runner = Mock(side_effect=subprocess.TimeoutExpired("fetch", 90))
+    monkeypatch.setattr(web, "_run_analytics_command", runner)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(web._fetch_analytics("xiaohongshu"))
+    assert error.value.status_code == 504
+    assert runner.call_args.args[2] == 90
+    assert runner.call_args.args[1]["PYTHONIOENCODING"] == "utf-8"
+    assert runner.call_args.args[1]["PYTHONUTF8"] == "1"
+
+
+def test_subprocess_timeout_stops_browser_tree(monkeypatch):
+    process = Mock(pid=123456)
+    process.communicate.side_effect = [subprocess.TimeoutExpired("fetch", 1), ("", "")]
+    popen = Mock(return_value=process)
+    monkeypatch.setattr(web.subprocess, "Popen", popen)
+    if os.name == "nt":
+        killer = Mock()
+        monkeypatch.setattr(web.subprocess, "run", killer)
+    else:
+        killer = Mock()
+        monkeypatch.setattr(web.os, "killpg", killer)
+    with pytest.raises(subprocess.TimeoutExpired):
+        web._run_analytics_command(["python", "fetch"], {}, 1)
+    assert popen.call_args.kwargs["encoding"] == "utf-8"
+    assert popen.call_args.kwargs["start_new_session"] is (os.name != "nt")
+    if os.name == "nt":
+        assert killer.call_args.args[0] == ["taskkill", "/PID", "123456", "/T", "/F"]
+    else:
+        killer.assert_called_once_with(123456, signal.SIGKILL)
+    process.kill.assert_called_once()
+    assert process.communicate.call_count == 2

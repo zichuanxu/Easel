@@ -42,6 +42,8 @@ def client(tmp_path, monkeypatch):
     # 这里显式指定，不依赖仓库根 conftest.py 的兜底。
     openclaw_state = tmp_path / "openclaw-state"
     monkeypatch.setenv("EASEL_OPENCLAW_STATE_DIR", str(openclaw_state))
+    # 这些用例测的是 OpenClaw 底座下的保存接口；沙箱里没有 openclaw.json，引擎会默认成仅聊天模式而拒绝保存
+    monkeypatch.setenv("EASEL_AGENT_RUNTIME", "openclaw")
     monkeypatch.setattr(web, "_openclaw_provider_creds",
                         lambda: {"myproxy": ("https://good.example.com/v1", "sk-fake-custom")})
     # 双保险（上游 issue #62 的做法）：本分支 _sync_openclaw_chat 已走 config_path()（上面的
@@ -230,7 +232,8 @@ def test_ssrf_guard_rejects_internal(url):
 def test_selftest_probe_has_guards():
     import inspect
     src = inspect.getsource(web.api_models_selftest)
-    assert "_valid_base_url" in src and "_ssrf_safe" in src, "探针前必须先过两道闸"
+    assert "_valid_base_url" in src and "_model_target_allowed" in src, "探针前必须先过两道闸"
+    assert "_ssrf_safe" in inspect.getsource(web._model_target_allowed)
     assert "redirect_request" in src, "不能跟跳转——跟了等于绕过前面的判断"
 
 

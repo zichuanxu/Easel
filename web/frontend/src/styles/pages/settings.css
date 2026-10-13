@@ -101,12 +101,54 @@
 }
 .model-dd .dd-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 9px; border-radius: var(--r-control); font-size: var(--fs-12); cursor: pointer; }
 .model-dd .dd-item:hover, .model-dd .dd-item.active { background: var(--c-hover); }
+.model-dd .dd-item:focus-visible { outline-offset: -2px; }
 .model-dd .dd-item small { color: var(--c-ink-3); font-size: var(--fs-12); }
 .model-dd .dd-empty { padding: 10px; display: flex; flex-direction: column; align-items: center; gap: 8px; color: var(--c-ink-3); font-size: var(--fs-12); }
 .model-dd .dd-pull { display: inline-flex; align-items: center; gap: 5px; height: var(--h-ctl-sm); padding: 0 12px; border: 1px solid var(--c-rule-strong); border-radius: var(--r-control); background: var(--c-surface); color: var(--c-ink); font: inherit; font-size: var(--fs-12); font-weight: 500; cursor: pointer; }
 .model-dd .dd-pull:hover:not(:disabled) { background: var(--c-hover); }
 .model-dd .dd-pull:disabled { opacity: .6; cursor: default; }
 .model-dd .spin { width: 10px; height: 10px; flex: none; border: 1.5px solid var(--c-rule-strong); border-top-color: var(--c-ink); border-radius: 50%; animation: spin 0.8s linear infinite; }
+
+/* 自定义供应商的「会思考」声明：独占模型列下一行 */
+.settings-modal .custom-model-cell { flex-wrap: wrap; }
+/* 输入框不按固有宽度撑开，窄列里「拉取」按钮才不会被挤到下一行 */
+.settings-modal .custom-model-cell > .field.mock { flex: 1 1 0; }
+.settings-modal .thinking-controls { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: var(--fs-12); color: var(--c-ink-2); }
+.settings-modal .thinking-controls label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.settings-modal .thinking-controls input { accent-color: var(--c-ink); margin: 0; }
+.settings-modal .thinking-format { width: auto; min-width: 150px; height: var(--h-ctl-sm); padding: 0 8px; font-size: var(--fs-12); }
+
+/* 首开未配置模型时的提示条：藤黄左竖线 */
+.settings-modal .settings-banner { flex: none; margin: var(--sp-3) 24px 0; padding: 10px 14px; border-left: 3px solid var(--c-warn); border-radius: 0 var(--r-control) var(--r-control) 0; background: var(--c-warn-soft); color: var(--c-ink-2); font-size: var(--fs-13); line-height: 1.5; }
+
+/* ── 执行引擎（Agent 底座）：对话通道顶部，选引擎、模型覆盖、Codex 沙箱与授权 ── */
+.settings-modal .harness-settings { margin-bottom: 20px; }
+.settings-modal .settings-field { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--c-rule); }
+.settings-modal .settings-field:last-of-type { border-bottom: none; }
+.settings-modal .settings-field-label { padding-top: 8px; font-size: var(--fs-13); color: var(--c-ink-2); }
+.settings-modal .settings-field-body { min-width: 0; max-width: 480px; }
+.settings-modal .settings-field-body .desc { margin: 7px 0 0; line-height: 1.6; }
+.settings-modal .settings-field-body .desc code { font-size: var(--fs-12); word-break: break-all; }
+.settings-modal .settings-engine-control { display: flex; align-items: center; gap: 8px; }
+.settings-modal .settings-engine-control .ui-select { flex: 1; min-width: 0; }
+.settings-modal .settings-native-models { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
+.settings-modal .settings-native-models .ui-select { flex: 1; min-width: 0; }
+.settings-modal .settings-native-models > .btn { flex: none; }
+.settings-modal .settings-help { position: relative; flex: none; display: inline-flex; }
+.settings-modal .settings-help-trigger { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: none; border-radius: 50%; background: none; color: var(--c-ink-3); font-size: var(--fs-16); cursor: help; }
+.settings-modal .settings-help-trigger:hover, .settings-modal .settings-help-trigger:focus-visible { background: var(--c-hover); color: var(--c-ink); }
+.settings-modal .settings-help-tooltip { position: absolute; z-index: 10; top: calc(100% + 8px); right: 0; width: min(320px, calc(100vw - 48px)); padding: 10px 12px; border: 1px solid var(--c-rule); border-radius: var(--r-control); background: var(--c-surface); color: var(--c-ink-2); font-size: var(--fs-12); line-height: 1.7; box-shadow: var(--shadow-pop); visibility: hidden; opacity: 0; pointer-events: none; }
+.settings-modal .settings-help:hover .settings-help-tooltip, .settings-modal .settings-help:focus-within .settings-help-tooltip { visibility: visible; opacity: 1; pointer-events: auto; }
+.settings-modal .settings-permission-switch { display: inline-flex; align-items: center; width: 40px; height: 24px; padding: 3px; border: 1px solid var(--c-rule-strong); border-radius: var(--r-overlay); background: var(--c-sunken); cursor: pointer; transition: background var(--t-fast), border-color var(--t-fast); }
+.settings-modal .settings-permission-switch[aria-checked="true"] { background: var(--c-ink); border-color: var(--c-ink); }
+.settings-modal .settings-permission-switch__thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--c-ink-3); transition: transform var(--t-fast), background var(--t-fast); }
+.settings-modal .settings-permission-switch[aria-checked="true"] .settings-permission-switch__thumb { transform: translateX(16px); background: var(--c-on-ink); }
+.settings-modal .settings-permission-switch:disabled { opacity: .5; cursor: not-allowed; }
+@container (max-width: 560px) {
+  .settings-modal .settings-field { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .settings-modal .settings-field-label { padding-top: 0; }
+  .settings-modal .settings-field-body { max-width: none; }
+}
 
 /* 本机 Agent（对话通道）：装了 CLI agent 时的免 Key 一键接入。列：名称 / 状态 / 模型 / 操作 / 说明 */
 .settings-modal .local-agents { margin-top: 12px; padding: 10px 16px; border: 1px solid var(--c-rule); border-radius: var(--r-panel); background: var(--c-surface); }

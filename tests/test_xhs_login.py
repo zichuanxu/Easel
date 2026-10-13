@@ -108,6 +108,9 @@ class FakeWorld:
     def time(self) -> float:
         return self.clock
 
+    def monotonic(self) -> float:
+        return self.clock
+
     def sleep(self, s: float) -> None:
         self.clock += s
 
@@ -115,6 +118,9 @@ class FakeWorld:
 class FakeElement:
     def screenshot(self, path: str) -> None:
         Path(path).write_bytes(b"\x89PNG fake qr")
+
+    def is_visible(self) -> bool:
+        return True
 
 
 class FakePage:
@@ -201,6 +207,19 @@ class FakePage:
             return object()
         return None
 
+    def query_selector_all(self, selector: str):
+        self._check_open()
+        if (selector == xhs.SELECTORS["login_ok"] and self.ctx.logged_in
+                and self._url.startswith(xhs.EXPLORE_URL)):
+            return [FakeElement()]
+        if selector == xhs.SELECTORS["logged_out"] and self.qr_shown and not self.ctx.logged_in:
+            return [FakeElement()]
+        return []
+
+    def inner_text(self, selector: str = "body", **_kw) -> str:
+        self._check_open()
+        return ""
+
     def wait_for_selector(self, selector: str, timeout: int = 0):
         self._check_open()
         if (selector == xhs.SELECTORS["qrcode"] and self._url.startswith(xhs.EXPLORE_URL)
@@ -275,6 +294,15 @@ def fake_browser(monkeypatch, tmp_path):
         statuses.append((state, message, qr))
 
     monkeypatch.setattr(xhs.login_state, "write_status", record)
+    def fake_capture(page, qr_out, *, creator_only=False):
+        if page.ctx.logged_in:
+            return False
+        page.qr_shown = True
+        Path(qr_out).parent.mkdir(parents=True, exist_ok=True)
+        Path(qr_out).write_bytes(b"\x89PNG fake qr")
+        return True
+
+    monkeypatch.setattr(xhs, "_capture_login_qr", fake_capture)
     monkeypatch.setattr(xhs, "_cloak_executable", lambda: None)
     monkeypatch.setattr(xhs, "_browser_channel", lambda: None)
     # 这些剧本覆盖「允许无头」时的登录链路（没有桌面的机器）；默认一律开窗口见下面的单独测试

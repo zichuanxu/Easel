@@ -31,13 +31,18 @@ function isFresh(d: AccountAnalytics | undefined, now = Date.now()): boolean {
   return !!d && Number.isFinite(d.fetched_at) && now - d.fetched_at * 1000 <= ANALYTICS_TTL_MS;
 }
 
-/** 只接受对象值：旧版本会把 'loading' / 'error' 字符串一起写进来，直接丢掉。 */
+/**
+ * 只接受结构完整的对象值：旧版本会把 'loading' / 'error' 字符串一起写进来；
+ * 键与 platform 对不上、loggedIn 不是布尔的残缺条目（串号或写坏的缓存）同样丢掉。
+ */
 function loadStored(): Record<string, AccountAnalytics> {
   try {
     const raw = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
     const out: Record<string, AccountAnalytics> = {};
     for (const [k, v] of Object.entries(raw ?? {})) {
-      if (v && typeof v === 'object') out[k] = v as AccountAnalytics;
+      if (!v || typeof v !== 'object') continue;
+      const d = v as AccountAnalytics;
+      if (d.platform === k && typeof d.loggedIn === 'boolean') out[k] = d;
     }
     return out;
   } catch { return {}; }

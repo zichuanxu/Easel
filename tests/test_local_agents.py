@@ -436,3 +436,27 @@ def test_saving_api_primary_leaves_claude_cli_route(sandbox, monkeypatch):
     assert "agentRuntime" not in data["agents"]["defaults"]["models"].get("anthropic/claude-opus-5", {})
     assert not any(line.startswith("EASEL_AGENT_RUNTIME=") for line in _env_lines(sandbox))
 
+
+
+# ── 合并上游 v0.3.0 后：EASEL_AGENT_RUNTIME 同键两用、首次自检认 Claude CLI 路线 ──
+
+def test_enable_claude_code_refuses_to_override_engine_pin(sandbox, monkeypatch):
+    """.env 用 EASEL_AGENT_RUNTIME 固定了执行引擎时，一键接入不能悄悄改写它（引擎会被换掉）。"""
+    monkeypatch.setattr(la.shutil, "which", lambda c: "/usr/bin/claude" if c == "claude" else None)
+    sandbox.env_file.write_text("EASEL_AGENT_RUNTIME=openclaw\n", encoding="utf-8")
+    before = sandbox.oc_file.read_text(encoding="utf-8")
+    resp = sandbox.post("/api/settings/local-agents/enable", json={"id": "claude-code"})
+    assert resp.status_code == 409, resp.text
+    assert sandbox.env_file.read_text(encoding="utf-8") == "EASEL_AGENT_RUNTIME=openclaw\n"
+    assert sandbox.oc_file.read_text(encoding="utf-8") == before
+
+
+def test_bootstrap_counts_claude_cli_route_as_configured(sandbox, monkeypatch):
+    """Claude CLI 路线本来就不配 API Key；首次自检不能判成「没配模型」、每次打开都弹设置。"""
+    import easel.commands.doctor as doctor
+    monkeypatch.setattr(la.shutil, "which", lambda c: "/usr/bin/claude" if c == "claude" else None)
+    assert sandbox.post("/api/settings/local-agents/enable", json={"id": "claude-code"}).status_code == 200
+    monkeypatch.setattr(doctor, "_claude_cli_ready", lambda cfg: (True, "claude 已登录"))
+    monkeypatch.setattr(web, "check_gateway", lambda: True)
+    data = sandbox.get("/api/settings/bootstrap").json()
+    assert data["envKeyOk"] is True and data["modelConfigured"] is True, data

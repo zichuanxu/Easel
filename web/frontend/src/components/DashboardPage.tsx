@@ -12,6 +12,8 @@ import Tag from './ui/Tag';
 interface DashboardProps {
   persona: string;
   gatewayStatus: string;
+  apiDirect: boolean;
+  agentRuntime: string;
   onNavigate: (page: Page) => void;
   onUseTopic: (title: string) => void;
 }
@@ -21,7 +23,19 @@ const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
 
 interface Stage { layer: LayerKey; num: string; label: string; link: { label: string; page: Page } }
 
-export default function DashboardPage({ persona, gatewayStatus, onNavigate, onUseTopic }: DashboardProps) {
+/** 按当前执行引擎给出状态提示：未就绪用红标签，CLI 引擎就绪时提示「登录与模型要发消息才验证」。 */
+function engineNotice(gatewayStatus: string, apiDirect: boolean, agentRuntime: string): { tone: 'danger' | 'neutral'; text: string } | null {
+  const ready = gatewayStatus === 'connected';
+  if (apiDirect) return ready ? null : { tone: 'danger', text: '请先配置仅聊天模式的模型 API' };
+  if (agentRuntime !== 'openclaw') {
+    return ready
+      ? { tone: 'neutral', text: `${agentRuntime} CLI 已安装，原生登录及模型可用性发消息时才会验证` }
+      : { tone: 'danger', text: `请先在服务器安装并配置 ${agentRuntime} CLI` };
+  }
+  return ready ? null : { tone: 'danger', text: '网关未连接，对话暂不可用' };
+}
+
+export default function DashboardPage({ persona, gatewayStatus, apiDirect, agentRuntime, onNavigate, onUseTopic }: DashboardProps) {
   const [trends, setTrends] = useState<TrendGroup[]>([]);
   const [trendsFailed, setTrendsFailed] = useState(false);
   const [schedule, setSchedule] = useState<ScheduleItem[]>([]);
@@ -50,6 +64,7 @@ export default function DashboardPage({ persona, gatewayStatus, onNavigate, onUs
   const pendingIdeas = ideas.filter((i) => i.status === 'pending');
   const loggedIn = accounts.filter((a) => a.loggedIn).length;
   const trendCount = trends.reduce((n, g) => n + g.items.length, 0);
+  const notice = engineNotice(gatewayStatus, apiDirect, agentRuntime);
 
   const stages: Stage[] = [
     { layer: 'discover', num: String(trendCount), label: '条今日热点', link: { label: '热点雷达', page: 'trends' } },
@@ -68,7 +83,7 @@ export default function DashboardPage({ persona, gatewayStatus, onNavigate, onUs
             <span className="dash-date-text" title={`${dateLine}。${persona ? `当前画像：${persona}。` : '通用模式，选一个画像生成的内容会更贴合你。'}`}>
               {dateLine}。{persona ? `当前画像：${persona}。` : '通用模式，选一个画像生成的内容会更贴合你。'}
             </span>
-            {gatewayStatus !== 'connected' && <Tag tone="danger">网关未连接，对话暂不可用</Tag>}
+            {notice && <Tag tone={notice.tone}>{notice.text}</Tag>}
           </p>
         </div>
         <div className="dash-actions">

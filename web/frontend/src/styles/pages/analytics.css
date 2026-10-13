@@ -33,3 +33,5 @@
 .ana-col-main .ui-tabs-sm .ui-tab.is-active::after { left: 6px; right: 6px; }
 /* 「刷新数据」与「正在更新…」等宽，切换时不跳动 */
 .analytics-page .ui-page-header-actions .btn { min-width: 88px; justify-content: center; }
+/* 后端附带的抓取提示（如部分指标取不到）：横跨整行的藤黄左竖线提示块 */
+.ana-warning { grid-column: 1 / -1; padding: var(--sp-2) var(--sp-3); border-left: 3px solid var(--c-warn); border-radius: 0 var(--r-control) var(--r-control) 0; background: var(--c-warn-soft); font-size: var(--fs-13); color: var(--c-ink-2); }
