@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Easel is a social-media content workbench built as an integration layer on top of **OpenClaw**, a Node.js agent CLI and gateway installed with `npm i -g openclaw`. The agent runs inside the OpenClaw gateway. It routes each request to a skill (`skills/openclaw/<name>/SKILL.md` plus scripts) across five layers: discover → plan → produce → publish → attribute. Easel provides:
+Easel is a social-media content workbench built as an integration layer on top of **OpenClaw**, a Node.js agent CLI and gateway installed with `npm i -g openclaw`. The agent runs inside the OpenClaw gateway. It routes each request to a skill (`skills/builtin/<name>/SKILL.md` plus scripts) across five layers: discover → plan → produce → publish → attribute. Since v0.3.0 the execution engine is selectable in Web settings (OpenClaw, Codex, OpenCode, a generic ACP agent, or chat-only; `easel/harnesses/`, `docs/agent-harnesses.md`). OpenClaw stays the default, and the skill sync, gateway and publish-safety rules below are built around it. Easel provides:
 
 - a Python CLI (`easel/`)
 - a FastAPI + React web workbench (`web/`)
@@ -23,6 +23,7 @@ source .venv/bin/activate
 # Checks CI runs (ubuntu + windows, Python 3.12) — run before committing
 python scripts/validate_skills.py          # SKILL frontmatter/layout, output-path and publish-safety contracts
 python scripts/validate_skill_commands.py  # `python ...` commands in SKILL.md vs the scripts' real argparse
+python scripts/validate_document_paths.py  # concrete repo paths in docs and agent prompts (docs/superpowers/ is exempt)
 python -m pytest                           # from repo root; NOT `pytest tests/` (that skips skills/**/tests/)
 python -m pytest tests/test_gateway_endpoint.py -q
 python -m pytest tests/test_core.py -k resolve_input
@@ -30,12 +31,14 @@ python -m pytest tests/test_core.py -k resolve_input
 # Frontend (web/frontend: React 19 + Vite + TypeScript)
 cd web/frontend && npm run build   # tsc -b && vite build → web/frontend/dist/ (what `easel web` serves)
 cd web/frontend && npm run lint    # oxlint
+cd web/frontend && npm test        # vitest
+cd web/frontend && node --test ../../tests/frontend/*.test.mjs
 
 # Runtime
 easel doctor | easel ping | easel chat | easel web [--port 7860]
 easel skill <name> -i "<text or file path>" [-p <profile>]
 easel gateway start|stop|restart|status|logs   # wraps scripts/gateway.sh (gateway.ps1 on Windows)
-bash openclaw/sync.sh                          # push skills + workspace prompts into the OpenClaw workspace
+bash agents/sync.sh                            # push skills + workspace prompts into the OpenClaw workspace (--docs-only: prompts only)
 ```
 
 No Python linter or formatter is configured in the repo.
@@ -56,7 +59,7 @@ Easel never runs a skill itself. Every entry point builds a message and hands it
 - Streaming tokens and thinking come from tailing the gateway's raw-stream file (`EASEL_RAW_STREAM_PATH`, default `/tmp/easel-raw-stream.jsonl`). This default must stay identical in `web/app.py` and `scripts/gateway.sh`.
 - `easel/gateway_questions.py` turns the agent's `ask_user` calls into web question cards. It talks to the gateway over WebSocket RPC with an Ed25519 device key, and disables itself for the rest of the process if the gateway doesn't support it.
 
-OpenClaw state lives in `~/.openclaw-easel/`: `openclaw.json`, and session transcripts under `agents/main/sessions/`. The gateway log is `/tmp/easel-gateway.log`. `openclaw/openclaw.json5` is reference-only; `setup.sh` writes the real config with `openclaw config set`.
+OpenClaw state lives in `~/.openclaw-easel/`: `openclaw.json`, and session transcripts under `~/.openclaw-easel/agents/main/sessions/`. The gateway log is `/tmp/easel-gateway.log`. `agents/openclaw.json5` is reference-only; `setup.sh` writes the real config with `openclaw config set`.
 
 ### Single-source-of-truth modules — never re-hardcode these values
 
@@ -74,11 +77,11 @@ OpenClaw state lives in `~/.openclaw-easel/`: `openclaw.json`, and session trans
 
 ### The agent reads synced copies, not this repo
 
-`openclaw/sync.sh` (and the equivalent step in `setup.ps1`) copies:
+`agents/sync.sh` (and the equivalent step in `setup.ps1`) copies:
 
-- `skills/openclaw/*` → `<workspace>/skills/`, removing skills that no longer exist in the repo
+- `skills/builtin/*` → `<workspace>/skills/`, removing skills that no longer exist in the repo
 - `skills/shared/` → `<workspace>/shared/`
-- `openclaw/workspace/{AGENTS,SOUL}.md` into the workspace, appending the runtime project-root path to AGENTS.md
+- `agents/workspace/{AGENTS,SOUL}.md` into the workspace, appending the runtime project-root path to AGENTS.md
 
 It also empties the global `MEMORY.md` and symlinks `profiles/` (as `easel-profiles`) and `outputs/` into the workspace.
 
@@ -128,9 +131,9 @@ The frontend calls the API through paths relative to the current page (no Vite p
 
 Tests put `web/` and `skills/shared/scripts/` on `sys.path`, then import `web/app.py` as `app` and shared scripts by bare module name (pytest runs with `--import-mode=importlib`). Tests must never call real models or platforms, and must never touch the user's `.env` or OpenClaw config. Sandbox with `tmp_path` and `monkeypatch`, for example `monkeypatch.setattr(web, "ENV_FILE", tmp_env)`.
 
-The root `conftest.py` has an autouse fixture that points `EASEL_OPENCLAW_STATE_DIR` at a temp dir for every test. It lives at the repo root because a `tests/conftest.py` collides with `skills/openclaw/skill-wechat-publisher/tests/conftest.py`: both directories have an `__init__.py`, so both files get the module name `tests.conftest`.
+The root `conftest.py` has an autouse fixture that points `EASEL_OPENCLAW_STATE_DIR` at a temp dir for every test. It lives at the repo root because a `tests/conftest.py` collides with `skills/builtin/skill-wechat-publisher/tests/conftest.py`: both directories have an `__init__.py`, so both files get the module name `tests.conftest`.
 
-The agent can run through OpenClaw's `claude-cli` runtime instead of an API key, using the local Claude Code login. Opt in with `EASEL_AGENT_RUNTIME=claude-cli` in `.env` (or setup wizard option 4, or Settings → 对话 → 本机 Agent 「一键接入」 for Claude Code, which writes the same config through `easel/claude_cli_route.py` and records `EASEL_AGENT_RUNTIME` in `.env`; keep its rules in step with `setup.sh`). `setup.sh` then writes:
+The agent can run through OpenClaw's `claude-cli` runtime instead of an API key, using the local Claude Code login. Opt in with `EASEL_AGENT_RUNTIME=claude-cli` in `.env` (or Settings → 对话 → 本机 Agent 「一键接入」 for Claude Code, which writes the same config through `easel/claude_cli_route.py` and records `EASEL_AGENT_RUNTIME` in `.env`; keep its rules in step with `setup.sh`). `setup.sh` then writes:
 
 - `agents.defaults.models["anthropic/<model>"].agentRuntime.id = "claude-cli"`
 - `env.vars.CLAUDE_CONFIG_DIR`, default `~/.claude-easel`. `EASEL_CLAUDE_CONFIG_DIR=shared` disables isolation.

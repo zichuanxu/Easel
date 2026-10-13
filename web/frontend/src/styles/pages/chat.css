@@ -90,6 +90,37 @@
 .message-bubble.assistant a[href*="/api/media/"]:hover,
 .message-bubble.assistant a[href^="#/outputs/"]:hover { border-color: var(--c-ink-3); }
 
+/* ---- 产物画廊：对话里的图片 / 网页 / 视频 / 音频 / PDF 预览，多个产物可翻页 ---- */
+.artifact-gallery { width: 100%; min-width: 0; margin-top: var(--sp-4); border: 1px solid var(--c-rule); border-radius: var(--r-panel); overflow: hidden; background: var(--c-surface); }
+.artifact-header, .artifact-footer { display: flex; align-items: center; gap: 10px; padding: 10px 14px; font-size: var(--fs-12); color: var(--c-ink-2); }
+.artifact-header { border-bottom: 1px solid var(--c-rule); font-family: var(--font-serif); font-weight: 600; font-size: var(--fs-13); color: var(--c-ink); }
+.artifact-header svg { color: var(--c-ink-3); }
+.artifact-count { margin-left: auto; font-family: var(--font-sans); font-weight: 400; font-size: var(--fs-12); font-variant-numeric: tabular-nums; color: var(--c-ink-3); }
+.artifact-stage { position: relative; display: flex; justify-content: center; align-items: center; min-height: 160px; padding: 16px; background: var(--c-sunken); }
+.message-bubble.assistant .artifact-stage > img, .artifact-stage > video { display: block; max-width: 100%; max-height: min(56vh, 520px); width: auto; height: auto; object-fit: contain; border: 0; border-radius: var(--r-control); }
+.artifact-stage > audio { width: 100%; }
+.artifact-stage > iframe { width: 100%; height: min(56vh, 520px); border: 0; background: var(--c-surface); }
+.artifact-html-stage { width: 100%; height: min(56vh, 520px); min-height: 240px; display: flex; justify-content: center; align-items: center; overflow: hidden; }
+.artifact-html-fit { position: relative; flex-shrink: 0; }
+.artifact-html-fit iframe { display: block; border: 0; background: var(--c-surface); transform-origin: top left; position: absolute; top: 0; left: 0; }
+.artifact-arrow { position: absolute; top: 50%; transform: translateY(-50%); width: 36px; height: 36px; display: grid; place-items: center; padding: 0; border: 1px solid var(--c-rule-strong); border-radius: 50%; background: var(--c-surface); color: var(--c-ink); box-shadow: var(--shadow-pop); cursor: pointer; transition: border-color var(--t-fast); }
+.artifact-arrow:hover { border-color: var(--c-ink-3); }
+.artifact-arrow.previous { left: 10px; }
+.artifact-arrow.previous svg { transform: rotate(180deg); }
+.artifact-arrow.next { right: 10px; }
+.artifact-footer { border-top: 1px solid var(--c-rule); }
+.artifact-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 页脚的「打开 / 下载」是普通文字链接：压过上面「产物链接排成文件卡片」那条规则 */
+.message-bubble.assistant .artifact-footer a { display: inline; flex: none; margin: 0; padding: 0; border: 0; background: none; font-size: var(--fs-12); color: var(--c-ink-2); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--c-rule-strong); }
+.message-bubble.assistant .artifact-footer a::before { content: none; }
+.message-bubble.assistant .artifact-footer a:hover { color: var(--c-ink); }
+.artifact-hint { padding: 24px; color: var(--c-ink-3); font-size: var(--fs-13); }
+@media (max-width: 600px) {
+  .artifact-header, .artifact-footer { padding: 10px 12px; gap: 8px; }
+  .artifact-stage { padding: 10px; }
+  .artifact-arrow { width: 32px; height: 32px; }
+}
+
 /* 运行中标签 / 思考过程 */
 .live-panel { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .live-activity { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; max-width: 100%; padding: 3px 10px; border: 1px solid var(--c-rule); border-radius: var(--r-control); background: var(--c-surface); font-size: var(--fs-12); color: var(--c-ink-2); }
@@ -147,6 +178,8 @@
 .composer-drag { border-color: var(--c-ink); border-style: dashed; background: var(--c-sunken); }
 .composer-top { display: flex; gap: var(--sp-2); align-items: flex-start; }
 .composer-top .chat-input { flex: 1; min-width: 0; }
+/* 仅聊天模式：输入框前用标签说明能力范围（代替笔入口） */
+.composer-top > .ui-tag { flex: none; margin-top: 3px; }
 .chat-input { display: block; width: 100%; min-height: 24px; max-height: 180px; padding: 4px 0; border: none; outline: none; resize: none; background: none; color: var(--c-ink); font: inherit; font-size: var(--fs-14); line-height: 1.55; }
 .chat-input::placeholder { color: var(--c-ink-3); }
 .composer-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--sp-2); }
@@ -157,15 +190,15 @@
 .composer-attach-btn:disabled { opacity: 0.5; cursor: default; }
 
 /* 问答卡片（ask_user） */
-.question-col { max-width: 80%; }
-.question-card { display: grid; gap: var(--sp-3); width: 100%; padding: 14px 16px; border: 1px solid var(--c-rule); border-radius: var(--r-panel); background: var(--c-surface); animation: fadeIn 0.24s var(--ease); }
-.question-card__item { display: grid; gap: var(--sp-2); }
+.question-col { max-width: 80%; min-width: 0; }
+.question-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); width: 100%; min-width: 0; max-width: 100%; overflow-wrap: anywhere; padding: 14px 16px; border: 1px solid var(--c-rule); border-radius: var(--r-panel); background: var(--c-surface); animation: fadeIn 0.24s var(--ease); }
+.question-card__item { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: var(--sp-2); }
 .question-card__divider { height: 1px; margin: var(--sp-3) 0 var(--sp-1); background: var(--c-rule); }
 .question-card__chip { justify-self: start; }
-.question-card__title { font-family: var(--font-serif); font-size: 15px; font-weight: 600; line-height: 1.4; color: var(--c-ink); }
+.question-card__title { font-family: var(--font-serif); font-size: 15px; font-weight: 600; line-height: 1.4; color: var(--c-ink); white-space: pre-wrap; }
 .question-card__multi { margin-left: var(--sp-2); vertical-align: 1px; }
-.question-card__options { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--sp-2); }
-.question-card__option { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--c-rule-strong); border-radius: var(--r-control); background: var(--c-surface); font: inherit; text-align: left; cursor: pointer; transition: border-color var(--t-fast), background var(--t-fast); }
+.question-card__options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: var(--sp-2); }
+.question-card__option { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 3px; white-space: normal; padding: 10px 12px; border: 1px solid var(--c-rule-strong); border-radius: var(--r-control); background: var(--c-surface); font: inherit; text-align: left; cursor: pointer; transition: border-color var(--t-fast), background var(--t-fast); }
 .question-card__option:hover:not(:disabled) { border-color: var(--c-ink-3); }
 .question-card__option--selected { border-color: var(--c-ink); background: var(--c-tint); box-shadow: inset 0 0 0 1px var(--c-ink); }
 .question-card__option:disabled { opacity: 0.55; cursor: default; }

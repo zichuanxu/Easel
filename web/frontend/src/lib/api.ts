@@ -27,8 +27,41 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 
 export interface StatusResponse {
   gateway: boolean;
+  transport?: string;
+  runtime?: string;
   skills: SkillItem[];
   personas: PersonaItem[];
+}
+
+export interface HarnessSettingsResponse {
+  runtime: string;
+  models: Record<string, string>;
+  sandbox: string;
+  codex_auto_approve: boolean;
+  locked: boolean;
+  agents: { id: string; label: string; protocol: string; installed: boolean; install_hint: string }[];
+}
+
+export function fetchHarnessSettings(): Promise<HarnessSettingsResponse> {
+  return request('/api/settings/harness');
+}
+
+export interface HarnessModel {
+  id: string;
+  label: string;
+  default: boolean;
+}
+
+export function fetchHarnessModels(runtime: string): Promise<{ runtime: string; models: HarnessModel[] }> {
+  return request(`/api/settings/harness/models/${encodeURIComponent(runtime)}`, { method: 'POST' });
+}
+
+export function saveHarnessSettings(runtime: string, model: string, sandbox: string, codexAutoApprove?: boolean): Promise<HarnessSettingsResponse> {
+  return request('/api/settings/harness', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ runtime, model, sandbox, codex_auto_approve: codexAutoApprove }),
+  });
 }
 
 export interface PersonaItem {
@@ -173,7 +206,7 @@ export function deletePersona(name: string): Promise<{ ok: boolean; deleted: str
 
 // ---- 热点雷达 ----
 export interface TrendItem { title: string; hot: string; url: string; }
-export interface TrendGroup { platform: string; label: string; items: TrendItem[]; }
+export interface TrendGroup { platform: string; label: string; items: TrendItem[]; ok?: boolean; }
 export function fetchTrends(platforms: string, limit = 12): Promise<{ trends: TrendGroup[]; updated: number }> {
   return request(`/api/trends?platforms=${encodeURIComponent(platforms)}&limit=${limit}`);
 }
@@ -326,6 +359,10 @@ export function fetchOutputs(): Promise<OutputNode[]> {
   return request<OutputNode[]>('/api/outputs');
 }
 
+export function fetchArtifactArchive(path: string, signal?: AbortSignal): Promise<{ paths: string[] }> {
+  return request<{ paths: string[] }>(`/api/artifacts/archive?path=${encodeURIComponent(path)}`, { signal });
+}
+
 export function fetchOutputContent(path: string): Promise<OutputContent> {
   return request<OutputContent>(`/api/output/${path.split('/').map(encodeURIComponent).join('/')}`);
 }
@@ -429,6 +466,7 @@ export interface LoginStart {
   state?: string;       // starting | qr_ready | window_login | verifying | success | expired | error | unknown
   message?: string;
   qr?: string;          // outputs 下相对路径，用 mediaUrl() 取图
+  qrTs?: number;
   configured?: boolean; // 凭证式：是否已配置
 }
 
@@ -464,7 +502,8 @@ export function startMpLogin(platform: string): Promise<LoginStatus> {
 
 /** 轮询公众号后台扫码登录状态。 */
 export function mpLoginStatus(platform: string): Promise<LoginStatus> {
-  return request<LoginStatus>(`/api/accounts/${encodeURIComponent(platform)}/mp-login/status`);
+  return request<LoginStatus>(`/api/accounts/${encodeURIComponent(platform)}/mp-login/status`,
+    { signal: AbortSignal.timeout(8000) });
 }
 
 export interface LoginStatus {
@@ -489,9 +528,12 @@ export interface AccountWhoami {
 /**
  * 校验某平台登录态 + 拉昵称/头像。海外平台后端起 headless 浏览器真校验（数秒）；
  * 国内浏览器平台默认只读登录标记/缓存，manual=true（用户点「校验账号」）才真校验。
+ * manual 时同时带 force=true（上游后端靠它绕过 whoami 的 TTL 缓存）；后端会忽略不认识的
+ * 参数，所以两个一起发，兼容任一后端。
  */
 export function accountWhoami(platform: string, manual = false): Promise<AccountWhoami> {
-  return request<AccountWhoami>(`/api/accounts/${encodeURIComponent(platform)}/whoami${manual ? '?manual=1' : ''}`);
+  return request<AccountWhoami>(
+    `/api/accounts/${encodeURIComponent(platform)}/whoami${manual ? '?manual=1&force=true' : ''}`);
 }
 
 /** 退出登录：删该平台持久化登录态。 */
@@ -546,11 +588,12 @@ export function submitPublishSms(platform: string, code: string): Promise<{ ok: 
 }
 
 export function startLogin(platform: string): Promise<LoginStart> {
-  return request<LoginStart>(`/api/login/${encodeURIComponent(platform)}`, { method: 'POST' });
+  return request<LoginStart>(`/api/login/${encodeURIComponent(platform)}?restart=true`, { method: 'POST' });
 }
 
 export function loginStatus(platform: string): Promise<LoginStatus> {
-  return request<LoginStatus>(`/api/login/${encodeURIComponent(platform)}/status`);
+  return request<LoginStatus>(`/api/login/${encodeURIComponent(platform)}/status`,
+    { signal: AbortSignal.timeout(8000) });
 }
 
 // ---- 归因层：账号创作数据 ----
@@ -569,11 +612,12 @@ export interface AccountAnalytics {
   likes: number | null;
   following: number | null;
   posts: number | null;
-  metrics: { label: string; value: string; vs: string }[];
+  metrics: { label: string; value: string | number; vs: string }[];
   notes: { title: string; url: string; cover?: string; stat?: string }[];
   growth: Record<'last' | 'day' | 'week' | 'month' | 'year',
     { followers: number | null; likes: number | null; posts: number | null; since_days: number | null } | null>;
   fetched_at: number;
+  warning?: string;
 }
 
 /** 支持抓数据的平台 + 各自登录态。 */
@@ -582,11 +626,12 @@ export function fetchAnalyticsPlatforms(): Promise<AnalyticsPlatform[]> {
 }
 
 /**
- * 抓某平台已登录账号的创作数据（后端起 headless 浏览器，数秒）。
+ * 抓某平台已登录账号的创作数据（后端起 headless 浏览器，数秒），客户端等待时限略长于后端。
  * manual=true 表示用户点了「刷新数据」：国内浏览器平台后端只认这个标志才会真抓，否则只回缓存。
  */
 export function fetchAccountAnalytics(platform: string, manual = false): Promise<AccountAnalytics> {
-  return request<AccountAnalytics>(`/api/analytics/${encodeURIComponent(platform)}${manual ? '?manual=1' : ''}`);
+  return request<AccountAnalytics>(`/api/analytics/${encodeURIComponent(platform)}${manual ? '?manual=1' : ''}`,
+    { signal: AbortSignal.timeout(platform === 'wechat-oa' ? 195000 : 105000) });
 }
 
 /** 读后端落盘的最近一次抓取结果（毫秒级，不起浏览器）。还没有缓存（404）返回 null，其它错误照常抛。 */
@@ -668,7 +713,13 @@ export function streamChat(
         } else if (currentEvent === 'activity' && onActivity) {
           try { onActivity(JSON.parse(data) as string); } catch { onActivity(data); }
         } else if (currentEvent === 'question' && onQuestion) {
-          try { onQuestion(JSON.parse(data) as ChatQuestion); } catch { /* 解析失败忽略 */ }
+          // 防御：question 事件负载必须是对象且带 questions 数组。旧后端重放流曾把
+          // question 双层序列化（JSON.parse 后得到字符串），透传会渲染出无法作答的
+          // 空壳卡片——宁可不显示，交给用户手动追问。
+          try {
+            const q = JSON.parse(data) as ChatQuestion;
+            if (q && typeof q === 'object' && Array.isArray(q.questions)) onQuestion(q);
+          } catch { /* 解析失败忽略 */ }
         } else if (currentEvent === 'heartbeat') {
           // 防呆心跳：独立于 activity/thinking，仅作「未卡住」提示，不覆盖真实状态。
           if (onHeartbeat) { try { onHeartbeat(JSON.parse(data) as string); } catch { onHeartbeat(data); } }
@@ -828,6 +879,8 @@ export interface ModelRow {
   role: string;
   result: string;
   protocol?: string;
+  thinking?: boolean;
+  thinkingFormat?: string;
   keyNew?: string;
   keyNew2?: string;
   key2Label?: string;
@@ -853,6 +906,8 @@ export interface ModelSaveRow {
   primary?: boolean;
   /** 自定义供应商上游协议：openai（默认）| anthropic */
   protocol?: string;
+  thinking?: boolean;
+  thinkingFormat?: string;
 }
 
 export interface ModelSaveResponse extends ModelChannelsResponse {
@@ -871,6 +926,7 @@ export function saveModelConfig(channel: string, rows: ModelSaveRow[]): Promise<
 export interface ModelChannelRows { rows: ModelRow[] }
 
 export interface ModelChannelsResponse {
+  transport?: 'api' | 'openclaw';
   channels: {
     chat: ModelChannelRows;
     transcribe: ModelChannelRows;
@@ -882,8 +938,15 @@ export interface ModelChannelsResponse {
   primary: string;
 }
 
-export function fetchModelChannels(): Promise<ModelChannelsResponse> {
-  return request('/api/settings/models');
+export function fetchModelChannels(runtime?: string): Promise<ModelChannelsResponse> {
+  return request(`/api/settings/models${runtime ? `?runtime=${encodeURIComponent(runtime)}` : ''}`);
+}
+
+export function saveChatTransport(transport: 'api' | 'openclaw'): Promise<ModelChannelsResponse> {
+  return request('/api/settings/chat/transport', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ transport }),
+  });
 }
 
 // （保存接口见上方 saveModelConfig）
@@ -944,10 +1007,11 @@ export interface ModelsFetchResponse { baseUrl: string; models: string[]; fetche
  */
 export function fetchAvailableModels(
   baseUrl: string, key: string, protocol: string, slot = '',
+  name = '',
 ): Promise<ModelsFetchResponse> {
   return request('/api/settings/models/available', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ baseUrl, key, protocol, slot }),
+    body: JSON.stringify({ baseUrl, key, protocol, slot, name }),
   });
 }

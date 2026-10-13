@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 vi.mock('../lib/api', () => ({
@@ -9,10 +9,26 @@ vi.mock('../lib/api', () => ({
   fetchLocalAgents: vi.fn(() => Promise.resolve({ agents: [], installedCount: 0, usableWithoutKeyCount: 0, usableWithoutKey: [] })),
   enableLocalAgent: vi.fn(() => Promise.resolve({ note: '已接入 Claude Code' })),
   fetchAvailableModels: vi.fn(() => Promise.resolve({ models: [] })),
+  fetchHarnessSettings: vi.fn(),
+  fetchHarnessModels: vi.fn(() => Promise.resolve({ runtime: 'codex', models: [] })),
+  saveHarnessSettings: vi.fn(),
 }));
 
 import * as api from '../lib/api';
 import SettingsPanel from './SettingsPanel';
+
+const harness = (runtime: string, extra: Partial<api.HarnessSettingsResponse> = {}): api.HarnessSettingsResponse => ({
+  runtime, models: { codex: 'gpt-x' }, sandbox: 'workspace-write', codex_auto_approve: false, locked: false,
+  agents: ['api', 'openclaw', 'codex'].map((id) => ({
+    id, label: id === 'api' ? '仅聊天模式' : id === 'openclaw' ? 'OpenClaw' : 'Codex', protocol: id, installed: true, install_hint: `install ${id}`,
+  })),
+  ...extra,
+});
+
+beforeEach(() => {
+  // 默认引擎 OpenClaw：模型配置表和本机 Agent 区块照常出现
+  vi.mocked(api.fetchHarnessSettings).mockResolvedValue(harness('openclaw'));
+});
 
 const speechRows = [
   { slot: 'dashscope', order: 0, name: '阿里 CosyVoice', sub: 'voice', type: 'dashscope', model: '', baseUrl: '',
@@ -109,3 +125,39 @@ describe('SettingsPanel 对话通道（上游合并：本机 Agent、拉取模�
   });
 });
 
+describe('SettingsPanel 执行引擎（上游合并：引擎选择与我们的通道表并存）', () => {
+  it('OpenClaw：引擎选择在上、模型配置表在下，保存按钮可用', async () => {
+    render(<SettingsPanel onClose={() => {}} />);
+    expect(await screen.findByRole('button', { name: '执行引擎' })).toBeTruthy();
+    await waitFor(() => expect(vi.mocked(api.fetchModelChannels)).toHaveBeenCalledWith('openclaw'));
+    expect(await screen.findByText('OpenClaw API 配置')).toBeTruthy();
+    await waitFor(() => expect((screen.getByRole('button', { name: '保存配置' }) as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it('原生 CLI 引擎（Codex）：只显示底座设置，不显示通道表和本机 Agent，保存配置禁用', async () => {
+    vi.mocked(api.fetchHarnessSettings).mockResolvedValue(harness('codex'));
+    render(<SettingsPanel onClose={() => {}} />);
+    expect(await screen.findByLabelText('Codex 沙箱')).toBeTruthy();
+    expect(screen.queryByText('OpenClaw API 配置')).toBeNull();
+    expect(screen.queryByText('本机 Agent')).toBeNull();
+    expect((screen.getByRole('button', { name: '保存配置' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(vi.mocked(api.fetchLocalAgents)).not.toHaveBeenCalled();
+  });
+
+  it('先在引擎下拉里按 Esc 只收起下拉，不关设置弹窗', async () => {
+    const onClose = vi.fn();
+    render(<SettingsPanel onClose={onClose} />);
+    fireEvent.click(await screen.findByRole('button', { name: '执行引擎' }));
+    const list = await screen.findByRole('listbox', { name: '执行引擎' });
+    fireEvent.keyDown(list, { key: 'Escape' });
+    expect(screen.queryByRole('listbox', { name: '执行引擎' })).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('首开未配置模型：顶部显示提示条', async () => {
+    render(<SettingsPanel onClose={() => {}} banner="还没有配置模型" />);
+    expect(await screen.findByText('还没有配置模型')).toBeTruthy();
+  });
+});

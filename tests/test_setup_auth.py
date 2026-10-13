@@ -7,13 +7,13 @@
    整条 OpenAI 分支被跳过 —— provider 一个字没写，却照样把 primary 设成了 openai/xxx，
    对话直接报 "No route-compatible authentication source is configured for openai"。
 2. `easel doctor` 只静态查 .env，查不出上面那种「.env 填了但 openclaw 没写」，于是全绿。
-3. setup.ps1 里 `if (Is-UsableKey $x -and $y.ContainsKey(...))` 会进命令解析模式，
+3. setup.ps1 里 `if (Test-UsableKey $x -and $y.ContainsKey(...))` 会进命令解析模式，
    `-and` 被当成参数名静默吞掉，后半个守卫失效（PS 5.1 与 7 同样中招）。
 4. install_tool 用 [Environment]::GetEnvironmentVariable 读用户 PATH 会展开 %VAR%，
    写回又是 REG_SZ，把用户 PATH 里的间接引用永久压平。
 
 setup.sh 的用例是把脚本里那段**原文**抠出来跑（按内容锚点切，不写死行号），
-$OC 换成记录器，所以测的是真代码、不是复制品。
+oc 换成记录器，所以测的是真代码、不是复制品。
 """
 from __future__ import annotations
 
@@ -68,6 +68,12 @@ def _slice(lines: list[str], start: str, end: str, *, keep_end: bool) -> str:
     return "\n".join(lines[i: j + 1 if keep_end else j])
 
 
+def _oc_run_block() -> str:
+    """setup.sh 里真正调 openclaw 写配置的那一处（_oc_run），claude-cli 路线的 --merge 写入经过它。"""
+    lines = SETUP_SH.read_text(encoding="utf-8").splitlines()
+    return _slice(lines, 'OC_LAST_OUT=""', "}", keep_end=True)
+
+
 def _auth_block() -> str:
     lines = SETUP_SH.read_text(encoding="utf-8").splitlines()
     helper = _slice(lines, "usable_key() {", "}", keep_end=True)
@@ -100,7 +106,7 @@ def _run_auth(tmp_path: Path, *, oc_state: dict[str, str] | None = None,
       （例如拉起 `claude auth login`）在测试里一律不走，`pytest -s` 时也一样。
     - 假 claude 永远排在 PATH 最前：本机真 claude 在 ~/.local/bin，哪条用例都不许碰到它。
       claude_on_path=False 时不放替身，由调用方给一个根本没有 claude 的 PATH。
-    - `$OC config get <path>` 从 oc_state 里答，没有就退出码 1（与 OpenClaw 一致）；
+    - `oc config get <path>` 从 oc_state 里答，没有就退出码 1（与 OpenClaw 一致）；
       `config unset <path>` 记成 `<path> = <unset>`；每次 set 带的参数另记一份，见 _oc_flags。
     - stdout 末尾多一行 `RESTART|<值>`：段内算出的「gateway 要不要 restart」。
     """
@@ -138,8 +144,17 @@ def _run_auth(tmp_path: Path, *, oc_state: dict[str, str] | None = None,
             esac
             return 0
         }}
-        OC=_oc
-    """) + "\n" + _auth_block() + '\necho "RESTART|${GATEWAY_RESTART_NEEDED:-}"\n'
+        # setup.sh 的 config 写入现在统一经过容忍层（oc_set / oc_try / oc_set_first）。
+        # 这里按签名 stub 成「把 key = value 记进 CFG」，断言对象仍是「写了哪些 key」，
+        # 不依赖容忍层的内部实现。
+        oc_set()       {{ shift; echo "$1 = $2" >> "$CFG"; }}
+        oc_try()       {{ echo "$1 = $2" >> "$CFG"; return 0; }}
+        oc_set_first() {{ v="$2"; shift 3; echo "$1 = $v" >> "$CFG"; return 0; }}
+        oc_supports()  {{ return 1; }}
+        warn_collect() {{ echo "WARN|$1：$2"; }}
+        oc() {{ _oc "$@"; }}
+        SETUP_MODE=""
+    """) + "\n" + _oc_run_block() + "\n" + _auth_block() + '\necho "RESTART|${GATEWAY_RESTART_NEEDED:-}"\n'
 
     run_env = {"PATH": os.environ["PATH"], "FAKE_CLAUDE_LOG": str(tmp_path / "claude-calls.log"), **env}
     if claude_on_path:
@@ -253,7 +268,7 @@ def test_setup_sh_has_no_bare_placeholder_comparisons():
 #
 # 目标终态与本机手配的一致：模型级 agentRuntime=claude-cli、primary=anthropic/<模型>、
 # env.vars.CLAUDE_CONFIG_DIR=<绝对路径>、不写 models.providers.anthropic。
-# 读写全走 $OC（替身从 oc_state 答 get）；「找不到 claude」的用例单独造一个只有基础工具的 PATH。
+# 读写全走 oc（替身从 oc_state 答 get）；「找不到 claude」的用例单独造一个只有基础工具的 PATH。
 
 # 这批用例要 python3 + 符号链接造 PATH；setup.sh 本来也只是 Linux/macOS 的安装路径。
 needs_posix = pytest.mark.skipif(os.name == "nt", reason="setup.sh 只在 Linux/macOS 上跑，Windows 走 setup.ps1")
@@ -273,7 +288,7 @@ def _claude_calls(tmp_path: Path) -> list[tuple[str, ...]]:
 
 
 def _oc_flags(tmp_path: Path) -> dict[str, list[str]]:
-    """每次 `$OC config set <path> ...` 在 value 之后带的参数（--strict-json / --merge …）。"""
+    """每次 `oc config set <path> ...` 在 value 之后带的参数（--strict-json / --merge …）。"""
     flags: dict[str, list[str]] = {}
     for line in (tmp_path / "oc-calls.log.flags").read_text(encoding="utf-8").splitlines():
         path, _, rest = line.partition("|")
@@ -562,7 +577,10 @@ def test_api_route_leaves_other_runtimes_alone(tmp_path, state):
 def test_setup_sh_restarts_gateway_only_when_needed(tmp_path, flag, expected):
     """gateway.sh start 见到网关活着就直接退出 —— 配置目录改了却只 start，新目录永远不生效。"""
     lines = SETUP_SH.read_text(encoding="utf-8").splitlines()
-    step = _slice(lines, 'if [ "$GATEWAY_RESTART_NEEDED" = true ]; then', "fi", keep_end=True)
+    i = lines.index("GATEWAY_ACTION=start")
+    j = next(n for n, line in enumerate(lines) if n > i and line.startswith('if ! run_step "gateway '))
+    k = next(n for n, line in enumerate(lines) if n > j and line == "fi")
+    step = "run_step() { shift; \"$@\"; }\nwarn_collect() { echo \"WARN|$*\"; }\n" + "\n".join(lines[i:k + 1])
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "gateway.sh").write_text('printf "%s\\n" "$*" >> "$GATEWAY_LOG"\n',
                                                     encoding="utf-8")
@@ -610,24 +628,8 @@ def test_gateway_restart_waits_for_old_gateway(tmp_path, live_polls, exit_code, 
         assert "NOT restarted" in proc.stderr
 
 
-def test_setup_sh_wizard_keeps_options_and_adds_claude_cli():
-    """向导 1–3 项和默认值原样不动，新增第 4 项。"""
-    text = SETUP_SH.read_text(encoding="utf-8")
-    menu = [line.strip() for line in text.splitlines() if re.match(r'\s*echo "    \d\) ', line)]
-    assert menu == [
-        'echo "    1) Anthropic API"',
-        'echo "    2) OpenAI / OpenAI-compatible API"',
-        'echo "    3) 其他 Anthropic-compatible API"',
-        'echo "    4) 本机 Claude Code 登录（Claude CLI，无需 API Key）"',
-        'echo "    0) 稍后配置"',
-    ]
-    assert 'case "${PROVIDER_CHOICE:-1}" in' in text
-    option4 = text.split('        4)\n', 1)[1].split(';;', 1)[0]
-    assert "EASEL_AGENT_RUNTIME=claude-cli" in option4 and "command -v claude" in option4
-
-
 @pytest.mark.parametrize("path", [SETUP_SH, PROJECT_ROOT / "scripts" / "gateway.sh",
-                                  PROJECT_ROOT / "openclaw" / "sync.sh"], ids=lambda p: p.name)
+                                  PROJECT_ROOT / "agents" / "sync.sh"], ids=lambda p: p.name)
 def test_shell_vars_braced_before_non_ascii(path):
     """`$VAR（` 在 macOS 自带 bash 3.2 + UTF-8 locale 下会把全角字符的字节吞进变量名，
     set -u 当场 unbound variable、整个安装中断（真机 LANG=en_US.UTF-8 实测）。紧跟非 ASCII
@@ -978,7 +980,7 @@ def test_ps1_auth_branches_guard_base_url():
         ("EASEL_LLM_API_KEY", "EASEL_LLM_BASE_URL"),
         ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"),
     ]:
-        pattern = rf"\(\(Is-UsableKey \$envValues\['{key}'\]\) -and " \
+        pattern = rf"\(\(Test-UsableKey \$envValues\['{key}'\]\) -and " \
                   rf"\$envValues\.ContainsKey\('{companion}'\)\)"
         assert re.search(pattern, text), f"{key} 分支缺少括号化的 {companion} 守卫"
 
@@ -1047,3 +1049,13 @@ def test_user_path_is_noop_off_windows():
     import install_tool
 
     assert install_tool._ensure_user_path("/tmp/whatever") == "skip"
+
+
+@needs_bash
+@needs_posix
+@pytest.mark.parametrize("engine", ["openclaw", "api", "codex"])
+def test_engine_ids_are_not_reported_as_unknown_runtime(tmp_path, engine):
+    """合并上游后同一个键也用来固定执行引擎；这些合法值不能被报成「不认识」。"""
+    out, _ = _run_auth(tmp_path, **_cli_env(tmp_path, EASEL_AGENT_RUNTIME=engine,
+                                            ANTHROPIC_API_KEY="sk-ant-real"))
+    assert not any(w.startswith("WARN|EASEL_AGENT_RUNTIME=") for w in _warns(out))

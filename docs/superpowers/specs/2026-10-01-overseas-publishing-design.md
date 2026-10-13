@@ -46,7 +46,7 @@ skills/shared/scripts/
     base.py                  浏览器底座：启动、登录目录、代理、等待落定、人类节奏、失败现场
     post.py                  Post 数据结构、文案拼接、字数/标签校验（纯函数，不碰浏览器）
     tiktok.py  youtube.py  instagram.py  x.py  threads.py
-skills/openclaw/skill-overseas-publish/
+skills/builtin/skill-overseas-publish/
   SKILL.md                   何时用、英文改写规则、预览 → 确认 → --exec 流程、待确认处理
   EASEL-META.md
   references/<平台>.md       各平台注意事项（页面形态、限制、真机校准记录）

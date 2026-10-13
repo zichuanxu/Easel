@@ -61,6 +61,8 @@ class _FakeClient:
 
 
 def _answer(monkeypatch, error):
+    # 问答卡片只在 OpenClaw 底座下走网关；沙箱里没有 openclaw.json，引擎会默认成仅聊天模式
+    monkeypatch.setenv("EASEL_AGENT_RUNTIME", "openclaw")
     _FakeClient.error = error
     monkeypatch.setattr(web, "GatewayClient", _FakeClient)
     req = web.QuestionAnswerRequest(questionId="toolu_01Rd:0", answers={"q1": ["只重发第2期"]})

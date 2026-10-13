@@ -13,7 +13,7 @@ describe('ChatPage 空态', () => {
   it('四条起步建议带层色小方块、不含 emoji，点击直接发送', () => {
     const onSend = vi.fn();
     const { container } = render(
-      <ChatPage session={empty} onSend={onSend} onStop={() => {}} onResend={() => {}} />,
+      <ChatPage apiDirect={false} session={empty} onSend={onSend} onStop={() => {}} onResend={() => {}} />,
     );
     const items = container.querySelectorAll('.starter');
     expect(items.length).toBe(4);
@@ -26,15 +26,32 @@ describe('ChatPage 空态', () => {
   });
 
   it('标题用问候语加「想创作点什么？」', () => {
-    render(<ChatPage session={empty} onSend={() => {}} onStop={() => {}} onResend={() => {}} />);
+    render(<ChatPage apiDirect={false} session={empty} onSend={() => {}} onStop={() => {}} onResend={() => {}} />);
     expect(screen.getByRole('heading', { level: 1 }).textContent).toMatch(/想创作点什么？$/);
+  });
+});
+
+describe('ChatPage 仅聊天模式（API 直连）', () => {
+  const direct = () => render(<ChatPage apiDirect session={empty} onSend={() => {}} onStop={() => {}} onResend={() => {}} />);
+
+  it('只保留纯文字创作类的起步建议，副标题说明没有本机工具', () => {
+    const { container } = direct();
+    const titles = [...container.querySelectorAll('.starter-title')].map((n) => n.textContent);
+    expect(titles).toEqual(['写小红书文案', '口播脚本']);
+    expect(container.querySelector('.chat-hero-sub')?.textContent).toMatch(/本机工具和自动发布未启用/);
+  });
+
+  it('输入框前用标签说明能力范围，不显示笔入口', () => {
+    const { container } = direct();
+    expect(container.querySelector('.composer-top .ui-tag')?.textContent).toBe('API 直连 · 文字与附件分析');
+    expect(container.querySelector('.brush-entry')).toBeNull();
   });
 });
 
 describe('ChatPage 对话态', () => {
   it('页头显示会话标题和画像', () => {
     const s = { ...empty, title: '国庆出片文案', persona: '在逃空指针', messages: [{ role: 'user', content: '写一条' }] } as unknown as ChatSession;
-    render(<ChatPage session={s} onSend={() => {}} onStop={() => {}} onResend={() => {}} />);
+    render(<ChatPage apiDirect={false} session={s} onSend={() => {}} onStop={() => {}} onResend={() => {}} />);
     expect(screen.getByRole('heading', { level: 2, name: '国庆出片文案' })).toBeTruthy();
     expect(screen.getByText('画像：在逃空指针')).toBeTruthy();
   });
@@ -43,7 +60,7 @@ describe('ChatPage 对话态', () => {
 describe('ChatPage 输入法回车', () => {
   const setup = () => {
     const onSend = vi.fn();
-    render(<ChatPage session={empty} onSend={onSend} onStop={() => {}} onResend={() => {}} />);
+    render(<ChatPage apiDirect={false} session={empty} onSend={onSend} onStop={() => {}} onResend={() => {}} />);
     const box = screen.getByRole('textbox');
     fireEvent.change(box, { target: { value: 'hello' } });
     return { onSend, box };

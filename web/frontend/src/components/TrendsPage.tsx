@@ -82,7 +82,11 @@ export default function TrendsPage({ onUseTopic }: TrendsPageProps) {
           <Panel key={g.platform} className="trend-col"
             title={<>{g.label}<span className="trend-count">{g.items.length}</span></>}>
             <div className="trend-list">
-              {g.items.length === 0 && !loading && <div className="trend-empty">暂无数据</div>}
+              {g.items.length === 0 && !loading && (
+                <div className="trend-empty">
+                  {g.ok === false ? '该平台暂时取不到（数据源不可用）' : '暂无数据'}
+                </div>
+              )}
               {g.items.map((it, i) => (
                 <div key={i} className="trend-item">
                   <span className={`trend-rank ${i < 3 ? 'top' : ''}`}>{i + 1}</span>

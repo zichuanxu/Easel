@@ -4,7 +4,7 @@ import Sidebar from './Sidebar';
 
 const base = {
   personas: [], selectedPersona: '', onPersonaChange: () => {}, onNewProfile: () => {},
-  activeSessionHasMessages: false, gatewayStatus: 'connected', onOpenSettings: () => {},
+  gatewayStatus: 'connected', apiDirect: false, agentRuntime: 'openclaw', onOpenSettings: () => {},
 };
 
 describe('Sidebar', () => {
@@ -50,6 +50,29 @@ describe('Sidebar', () => {
     }
   });
 
+  describe('底部状态按执行引擎换说法', () => {
+    const text = (props: Record<string, unknown>) => {
+      const { container } = render(<Sidebar {...base} {...props} currentPage="dashboard" onPageChange={() => {}} />);
+      return container.querySelector('.sidebar-status-text')?.textContent;
+    };
+
+    it('OpenClaw：网关已连接 / 网关离线 / 连接中', () => {
+      expect(text({ gatewayStatus: 'connected' })).toBe('网关已连接');
+      expect(text({ gatewayStatus: 'disconnected' })).toBe('网关离线');
+      expect(text({ gatewayStatus: 'connecting' })).toBe('连接中…');
+    });
+
+    it('仅聊天模式：看 API 配置是否完整', () => {
+      expect(text({ apiDirect: true, gatewayStatus: 'connected' })).toBe('仅聊天模式已配置');
+      expect(text({ apiDirect: true, gatewayStatus: 'disconnected' })).toBe('API 配置不完整');
+    });
+
+    it('原生 CLI 引擎：看命令行是否装好', () => {
+      expect(text({ agentRuntime: 'codex', gatewayStatus: 'connected' })).toBe('codex CLI 已安装');
+      expect(text({ agentRuntime: 'opencode', gatewayStatus: 'disconnected' })).toBe('opencode CLI 未配置');
+    });
+  });
+
   describe('画像选择', () => {
     it('selectedPersona 不在列表里（画像被删）时，触发器显示「选择画像」而非空白', () => {
       render(<Sidebar {...base} personas={[{ name: '小林' }] as never} selectedPersona="已删除的画像" currentPage="dashboard" onPageChange={() => {}} />);
@@ -81,13 +104,15 @@ describe('Sidebar', () => {
       expect(onPersonaChange).not.toHaveBeenCalled();
     });
 
-    it('会话里已有消息时禁用并给出说明', () => {
-      render(<Sidebar {...base} personas={personas} activeSessionHasMessages currentPage="dashboard" onPageChange={() => {}} />);
+    it('会话里已有消息时画像照样可选：切换会新建对话，由 App 负责', () => {
+      const onPersonaChange = vi.fn();
+      render(<Sidebar {...base} personas={personas} onPersonaChange={onPersonaChange} currentPage="dashboard" onPageChange={() => {}} />);
       const t = trigger();
-      expect((t as HTMLButtonElement).disabled).toBe(true);
-      expect(t.getAttribute('title')).toBe('当前对话已绑定画像，切换画像将新建对话');
+      expect((t as HTMLButtonElement).disabled).toBe(false);
+      expect(t.getAttribute('title')).toBe('选择用户画像（一个对话对应一个画像：切换会新建一个对话）');
       fireEvent.click(t);
-      expect(screen.queryByRole('listbox')).toBeNull();
+      fireEvent.click(screen.getByRole('option', { name: '阿舟' }));
+      expect(onPersonaChange).toHaveBeenCalledWith('阿舟');
     });
   });
 });

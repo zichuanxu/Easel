@@ -21,9 +21,10 @@ interface SidebarProps {
   selectedPersona: string;
   onPersonaChange: (persona: string) => void;
   onNewProfile: () => void;
-  activeSessionHasMessages: boolean;
   activeChatTitle?: string;
   gatewayStatus: string;
+  apiDirect: boolean;
+  agentRuntime: string;
   onOpenSettings: () => void;
 }
 
@@ -39,10 +40,14 @@ const PAGE_ICON: Record<Page, ComponentType<{ size?: number }>> = {
 
 export default function Sidebar({
   currentPage, onPageChange, personas, selectedPersona, onPersonaChange, onNewProfile,
-  activeSessionHasMessages, activeChatTitle, gatewayStatus, onOpenSettings,
+  activeChatTitle, gatewayStatus, apiDirect, agentRuntime, onOpenSettings,
 }: SidebarProps) {
-  const statusText = gatewayStatus === 'connected' ? '网关已连接'
-    : gatewayStatus === 'disconnected' ? '网关离线' : '连接中…';
+  // 连接状态按当前执行引擎换说法：仅聊天模式看 API 配置，其余 CLI 引擎看本机命令行是否就绪
+  const statusText = gatewayStatus === 'connected'
+    ? (apiDirect ? '仅聊天模式已配置' : agentRuntime !== 'openclaw' ? `${agentRuntime} CLI 已安装` : '网关已连接')
+    : gatewayStatus === 'disconnected'
+      ? (apiDirect ? 'API 配置不完整' : agentRuntime !== 'openclaw' ? `${agentRuntime} CLI 未配置` : '网关离线')
+      : '连接中…';
   // 选中项不在可视区时（矮窗口下导航可滚动）才滚进来，避免每次切页都跳
   const navRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -64,8 +69,7 @@ export default function Sidebar({
         options={[{ value: '', label: '通用模式' }, ...personas.map((p) => ({ value: p.name, label: p.name }))]}
         onChange={onPersonaChange}
         action={{ label: '新建画像', onSelect: onNewProfile }}
-        disabled={activeSessionHasMessages}
-        title={activeSessionHasMessages ? '当前对话已绑定画像，切换画像将新建对话' : '选择用户画像'}
+        title="选择用户画像（一个对话对应一个画像：切换会新建一个对话）"
       />
 
       <nav className="sidebar-nav" aria-label="主导航" ref={navRef}>

@@ -42,9 +42,12 @@ import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import login_state  # noqa: E402
+import login_qr
+import login_transport
 import content_guard  # noqa: E402  出站内容安全闸门
 import human_input  # noqa: E402  真人节奏的鼠标/键盘
 import real_browser  # noqa: E402  可见真实浏览器启动器（Cloak/Chrome）
@@ -57,12 +60,22 @@ import semi_auto  # noqa: E402  半自动交接：填完表单停在发布按钮
 PUBLISH_URL = "https://creator.xiaohongshu.com/publish/publish?source=official"
 EXPLORE_URL = "https://www.xiaohongshu.com/explore"
 CREATOR_LOGIN_URL = "https://creator.xiaohongshu.com/login"
+CREATOR_HOME_URL = "https://creator.xiaohongshu.com/new/home"
+CREATOR_ACCOUNT_URL = "https://creator.xiaohongshu.com/api/galaxy/user/info"
 TITLE_MAX = 20  # 小红书标题上限（全角计法，见 calc_title_length）
 
 SELECTORS = {
     # 登录（REF login.go）
     "login_ok": ".main-container .user .link-wrapper .channel",
-    "qrcode": ".login-container .qrcode-img",
+    "qrcode": ".login-container .qrcode-img, .qrcode-img, [class*='qrcode' i] img, "
+              "[class*='qrcode' i] canvas, [class*='qr-code' i], img[src*='qrcode' i], "
+              ".sso-login-wrapper img, .sso-login-wrapper canvas, "
+              ".login-container img[alt*='二维码']",
+    "logged_out": ".login-container, .login-modal, .login-box, "
+                  ".sso-login-wrapper, .qrcode-img, [class*='qrcode' i], [class*='qr-code' i]",
+    "login_entry": ".side-bar-component.login-btn, button.login-btn",
+    "qr_switch": "button:has-text('扫码登录'), [role='tab']:has-text('扫码登录'), "
+                 ".login-type:has-text('扫码登录'), .sso-login-wrapper > div > div > img",
     # 进页/切 tab（REF publish.go mustClickPublishTab）
     "upload_content": "div.upload-content",
     "creator_tab": "div.creator-tab",
@@ -239,29 +252,466 @@ def _browser_channel() -> str | None:
     return real_browser.browser_channel()
 
 
-def _risk_blocked(page) -> bool:
+def _login_error(page) -> str:
+    """区分明确 IP 风险和其它错误页，不泄露 URL 中的登录参数。"""
     try:
         url = page.url or ""
         title = page.title() or ""
-        return ("website-login/error" in url or "error_code=300012" in url
-                or "安全限制" in title)
+        try:
+            text = page.inner_text("body", timeout=2000)[:3000]
+        except Exception:
+            text = ""
+        if any(message in title + text for message in (
+                "工程师正在", "工程师在紧急", "系统维护中", "系统正在维护", "页面维护中")):
+            return ("小红书当前入口显示维护页面，暂时无法完成登录校验。"
+                    "这不是二维码过期或账号退出，请稍后重试。")
+        codes = parse_qs(urlparse(url).query).get("error_code", [])
+        code = codes[0] if codes and codes[0].isdigit() and len(codes[0]) <= 32 else ""
+        error_page = "website-login/error" in url or "安全限制" in title or bool(code)
+        if not error_page:
+            return ""
+        if code == "300012" or "IP存在风险" in re.sub(r"\s+", "", text).upper():
+            detail = f"（错误码 {code}）" if code else ""
+            return (f"小红书返回 IP 风险限制{detail}，二维码无法获取。"
+                    "请在可信网络重试；服务器/机房出口可能被平台限制，Easel 无法保证解除风控。")
+        detail = f"（错误码 {code}）" if code else ""
+        return f"小红书登录被平台拦截{detail}，不一定是 IP 问题。请检查网络，或使用 --headed 查看平台提示。"
     except Exception:
-        return False
+        return ""
+
+
+def _risk_blocked(page) -> bool:
+    return "IP 风险限制" in _login_error(page)
+
+
+def _visible_login_element(page, selectors: str):
+    for selector in selectors.split(","):
+        for element in page.query_selector_all(selector.strip()):
+            if element.is_visible():
+                return element
+    return None
+
+
+def _open_login_dialog(page) -> None:
+    creator = urlparse(page.url or "").hostname == "creator.xiaohongshu.com"
+    if not _visible_login_element(page, SELECTORS["logged_out"]):
+        try:
+            page.wait_for_selector(
+                f"{SELECTORS['logged_out']}, {SELECTORS['login_entry']}, {SELECTORS['login_ok']}",
+                state="visible", timeout=45000 if creator else 15000)
+        except Exception:
+            pass
+    if creator:
+        try:
+            page.wait_for_selector(".sso-login-wrapper", state="visible", timeout=15000)
+            page.wait_for_selector(".sso-login-wrapper [data-testid='loading']",
+                                   state="hidden", timeout=15000)
+        except Exception:
+            pass
+    if _visible_login_element(page, SELECTORS["logged_out"]):
+        return
+    if urlparse(page.url or "").hostname == "www.xiaohongshu.com":
+        button = _visible_login_element(page, SELECTORS["login_entry"])
+        if button:
+            button.click(timeout=3000, no_wait_after=True)
+
+
+def _missing_qr_reason(page) -> str:
+    try:
+        text = page.inner_text("body", timeout=2000).strip()
+    except Exception:
+        return "登录页面尚未就绪，请检查网络连接后重试"
+    if not text:
+        return "登录页面空白，平台脚本未完成加载，请检查网络连接后重试"
+    if "扫一扫" in text or "扫码登录" in text:
+        return "已切换扫码登录，但二维码未加载或无法识别，请稍后重试"
+    if "短信登录" in text or "发送验证码" in text:
+        return "页面仍停留在短信登录，扫码切换控件未就绪或失效；可用 --headed 查看平台提示"
+    return "未找到可识别的登录二维码，登录弹窗未打开或页面结构已变化"
+
+
+def _capture_login_qr(page, qr_out: Path, *, creator_only: bool = False) -> bool:
+    """首页无法出码时只尝试一次官方创作平台入口；False 表示已登录。"""
+    failures = []
+    for url in ((CREATOR_LOGIN_URL,) if creator_only else (None, CREATOR_LOGIN_URL)):
+        entry = "创作平台" if url else "小红书首页"
+        try:
+            if url:
+                page.goto(url, wait_until="commit", timeout=30000)
+        except Exception as error:
+            reason = f"打不开小红书创作平台（{type(error).__name__}），请检查网络连接后重试"
+            failures.append(f"{entry}：{reason}")
+            continue
+        if _is_logged_in(page):
+            return False
+        reason = _login_error(page)
+        if not reason:
+            try:
+                _open_login_dialog(page)
+                reason = _login_error(page)
+                if reason:
+                    failures.append(f"{entry}：{reason}")
+                    continue
+                login_qr.prepare_qr(page, qr_out, SELECTORS["qrcode"],
+                                    SELECTORS["qr_switch"], minimum_size=96)
+                return True
+            except Exception as error:
+                if _is_logged_in(page):
+                    return False
+                reason = _login_error(page) or _missing_qr_reason(page)
+                print(f"小红书抓码失败（{entry}/{type(error).__name__}）：{reason}", file=sys.stderr)
+        failures.append(f"{entry}：{reason}")
+    raise RuntimeError("；".join(failures))
 
 
 def _is_logged_in(page) -> bool:
+    if _login_error(page):
+        return False
     try:
-        if page.query_selector(SELECTORS["login_ok"]) is not None:
-            return True
+        for element in page.query_selector_all(SELECTORS["logged_out"]):
+            if element.is_visible():
+                return False
     except Exception:
         pass
     try:
-        url = (page.url or "").split("?", 1)[0]
-        if "creator.xiaohongshu.com" in url and "/login" not in url:
-            return True
+        for element in page.query_selector_all(SELECTORS["login_ok"]):
+            if element.is_visible():
+                return True
+    except Exception:
+        pass
+    try:
+        url = urlparse(page.url or "")
+        if (url.hostname == "creator.xiaohongshu.com"
+                and not parse_qs(url.query).get("error_code")
+                and (url.path.startswith(("/publish/", "/new/", "/home/")) or url.path == "/home")):
+            for account in page.query_selector_all(".user-info"):
+                if not account.is_visible():
+                    continue
+                avatar = account.query_selector("img.user_avatar")
+                name = account.query_selector("span")
+                if (avatar and avatar.is_visible() and avatar.get_attribute("src")
+                        and name and name.is_visible() and name.inner_text().strip()):
+                    return True
     except Exception:
         pass
     return False
+
+
+def _qr_state(page) -> str:
+    try:
+        text = page.inner_text(
+            ".sso-login-wrapper, .login-container, .login-modal, .login-box",
+            timeout=1000)
+    except Exception:
+        return ""
+    compact = re.sub(r"\s+", "", text)
+    if any(message in compact for message in (
+            "扫码成功", "扫描成功", "已扫码", "请在手机上确认", "请在APP上确认")):
+        return "scanned"
+    if any(message in compact for message in (
+            "二维码已失效", "二维码失效", "二维码已过期", "二维码过期", "二维码无效")):
+        return "expired"
+    return ""
+
+
+def _refresh_expired_qr(page, qr_out: Path) -> bool:
+    if _qr_state(page) != "expired":
+        return False
+    selectors = (
+        ".sso-login-wrapper button:has-text('刷新'), "
+        ".sso-login-wrapper [role='button']:has-text('刷新'), "
+        ".sso-login-wrapper a:text-is('点击刷新'), "
+        ".sso-login-wrapper span:text-is('点击刷新'), "
+        ".sso-login-wrapper div:text-is('点击刷新'), "
+        ".login-container button:has-text('刷新'), "
+        ".login-container span:text-is('刷新二维码'), "
+        ".login-container div:text-is('刷新二维码'), "
+        ".login-container a:text-is('点击刷新'), "
+        ".login-container span:text-is('点击刷新'), "
+        ".login-container div:text-is('点击刷新')"
+    )
+    button = _visible_login_element(page, selectors)
+    if button is None:
+        return False
+    button.click(timeout=3000)
+    page.wait_for_timeout(800)
+    if _qr_state(page) == "scanned":
+        return False
+    login_qr.capture_qr(page, qr_out, SELECTORS["qrcode"], minimum_size=96)
+    return True
+
+
+def _verify_login(page, timeout_s: float = 6) -> bool:
+    deadline = time.monotonic() + timeout_s
+    confirmed = 0
+    while time.monotonic() < deadline:
+        if _is_logged_in(page):
+            confirmed += 1
+            if confirmed >= 2:
+                return True
+        else:
+            confirmed = 0
+        if _login_error(page) or _visible_login_element(page, SELECTORS["logged_out"]):
+            return False
+        page.wait_for_timeout(500)
+    return False
+
+
+def _check_account_login(page) -> bool:
+    outcomes = []
+    deadline = time.monotonic() + 14
+    for destination in (CREATOR_HOME_URL, EXPLORE_URL):
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                outcomes.append("unknown")
+                break
+            page.goto(destination, wait_until="commit", timeout=min(4000, remaining * 1000))
+            remaining = deadline - time.monotonic()
+            if remaining > 0 and _verify_login(page, timeout_s=min(4, remaining)):
+                return True
+            outcomes.append("unknown" if _login_error(page) or not _visible_login_element(
+                page, SELECTORS["logged_out"]) else "logged_out")
+        except Exception:
+            outcomes.append("unknown")
+    if any(outcome != "logged_out" for outcome in outcomes):
+        raise RuntimeError("小红书登录校验暂未完成：网络超时、维护/风控页面或账号界面未就绪；保留上次登录状态")
+    return False
+
+
+def _creator_account(context) -> dict | None:
+    try:
+        response = context.request.get(
+            CREATOR_ACCOUNT_URL, headers={"Referer": CREATOR_HOME_URL}, timeout=5000)
+        if response.status != 200:
+            return None
+        payload = response.json()
+        account = payload.get("data")
+        if (payload.get("success") is True and isinstance(account, dict)
+                and isinstance(account.get("userId"), str) and account["userId"].strip()):
+            return account
+    except Exception:
+        pass
+    return None
+
+
+def _web_account(context) -> dict | None:
+    try:
+        response = context.request.get(EXPLORE_URL, timeout=4000)
+        if response.status != 200:
+            return None
+        return _web_account_html(response.text())
+    except Exception:
+        return None
+
+
+def _initial_state(html: str) -> dict:
+    if len(html) > 2_000_000:
+        return {}
+    match = re.search(
+        r"<script\b[^>]*>\s*window\.__INITIAL_STATE__\s*=\s*([\s\S]*?)</script>",
+        html, re.IGNORECASE)
+    if not match:
+        return {}
+    serialized = re.sub(
+        r'"(?:\\.|[^"\\])*"|\bundefined\b',
+        lambda token: "null" if token.group() == "undefined" else token.group(),
+        match.group(1).strip().rstrip(";"))
+    try:
+        state = json.loads(serialized)
+        return state if isinstance(state, dict) else {}
+    except ValueError:
+        return {}
+
+
+def _unwrap_state(value):
+    if isinstance(value, dict) and "userId" not in value and "basicInfo" not in value:
+        if "value" in value:
+            return value["value"]
+        if "_value" in value:
+            return value["_value"]
+    return value
+
+
+def _state_account(state: dict) -> dict | None:
+    user = state.get("user")
+    account = _unwrap_state(user.get("userInfo")) if isinstance(user, dict) else None
+    if (not isinstance(account, dict) or _unwrap_state(user.get("loggedIn")) is not True
+            or not isinstance(account.get("userId"), str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]+", account["userId"])):
+        return None
+    identity = _account_identity(account)
+    return {**account, "userName": identity["name"], "userAvatar": identity["avatar"]}
+
+
+def _web_account_html(html: str) -> dict | None:
+    return _state_account(_initial_state(html))
+
+
+def _self_profile_identity(state: dict, user_id: str) -> dict:
+    identity = {"name": "", "avatar": ""}
+    account = _state_account(state)
+    if account is None or account["userId"] != user_id:
+        return identity
+    profile = _unwrap_state(state["user"].get("userPageData"))
+    if not isinstance(profile, dict) or profile.get("userId", user_id) != user_id:
+        return identity
+    basic = profile.get("basicInfo")
+    return _account_identity(basic) if isinstance(basic, dict) else identity
+
+
+def _self_profile_account(context, account: dict) -> dict:
+    user_id = account.get("userId")
+    if not isinstance(user_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", user_id):
+        return account
+    destination = f"https://www.xiaohongshu.com/user/profile/{user_id}"
+    try:
+        response = context.request.get(
+            destination, headers={"Referer": EXPLORE_URL}, timeout=4000)
+        current_url = urlparse(response.url)
+        if (response.status != 200 or current_url.hostname != "www.xiaohongshu.com"
+                or current_url.path.rstrip("/") != urlparse(destination).path):
+            return account
+        fallback = _self_profile_identity(_initial_state(response.text()), user_id)
+        identity = _account_identity(account)
+        return {**account, "userName": fallback["name"] or identity["name"],
+                "userAvatar": fallback["avatar"] or identity["avatar"]}
+    except Exception:
+        return account
+
+
+def _authenticated_account(context) -> dict | None:
+    account = _web_account(context)
+    if account is not None and all(_account_identity(account).values()):
+        return account
+    creator = _creator_account(context)
+    if account is None:
+        return creator
+    if creator is None or creator.get("userId") != account.get("userId"):
+        return account
+    identity = _account_identity(account)
+    fallback = _account_identity(creator)
+    return {
+        **account,
+        "userName": identity["name"] or fallback["name"],
+        "userAvatar": identity["avatar"] or fallback["avatar"],
+    }
+
+
+def _account_identity(account: dict) -> dict:
+    name = next((account[key].strip()[:40] for key in ("userName", "nickname", "user_name", "name")
+                 if isinstance(account.get(key), str) and account[key].strip()), "")
+    avatar = ""
+    for key in ("userAvatar", "imageb", "images", "avatar", "user_avatar"):
+        candidate = account.get(key)
+        if not isinstance(candidate, str):
+            continue
+        candidate = candidate.strip()
+        if candidate.startswith("//"):
+            candidate = "https:" + candidate
+        try:
+            parsed = urlparse(candidate)
+            if (parsed.scheme in ("https", "http") and parsed.hostname
+                    and not parsed.username and not parsed.password
+                    and not any(ord(character) < 32 for character in candidate)):
+                avatar = candidate
+                break
+        except ValueError:
+            continue
+    return {"name": name, "avatar": avatar}
+
+
+def _page_account_identity(page, user_id: str | None = None) -> dict:
+    identity = {"name": "", "avatar": ""}
+    if urlparse(page.url or "").hostname == "creator.xiaohongshu.com":
+        for account in page.query_selector_all(".user-info"):
+            if not account.is_visible():
+                continue
+            avatar = account.query_selector("img.user_avatar")
+            name = account.query_selector("span")
+            if avatar and avatar.is_visible() and name and name.is_visible():
+                return _account_identity({
+                    "userName": name.inner_text(),
+                    "userAvatar": avatar.get_attribute("src"),
+                })
+        return identity
+    profile_url = (f"https://www.xiaohongshu.com/user/profile/{user_id}"
+                   if isinstance(user_id, str) and re.fullmatch(r"[A-Za-z0-9_-]+", user_id) else "")
+    for channel in ([] if profile_url else page.query_selector_all(SELECTORS["login_ok"])):
+        if not channel.is_visible():
+            continue
+        account = channel.evaluate("""element => {
+            const anchor = element.closest('a[href]') || element.querySelector('a[href]')
+                || element.closest('.user')?.querySelector('a[href*="/user/profile/"]');
+            return {
+                href: anchor?.getAttribute('href') || '',
+                avatar: anchor?.querySelector('img')?.getAttribute('src') || ''
+            };
+        }""")
+        if not isinstance(account, dict):
+            continue
+        href = account.get("href")
+        if not isinstance(href, str):
+            continue
+        candidate = urlparse(href)
+        if (candidate.scheme or candidate.netloc
+                or not re.fullmatch(r"/user/profile/[A-Za-z0-9_-]+/?", candidate.path)):
+            continue
+        profile_url = "https://www.xiaohongshu.com" + candidate.path
+        identity["avatar"] = _account_identity({"userAvatar": account.get("avatar")})["avatar"]
+        break
+    if not profile_url:
+        return identity
+    try:
+        page.goto(profile_url, wait_until="commit", timeout=4000)
+        current_url = urlparse(page.url or "")
+        if (current_url.hostname != "www.xiaohongshu.com"
+                or current_url.path.rstrip("/") != urlparse(profile_url).path.rstrip("/")):
+            return identity
+        try:
+            page.wait_for_function(
+                """() => {
+                    const profile = window.__INITIAL_STATE__?.user?.userPageData;
+                    return !!(profile?.basicInfo || profile?.value?.basicInfo || profile?._value?.basicInfo);
+                }""",
+                timeout=1500)
+        except Exception:
+            pass
+        try:
+            state = page.evaluate("""() => {
+                const user = window.__INITIAL_STATE__?.user;
+                return user ? JSON.parse(JSON.stringify({user: {
+                    loggedIn: user.loggedIn, userInfo: user.userInfo, userPageData: user.userPageData
+                }})) : {};
+            }""")
+            if isinstance(state, dict):
+                own_account = _state_account(state)
+                if own_account is not None and own_account["userId"] != urlparse(profile_url).path.rstrip("/").split("/")[-1]:
+                    return {"name": "", "avatar": ""}
+                extracted = _self_profile_identity(state, urlparse(profile_url).path.rstrip("/").split("/")[-1])
+                if all(extracted.values()):
+                    return extracted
+                identity.update({key: value for key, value in extracted.items() if value})
+        except Exception:
+            pass
+        selectors = ".user-profile .user-info, .user-page .user-info, .user .user-info, .user-profile .info-part"
+        page.wait_for_selector(selectors, state="visible", timeout=3000)
+        for account in page.query_selector_all(selectors):
+            if not account.is_visible():
+                continue
+            name = account.query_selector(".user-name, .username, .name")
+            avatar = account.query_selector("img.avatar, img.user-avatar, img.avatar-item, .avatar img")
+            if name and name.is_visible():
+                text = name.inner_text().strip()
+                if text:
+                    identity["name"] = text.splitlines()[0][:40]
+            if avatar and avatar.is_visible():
+                identity["avatar"] = _account_identity({"userAvatar": avatar.get_attribute("src")})["avatar"]
+            if identity["name"]:
+                break
+    except Exception:
+        pass
+    return identity
 
 
 def _proxy(explicit: str | None, disable: bool) -> str | None:
@@ -741,16 +1191,27 @@ def _allow_headless() -> bool:
     return real_browser.allow_headless("EASEL_XHS_HEADLESS")
 
 
-def _launch(p, headed: bool, base: str | None, proxy: str | None):
+def _launch(p, headed: bool, base: str | None, proxy: str | None, *, login_assets: bool = False):
     """开小红书用的浏览器（实现见 real_browser.launch）。默认一律开窗口；
     内核优先 CloakBrowser（账号固定指纹、数据在登录目录的 cloak-browser/ 子目录），
-    其次本机正式版 Chrome / Edge，最后才是 Playwright 自带的 Chromium。"""
-    return real_browser.launch(
+    其次本机正式版 Chrome / Edge，最后才是 Playwright 自带的 Chromium。
+
+    login_assets：上游为网络不稳时「登录页白屏 / 出不来二维码」加的静态资源直连兜底
+    （login_transport：把 xhscdn 的脚本/样式交给 Python requests 取，失败再回浏览器）。
+    它让这几个请求不再是浏览器自己的 TLS 指纹，所以只在登录流程里按需打开
+    （_login_attempt 传 True）；发布 / 校验 / 看数据一律不装，保持流量全部出自真浏览器。"""
+    ctx = real_browser.launch(
         p, profile_dir=_profile_dir(base), headed=headed, proxy=proxy,
         fingerprint_file=FINGERPRINT_FILE, platform_label="小红书",
         headless_env="EASEL_XHS_HEADLESS", browser_env="EASEL_XHS_BROWSER",
         engine=browser_engine(), fingerprint_fn=lambda: _account_fingerprint(base),
         chrome_hint="xhs_publish.py login 或 Web 账号页「登录」")
+    if login_assets:
+        try:
+            login_transport.install(ctx, "xiaohongshu")
+        except Exception as e:  # noqa: BLE001 — 只是兜底网络的可选优化，装不上不能挡住登录
+            print(f"登录页静态资源直连兜底没装上（忽略）：{_short_err(e)}", file=sys.stderr)
+    return ctx
 
 
 def browser_report(base: str | None = None) -> tuple[bool, list[str]]:
@@ -993,10 +1454,15 @@ def _report_login_success(a, sf: str | None, message: str, line: str = "") -> No
 def _login_attempt(p, a, *, headed: bool, sf: str | None, qr_out: Path, timeout_s: int,
                    window_msg: str) -> object:
     """跑一轮登录：返回退出码，或 _NEEDS_VERIFY（页面已是登录态，交给调用方关浏览器后确认）。
-    无头被风控拦、且允许改开窗口时抛 _HeadlessBlocked（finally 先把这个浏览器关掉）。"""
+    无头被风控拦、且允许改开窗口时抛 _HeadlessBlocked（finally 先把这个浏览器关掉）。
+
+    二维码抓取 / 过期刷新 / 扫码状态 / 平台维护与风控页识别用上游的 _capture_login_qr、_qr_state、
+    _refresh_expired_qr、_login_error；登录完成后的「等 cookie → 关浏览器 → 重开确认」仍是我们自己的流程。"""
     fallback = bool(getattr(a, "headed_fallback", False)) and not headed
     try:
-        ctx = _launch(p, headed=headed, base=a.profile_base, proxy=_proxy(a.proxy, a.no_proxy))
+        # login_assets=True：登录页静态资源直连兜底只在登录里开（见 _launch 的说明）
+        ctx = _launch(p, headed=headed, base=a.profile_base, proxy=_proxy(a.proxy, a.no_proxy),
+                      login_assets=True)
     except Exception as e:
         login_state.write_status(sf, "error", "浏览器没能打开。请关闭弹窗，等 10 秒再点登录，不要连点。")
         _die(f"启动浏览器失败：{e}", 1)
@@ -1011,27 +1477,22 @@ def _login_attempt(p, a, *, headed: bool, sf: str | None, qr_out: Path, timeout_
     try:
         if headed:
             login_state.write_status(sf, "window_login", window_msg)
+        explore_failed = False
         try:
-            page.goto(EXPLORE_URL, wait_until="domcontentloaded", timeout=45000)
+            page.goto(EXPLORE_URL, wait_until="commit", timeout=30000)
         except Exception as e:
-            login_state.write_status(sf, "error", f"打不开小红书页面（{type(e).__name__}）")
-            _die(f"打开 {EXPLORE_URL} 失败：{e}", 1)
+            # 首页打不开不再直接报死：_capture_login_qr 会改走官方创作平台入口
+            explore_failed = True
+            print(f"小红书首页无法打开（{type(e).__name__}），尝试官方创作平台入口", file=sys.stderr)
 
         # 等待页面稳定并完成可能的跳转（登录引导 / 风险拦截 / 已登录态）
-        for _ in range(10):
+        for _ in range(0 if explore_failed else 10):
             page.wait_for_timeout(800)
-            if _risk_blocked(page):
-                if headed:
-                    try:
-                        page.goto(CREATOR_LOGIN_URL, wait_until="domcontentloaded", timeout=45000)
-                    except Exception as e:
-                        login_state.write_status(sf, "error", f"打不开小红书创作平台（{type(e).__name__}）")
-                        _die(f"打开 {CREATOR_LOGIN_URL} 失败：{e}", 1)
-                    login_state.write_status(
-                        sf, "window_login",
-                        "首页被风控拦截了，已改开创作平台。请在弹出的浏览器窗口里扫码或短信登录。")
-                    break
-                risk_blocked_headless()
+            reason = _login_error(page)
+            if reason:
+                if not headed and "IP 风险限制" in reason:
+                    risk_blocked_headless()   # 无头被 300012 拦：允许就改开窗口，否则报错退出
+                break   # 窗口里的风控 / 维护页交给 _capture_login_qr 改走创作平台入口，或让用户在窗口里处理
             try:
                 if _is_logged_in(page):
                     break
@@ -1041,24 +1502,31 @@ def _login_attempt(p, a, *, headed: bool, sf: str | None, qr_out: Path, timeout_
         if _is_logged_in(page):
             _report_login_success(a, sf, "已登录", line="✅ 已登录（登录态已在持久化目录），无需扫码")
             return 0
+        # 页面没认出登录态，但创作平台账号接口认账号（上游的前置检查）：不用扫码。
+        # 放在页面已经打开之后才调：浏览器的第一个请求不能是一次没有页面上下文的裸接口调用。
+        if _creator_account(ctx) is not None:
+            _report_login_success(a, sf, "已登录", line="✅ 已登录（创作平台账号接口已确认），无需扫码")
+            return 0
 
-        # 抠二维码存 PNG（元素截图，不依赖 src 格式，最稳）
-        qr = None
+        # 抠二维码存 PNG（首页出不了码时只再试一次创作平台入口；返回 False 表示其实已登录）
+        qr = False
         try:
-            qr = _wait_sel(page, SELECTORS["qrcode"], 20000, "登录二维码")
-        except Exception:
-            if _risk_blocked(page) and not headed:
-                risk_blocked_headless()
+            qr = _capture_login_qr(page, qr_out, creator_only=explore_failed)
+            if not qr:
+                _report_login_success(a, sf, "已登录",
+                                      line="✅ 已登录（创作平台登录态已在持久化目录），无需扫码")
+                return 0
+        except Exception as e:
             if not headed:
-                login_state.write_status(sf, "error", "未找到登录二维码")
-                _die("未找到登录二维码（页面结构可能已变，检查 SELECTORS.qrcode），"
-                     "或已弹别的登录方式——可加 --headed 观察")
+                if _risk_blocked(page):
+                    risk_blocked_headless()
+                login_state.write_status(sf, "error", _short_err(e, 300))
+                print(f"小红书登录异常：{e}（可加 --headed 观察）", file=sys.stderr)
+                return 1
             login_state.write_status(
                 sf, "window_login",
-                "请在弹出的浏览器窗口里完成登录（扫码或短信），不要关掉那个窗口。")
+                f"{e}。请在弹出的浏览器窗口里完成登录（扫码或短信），不要关掉那个窗口。")
         if qr:
-            qr_out.parent.mkdir(parents=True, exist_ok=True)
-            qr.screenshot(path=str(qr_out))
             if headed:
                 login_state.write_status(
                     sf, "window_login",
@@ -1074,15 +1542,54 @@ def _login_attempt(p, a, *, headed: bool, sf: str | None, qr_out: Path, timeout_
         # 轮询登录成功（扫码成功瞬间页面会跳转，_is_logged_in 自己吞掉查询异常、重试继续等）。
         # 窗口被关：_ensure_window_open 或等待本身抛异常，由 cmd_login 统一落 error 终态。
         deadline = time.time() + timeout_s
+        next_refresh = time.monotonic() + 5
+        next_account_check = next_refresh
+        scanned = False
+        refreshes = 0
         while time.time() < deadline:
             _ensure_window_open(page)
-            if _is_logged_in(page):
+            logged_in = _is_logged_in(page)
+            reason = _login_error(page) if not logged_in else ""
+            state = _qr_state(page) if not logged_in else ""
+            if state == "scanned" and not scanned:
+                scanned = True
+                login_state.write_status(sf, "scanned", "扫码成功，请在小红书 App 中确认；正在等待登录完成")
+            if not logged_in and (reason or scanned) and time.monotonic() >= next_account_check:
+                # 扫码后页面不一定马上跳到能被 _is_logged_in 认出的样子：用创作平台账号接口兜一下。
+                # 限频：风控/维护页会一直挂着，不限频就每轮（约 2s）调一次接口
+                logged_in = _creator_account(ctx) is not None
+                next_account_check = time.monotonic() + 10
+            if logged_in:
                 # 这里还不能报成功：先等登录 cookie 落下，关浏览器后再重开确认（见 _verify_saved_login）
                 if not _settle_login_cookies(ctx, page):
                     print(f"⚠️ 页面已是登录态，但没等到 {LOGIN_COOKIE} cookie；关掉浏览器后重开确认…",
                           file=sys.stderr)
                 return _NEEDS_VERIFY
+            if reason and not headed:
+                login_state.write_status(sf, "error", reason[:300])
+                print(f"小红书登录异常：{reason}", file=sys.stderr)
+                return 1
+            if qr and not scanned and state == "expired":
+                if refreshes >= 3 or not _refresh_expired_qr(page, qr_out):
+                    login_state.write_status(sf, "expired", "小红书二维码已失效，请关闭后重新获取二维码")
+                    return 1
+                refreshes += 1
+                login_state.write_status(sf, "qr_ready", "二维码已刷新，请重新扫码", qr=str(qr_out))
+            if qr and time.monotonic() >= next_refresh:
+                if not scanned:
+                    try:   # 二维码约几分钟一换，定期重截，Web 上显示的不会是旧码
+                        login_qr.capture_qr(page, qr_out, SELECTORS["qrcode"], attempts=1,
+                                            minimum_size=96)
+                    except RuntimeError:
+                        pass
+                next_refresh = time.monotonic() + 5
             page.wait_for_timeout(2000)
+        if scanned:
+            login_state.write_status(
+                sf, "error",
+                "已扫码，但未能确认账号登录成功。请确认已在 App 中同意登录；平台维护或网络异常也可能导致校验超时。")
+            print("已扫码，但账号登录校验超时；请检查 App 确认状态、平台提示和服务器网络。", file=sys.stderr)
+            return 1
         login_state.write_status(sf, "expired", "二维码超时未扫")
         print(f"⏱️ {timeout_s}s 内未检测到登录成功（二维码可能已过期）。请重跑 login 再扫。",
               file=sys.stderr)
@@ -1428,41 +1935,25 @@ def cmd_whoami(a) -> int:
             ctx = _launch(p, headed=False, base=a.profile_base, proxy=_proxy(a.proxy, a.no_proxy))
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             try:
-                page.goto(EXPLORE_URL, wait_until="domcontentloaded")
-                try:  # 等登录态元素出现（已登录会很快命中；未登录则短等后判定）
-                    page.wait_for_selector(SELECTORS["login_ok"], timeout=4000)
-                except Exception:
-                    pass
-                logged = _is_logged_in(page)
-                if not logged and _risk_blocked(page):
-                    page.goto(CREATOR_LOGIN_URL, wait_until="domcontentloaded")
-                    page.wait_for_timeout(1500)
-                    logged = _is_logged_in(page)
-                result["loggedIn"] = logged
-                if logged:
-                    img = page.query_selector('.main-container .user img.reds-img')
-                    if img:
-                        result["avatar"] = img.get_attribute("src") or ""
-                    a_el = page.query_selector('.main-container .user a[href^="/user/profile/"]')
-                    href = a_el.get_attribute("href") if a_el else None
-                    if href:  # 昵称在个人主页，explore 页只有头像
+                account = _authenticated_account(ctx)
+                if account is not None:
+                    result["loggedIn"] = True
+                    if not all(_account_identity(account).values()):
+                        account = _self_profile_account(ctx, account)
+                    result.update(_account_identity(account))
+                    if not all((result["name"], result["avatar"])):
                         try:
-                            page.goto("https://www.xiaohongshu.com" + href,
-                                      wait_until="domcontentloaded")
-                            try:
-                                page.wait_for_selector(".user-name", timeout=4000)
-                            except Exception:
-                                pass
-                            for sel in (".user-name", ".user-nickname",
-                                        'div[class*="nickname"]', ".info .name"):
-                                el = page.query_selector(sel)
-                                if el:
-                                    t = (el.inner_text() or "").strip()
-                                    if t:
-                                        result["name"] = t.splitlines()[0][:40]
-                                        break
+                            fallback = _page_account_identity(page, account.get("userId"))
+                            for field in ("name", "avatar"):
+                                if not result[field]:
+                                    result[field] = fallback[field]
                         except Exception:
                             pass
+                else:
+                    logged = _check_account_login(page)
+                    result["loggedIn"] = logged
+                    if logged:
+                        result.update(_page_account_identity(page))
             finally:
                 ctx.close()
     except Exception as e:  # noqa: BLE001 — whoami 永远输出 JSON，异常视作未登录
@@ -1529,6 +2020,7 @@ def cmd_selftest(_a) -> int:
 
 
 def main() -> int:
+    login_state.configure_stdio()
     ap = argparse.ArgumentParser(
         description="小红书发布（Playwright 驱动本机 Chrome 窗口；流程移植自 xiaohongshu-mcp）",
         formatter_class=argparse.RawDescriptionHelpFormatter)

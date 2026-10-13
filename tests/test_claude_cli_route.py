@@ -80,3 +80,26 @@ def test_apply_route_shared_without_env_block_adds_nothing():
     cfg = {"agents": {"defaults": {"model": {"primary": "openai/m"}}}}
     assert ccr.apply_route(cfg, "anthropic/claude-opus-5", "") is False
     assert "env" not in cfg
+
+
+# ── EASEL_AGENT_RUNTIME 同键两用：claude-cli 标记不是执行引擎 id ──────────────
+
+@pytest.mark.parametrize("marker", ["claude-cli", '"claude-cli"', " Claude-CLI "])
+def test_claude_cli_marker_does_not_pin_harness(tmp_path, marker):
+    """.env 里的 claude-cli 是 OpenClaw 路线标记；交给引擎设置不能报「未知 Agent 底座」，
+    而是按页面选择 / 默认引擎走（装过 OpenClaw 的机器默认就是 openclaw）。"""
+    from easel.harnesses import store
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "openclaw.json").write_text("{}", encoding="utf-8")
+    env = {"EASEL_AGENT_RUNTIME": marker, "EASEL_OPENCLAW_STATE_DIR": str(state)}
+    assert store.settings(tmp_path / "outputs", env)["runtime"] == "openclaw"
+    store.write_json(tmp_path / "outputs" / "_harness" / "config.json", {"runtime": "codex"})
+    assert store.settings(tmp_path / "outputs", env)["runtime"] == "codex"
+
+
+def test_real_engine_ids_in_env_still_pin(tmp_path):
+    from easel.harnesses import store
+    store.write_json(tmp_path / "outputs" / "_harness" / "config.json", {"runtime": "codex"})
+    env = {"EASEL_AGENT_RUNTIME": "opencode", "EASEL_OPENCLAW_STATE_DIR": str(tmp_path)}
+    assert store.settings(tmp_path / "outputs", env)["runtime"] == "opencode"
