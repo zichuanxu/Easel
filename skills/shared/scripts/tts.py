@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -96,6 +97,57 @@ def _edge_tts_bin() -> str:
     )
 
 
+def _has_module(python: str, module: str) -> bool:
+    """python 这个解释器能否 import module（只查找、不导入）。"""
+    if python == sys.executable:
+        import importlib.util
+        return importlib.util.find_spec(module) is not None
+    probe = f"import importlib.util as u, sys; sys.exit(u.find_spec({module!r}) is None)"
+    try:
+        # cwd 放脚本目录：`-c` 会把 cwd 加进 sys.path，不能是任意目录
+        r = subprocess.run([python, "-c", probe], capture_output=True,
+                           timeout=30, cwd=str(Path(__file__).resolve().parent))
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0
+
+
+def _shebang_python(binp: Path) -> str | None:
+    """console script 首行 #! 指向的 python（pip --user 装的 edge-tts 旁边没有 python）。"""
+    try:
+        with open(binp, "rb") as f:
+            first = f.readline(512)
+    except OSError:
+        return None
+    if not first.startswith(b"#!"):
+        return None
+    parts = first[2:].decode("utf-8", "ignore").split()
+    return parts[0] if parts and Path(parts[0]).name.startswith("python") else None
+
+
+def _edge_tts_cmd(binp: str) -> list[str]:
+    """调 edge-tts 的命令前缀。
+
+    优先经 edge_tts_compat.py 跑（修 2026-10 起合成 403，见该文件），这需要一个装了 edge_tts 的
+    解释器。先找 edge-tts 自己的：同目录（venv）、软链目标目录（pipx / uv tool）、#! 行；
+    再找当前解释器。都没有就直接调 edge-tts 命令。
+    """
+    compat = str(Path(__file__).resolve().parent / "edge_tts_compat.py")
+    b = Path(binp)
+    cands = [str(d / n) for d in dict.fromkeys((b.parent, b.resolve().parent))
+             for n in ("python", "python3", "python.exe")]
+    sb = _shebang_python(b)
+    if sb:
+        cands.append(sb)
+    cands.append(sys.executable)
+    for py in dict.fromkeys(cands):
+        if (py == sys.executable or Path(py).is_file()) and _has_module(py, "edge_tts"):
+            return [py, compat]
+    print("⚠️ 没找到装了 edge_tts 的 Python，跳过兼容层直接调 edge-tts"
+          "（2026-10 起可能 403，见 docs/known-issues.md）", file=sys.stderr)
+    return [binp]
+
+
 def _env_proxy() -> str | None:
     """从环境变量取外网代理（edge-tts 需访问微软服务器）。"""
     for k in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"):
@@ -152,8 +204,7 @@ def _run_edge_tts(
     proxy: str | None,
 ) -> None:
     """调 edge-tts 把 text 合成到 media_out（mp3）。"""
-    binp = _edge_tts_bin()
-    cmd = [binp, "--voice", voice, "--write-media", str(media_out)]
+    cmd = _edge_tts_cmd(_edge_tts_bin()) + ["--voice", voice, "--write-media", str(media_out)]
     # 长文本走 --file，避免 argv 过长 / 换行 / shell 转义问题。
     with tempfile.NamedTemporaryFile(
         "w", suffix=".txt", delete=False, encoding="utf-8"
@@ -189,9 +240,16 @@ def _run_edge_tts(
         err = (proc.stderr or proc.stdout or "").strip()
         hint = ""
         low = err.lower()
-        if any(k in low for k in ("timed out", "connection", "getaddrinfo",
-                                  "network", "ssl", "proxy", "resolve",
-                                  "cannot connect", "no route")):
+        # 握手拿到了 HTTP 状态 = 网络是通的，不给代理提示（其 URL 带 ConnectionId=，会误中「connection」）
+        handshake = re.search(r"WSServerHandshakeError: (\d{3})\b", err)
+        if handshake and handshake.group(1) == "403":
+            hint = (
+                "\n提示：403 是微软拒绝了合成请求，与网络/代理无关。2026-10 起微软改了合成接口鉴权"
+                "（rany2/edge-tts#490）；若仍 403，先 `pip install -U edge-tts`，再看 docs/known-issues.md。"
+            )
+        elif not handshake and any(k in low for k in (
+                "timed out", "connection", "getaddrinfo", "network", "ssl",
+                "proxy", "resolve", "cannot connect", "no route")):
             hint = (
                 "\n提示：edge-tts 需访问微软在线服务，请确认已设置外网代理：\n"
                 "  export https_proxy=http://host:port http_proxy=http://host:port"
@@ -378,8 +436,7 @@ def cmd_speak(args) -> int:
 def cmd_voices(args) -> int:
     """列出常用中文音色。默认用内置精选表，--all 走 edge-tts 拉全量 zh-。"""
     if args.all:
-        binp = _edge_tts_bin()
-        cmd = [binp, "--list-voices"]
+        cmd = _edge_tts_cmd(_edge_tts_bin()) + ["--list-voices"]
         proxy = args.proxy or _env_proxy()
         if proxy:
             cmd += ["--proxy", proxy]

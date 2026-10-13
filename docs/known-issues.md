@@ -4,6 +4,25 @@
 
 ---
 
+## edge-tts 配音报 403（2026-10 起）
+
+- **影响范围**：没配云端配音（`VOICE_PROVIDER`）、走 edge-tts 免 key 配音的所有场景；edge-tts 7.2.8 及以前。微软分地区切换，各地开始出错的日子不同（日本是 10-13）。
+- **表现**：`tts.py speak` 报 `WSServerHandshakeError: 403, message='Invalid response status'`。重试、换代理、升级到 PyPI 最新版都不管用；`voices --all`（音色列表）照常能用。
+
+### 根因
+
+微软的旧合成地址 `speech.platform.bing.com` 改为只认 v2 版 `Sec-MS-GEC` 令牌，edge-tts 7.2.8 还在发 v1，握手直接 403（[rany2/edge-tts#490](https://github.com/rany2/edge-tts/issues/490)）。和网络、代理、出口 IP 都无关。
+
+### 规避
+
+`tts.py` 经 `skills/shared/scripts/edge_tts_compat.py` 调 edge-tts：装的 edge-tts 仍是「旧地址 + v1 令牌」时，把合成地址换成新版 Edge 用的 `api.msedgeservices.com`（它还接受旧令牌，做法同上游 [PR #491](https://github.com/rany2/edge-tts/pull/491)）。上游改了地址或改发 v2 令牌后，兼容层自动不再生效。
+
+找不到装了 edge_tts 的 Python 时，会在 stderr 提示「跳过兼容层」并直接调 edge-tts 命令，那样仍会 403。
+
+上游发版修复后：`pip install -U edge-tts`，删掉 `edge_tts_compat.py`、`tests/test_edge_tts_compat.py`，以及 `tts.py` 里的 `_edge_tts_cmd` / `_has_module` / `_shebang_python`，`tts.py` 与 `asr.py` 改回直接调 `edge-tts` 命令。
+
+---
+
 ## Claude CLI 路线：隔一会儿再追问，agent 忘了前面的对话
 
 - **影响范围**：用本机 Claude Code 登录跑 agent（`EASEL_AGENT_RUNTIME=claude-cli`）且使用默认的隔离配置目录 `~/.claude-easel` 时；OpenClaw 2026.9.7 实测。
