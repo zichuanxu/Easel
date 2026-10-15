@@ -57,5 +57,7 @@ def test_resolve_engine_order(monkeypatch):
     monkeypatch.setenv("E_BR", "chrome")
     assert rb.resolve_engine("E_BR", cloak_fn=lambda: Path("/c"), channel_fn=lambda: "chrome") == ("chrome", "")
     monkeypatch.setenv("E_BR", "auto")
-    assert rb.resolve_engine("E_BR", cloak_fn=lambda: Path("/c"), channel_fn=lambda: "chrome") == ("cloak", "/c")
+    # 第二项是 str(Path)：Windows 上是 "\\c"，按 Path 比
+    name, exe = rb.resolve_engine("E_BR", cloak_fn=lambda: Path("/c"), channel_fn=lambda: "chrome")
+    assert (name, Path(exe)) == ("cloak", Path("/c"))
     assert rb.resolve_engine("E_BR", cloak_fn=lambda: None, channel_fn=lambda: None) == ("bundled", "")

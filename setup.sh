@@ -952,6 +952,9 @@ if [ "${EASEL_AGENT_RUNTIME:-}" = "claude-cli" ]; then
     # OpenClaw 把 env.vars 原样交给 claude、两边都不展开 ~ / $VAR，所以这里自己展开并要求绝对路径。
     CLI_DIR="${EASEL_CLAUDE_CONFIG_DIR:-}"
     CLI_DIR_OK=true
+    # SC2088 是误报：.env 里写的 ~/ 是字面量（source 不展开），"~/"?* 就是要按字面匹配再手动展开。
+    # 指令只能放在整个 case 前面，放在单个分支前 shellcheck 会解析失败（SC1124）。
+    # shellcheck disable=SC2088
     case "$CLI_DIR" in
         "") CLI_DIR="$HOME/.claude-easel" ;;
         shared) CLI_DIR="" ;;                       # 不隔离：直接用个人 ~/.claude 的登录

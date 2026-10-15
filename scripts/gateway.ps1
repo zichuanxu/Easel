@@ -94,11 +94,16 @@ switch ($args[0]) {
         if (Test-Gateway) { Write-Host '[easel] Gateway already running'; break }
         New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
         Write-Host "[easel] Starting Easel gateway (profile: $ProfileName, port: $Port)..."
-        $command = "openclaw --profile $ProfileName gateway run --force --allow-unconfigured --bind loopback"
-        Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command', $command `
-            -WorkingDirectory $Root -RedirectStandardOutput $LogFile -RedirectStandardError $ErrorLogFile -WindowStyle Hidden | Out-Null
+        # 不能在这里直接 Start-Process -Redirect*：带重定向时走 CreateProcess(bInheritHandles=TRUE)，
+        # 常驻的 gateway 会连带继承调用方读本脚本输出的管道（setup.ps1 的 Out-String、web 重启网关的
+        # capture_output），调用方永远等不到 EOF —— setup.ps1 卡死在 [8/8]、web 重启超时。
+        # 不带重定向的 Start-Process 走 ShellExecute、不继承任何句柄：先这样起一个隐藏的中转进程，
+        # 由它（下面的 run）再带重定向起 gateway。
+        Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File', "`"$PSCommandPath`"", 'run' `
+            -WorkingDirectory $Root -WindowStyle Hidden | Out-Null
         $ready = $false
-        1..20 | ForEach-Object {
+        # 上限与 gateway.sh 一致给 60s：OpenClaw 冷启动实测 ~13s，这里还多一层中转进程
+        1..60 | ForEach-Object {
             if (-not $ready) {
                 if (Test-Gateway) { $ready = $true }
                 else { Start-Sleep -Seconds 1 }
@@ -106,6 +111,18 @@ switch ($args[0]) {
         }
         if ($ready) { Write-Host '[easel] Gateway started' }
         else { Write-Error "Gateway 启动失败；请检查 $LogFile 和 $ErrorLogFile"; exit 1 }
+    }
+    'run' {
+        # 内部用：由 start 经 ShellExecute 起的隐藏中转进程执行，本身不持有任何调用方的句柄。
+        # 起完 gateway 就退出，gateway 的输出原样写进日志。
+        $command = "openclaw --profile $ProfileName gateway run --force --allow-unconfigured --bind loopback"
+        try {
+            Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-Command', $command `
+                -WorkingDirectory $Root -RedirectStandardOutput $LogFile -RedirectStandardError $ErrorLogFile -WindowStyle Hidden | Out-Null
+        } catch {
+            # 这个进程的窗口是隐藏的：失败原因写进错误日志，start 的失败提示才指得到
+            Add-Content -Path $ErrorLogFile -Value "[easel] 启动 gateway 失败：$_" -Encoding UTF8
+        }
     }
     'stop' { Stop-Gateway }
     'restart' { Stop-Gateway; Start-Sleep -Seconds 2; & $PSCommandPath start }

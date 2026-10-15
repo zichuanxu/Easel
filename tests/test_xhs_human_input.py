@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import json
 import math
+import os
 import sys
 import types
 from pathlib import Path
@@ -390,8 +391,12 @@ def test_publish_cooldown_blocked_before_browser(tmp_path, monkeypatch):
 
 def test_publish_cli_has_new_flags():
     import subprocess
-    out = subprocess.run([sys.executable, str(PROJECT_ROOT / "skills/shared/scripts/xhs_publish.py"),
-                          "publish", "--help"], capture_output=True, text=True).stdout
+    # 帮助里有中文：不指定编码时 Windows 按 cp1252 解码，读线程抛错、stdout 变成 None
+    r = subprocess.run([sys.executable, str(PROJECT_ROOT / "skills/shared/scripts/xhs_publish.py"),
+                        "publish", "--help"], capture_output=True, text=True, encoding="utf-8",
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    assert r.returncode == 0, r.stderr
+    out = r.stdout
     for flag in ("--allow-repost", "--handoff-timeout", "--status-file"):
         assert flag in out
 

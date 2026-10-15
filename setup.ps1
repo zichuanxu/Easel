@@ -37,6 +37,9 @@ function Invoke-WithProgress([string]$Label, [string]$Exe, [string[]]$Arguments,
                     RedirectStandardError = "$log.err" }
     if ($WorkDir) { $startArgs['WorkingDirectory'] = $WorkDir }
     $proc = Start-Process @startArgs
+    # 先取一次句柄：Start-Process -PassThru -NoNewWindow 返回的对象不留句柄，进程退出后
+    # ExitCode 读出来是 $null，成功也会被判 [FAIL]（CI 里 Playwright 下载完仍报「下载失败」）。
+    try { $null = $proc.Handle } catch { Write-Verbose "$Label 进程已退出，取不到句柄" }
     $quiet = [Console]::IsOutputRedirected
     if ($quiet) { Write-Host "  [....] $Label 开始（非交互终端，不显示进度）" }
     $frames = @('[>   ]', '[=>  ]', '[==> ]', '[===>]')

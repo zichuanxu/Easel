@@ -258,3 +258,46 @@ def test_gateway_ps1_does_not_shadow_automatic_variable() -> None:
     bad = [f"{n}: {l.strip()}" for n, l in enumerate(text.splitlines(), 1)
            if re.search(r"^\s*\$Profile\s*=", l)]
     assert not bad, "不许给自动变量 $Profile 赋值：\n" + "\n".join(bad)
+
+
+# ── gateway.ps1 / setup.ps1：子进程句柄 ───────────────────────────────
+
+def _code(text: str) -> str:
+    """去掉整行注释与行尾注释（这两个文件的字符串里没有 #）。"""
+    return "\n".join(l.split("#")[0] for l in text.splitlines())
+
+
+def _switch_branch(text: str, name: str) -> str:
+    """switch 里 'name' { ... } 分支的代码（按花括号配对截取）。"""
+    code = _code(text)
+    m = re.search(rf"^\s*'{name}'\s*\{{", code, re.M)
+    assert m, f"gateway.ps1 里找不到 '{name}' 分支"
+    depth, i = 0, m.end() - 1
+    for j in range(i, len(code)):
+        depth += {"{": 1, "}": -1}.get(code[j], 0)
+        if depth == 0:
+            return code[i:j + 1]
+    raise AssertionError(f"'{name}' 分支的花括号不配对")
+
+
+def test_gateway_start_does_not_hand_caller_handles_to_gateway() -> None:
+    """start 不许直接带重定向起 gateway。
+
+    带 -Redirect* 的 Start-Process 走 CreateProcess(bInheritHandles=TRUE)，常驻的 gateway 会继承
+    调用方读本脚本输出的管道：setup.ps1 的 Out-String、web 重启网关的 capture_output 都等不到 EOF，
+    setup.ps1 在 CI 上卡死在 [8/8] 直到 1 小时超时。start 先用不带重定向的 Start-Process
+    （ShellExecute，不继承句柄）起隐藏的 run，由 run 带重定向起 gateway。
+    """
+    text = _read(GATEWAY_PS1)
+    start, run = _switch_branch(text, "start"), _switch_branch(text, "run")
+    assert "Start-Process" in start and "'run'" in start
+    assert "-Redirect" not in start and "-NoNewWindow" not in start, "start 里的 Start-Process 必须走 ShellExecute"
+    assert "-RedirectStandardOutput" in run and "gateway run" in run
+
+
+def test_with_progress_caches_process_handle_before_polling() -> None:
+    """Start-Process -PassThru -NoNewWindow 不先取 .Handle，进程退出后 ExitCode 是 $null，成功也判 [FAIL]。"""
+    code = _code(_read(SETUP_PS1))
+    body = code[code.index("function Invoke-WithProgress"):]
+    body = body[:body.index("\nfunction ", 1)]
+    assert "$proc.Handle" in body and body.index("$proc.Handle") < body.index("HasExited")

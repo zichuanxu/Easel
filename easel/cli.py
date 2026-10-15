@@ -222,7 +222,21 @@ def cmd_web(args) -> int:
     return result.returncode
 
 
+def _utf8_stdio() -> None:
+    """Windows 上 stdout 被管道接走时按 locale 编码（cp1252 / cp936），输出里的中文、emoji
+    编码不出来就 UnicodeEncodeError，命令一个字没打就崩（easel doctor 被重定向时即如此）。
+    统一按 UTF-8 输出，编不出的字符替换掉，与 openclaw_workspace / login_state 的做法一致。"""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_stdio()
     parser = argparse.ArgumentParser(
         prog="easel",
         description="Easel — 社媒内容工作流整合层 CLI",
