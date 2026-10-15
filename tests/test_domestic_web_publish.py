@@ -28,6 +28,7 @@ def _sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr("calendar_ops.record_publish", lambda *a, **k: None)   # 不写真实内容日历 / publish-log
     monkeypatch.delenv(semi_auto.AUTO_PUBLISH_ENV, raising=False)
     monkeypatch.setattr(wp, "_LOGIN_DUMP_DIR", tmp_path / "_login_dump")   # 失败截图不许写进仓库 outputs/
+    monkeypatch.setattr(wp, "_ACTIVE_PUBLISH_STATUS_FILE", None)   # _run_browser 设的全局不串到下一个用例
 
 
 # ── 假浏览器 ────────────────────────────────────────────────────────────
@@ -347,7 +348,7 @@ class ZhPage(FakePage):
         return types.SimpleNamespace(inner_text=lambda: "问题标题")
 
 
-def _zh_run(monkeypatch, outcome, tmp_path, **kw):
+def _zh_run(monkeypatch, outcome, tmp_path, click=None, **kw):
     ctx = FakeCtx(ZhPage(url="https://www.zhihu.com/question/42"))
     mod = types.ModuleType("playwright.sync_api")
 
@@ -359,7 +360,7 @@ def _zh_run(monkeypatch, outcome, tmp_path, **kw):
     monkeypatch.setitem(sys.modules, "playwright.sync_api", mod)
     monkeypatch.setattr(za, "_launch", lambda *_a, **_k: ctx)
     monkeypatch.setattr(za, "type_into_editor", lambda *_a, **_k: True)
-    monkeypatch.setattr(za, "_click_publish_btn", lambda *_a: pytest.fail("半自动不许点发布回答"))
+    monkeypatch.setattr(za, "_click_publish_btn", click or (lambda *_a: pytest.fail("半自动不许点发布回答")))
     monkeypatch.setattr(semi_auto, "await_human_publish", lambda *_a, **_k: outcome)
     f = tmp_path / "a.md"
     f.write_text("回答正文", encoding="utf-8")
@@ -555,3 +556,59 @@ def test_zhihu_auto_unconfirmed_records_ledger(monkeypatch, tmp_path):
     assert not res["success"] and "未确认" in res["error"]
     last = json.loads(publish_guard.ledger_path().read_text(encoding="utf-8").splitlines()[-1])
     assert last["unconfirmed"] is True and last["platform"] == "zhihu"
+
+
+# ── 处罚提示退出 9 前也要落状态（_die 已经会写；这里补 _scan_block_toasts） ─────────
+
+
+def test_auto_block_toast_writes_cooldown_status(tmp_path, monkeypatch, two_step_zhihu):
+    """自动逃生口：点发布后弹处罚 toast → 冷却 + 退出 9，状态文件是带原文的 error（不停在 starting）。"""
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "1")
+    monkeypatch.setitem(wp.PLATFORMS["zhihu"], "publish_success", {"url_contains": "/p/"})
+    _fake_playwright(monkeypatch, FakeCtx(FakePage()))
+    monkeypatch.setattr(wp.human_input, "click", lambda *_a, **_k: None)
+    monkeypatch.setattr(semi_auto, "_toast_texts", lambda *_a: ["账号存在风险，已限制发布"])
+    monkeypatch.setattr(wp.time, "time", iter(range(0, 10_000, 20)).__next__)   # 万一没退出，30s 等待也立刻超时
+    sf = tmp_path / "s.json"
+    with pytest.raises(SystemExit) as e:
+        wp._run_browser(_args(tmp_path, status_file=str(sf)), headed=True, do_publish=True)
+    assert e.value.code == publish_guard.EXIT_COOLDOWN and publish_guard.active_cooldown("zhihu")
+    st = _status(sf)
+    assert st["state"] == "error" and st["message"].startswith("知乎") and "已限制发布" in st["message"]
+
+
+def test_block_toast_status_write_failure_still_exits_9(tmp_path, monkeypatch):
+    """写状态失败（如 Windows 上与 web 轮询读撞车）也必须退出 9：视频号循环外层 except Exception 会吞 OSError。"""
+    import login_state
+
+    def boom(*_a, **_k):
+        raise PermissionError("模拟 os.replace 与读者撞车")
+    monkeypatch.setattr(login_state, "write_status", boom)
+    monkeypatch.setattr(wp, "_ACTIVE_PUBLISH_STATUS_FILE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(semi_auto, "_toast_texts", lambda *_a: ["账号存在风险，已限制发布"])
+    with pytest.raises(SystemExit) as e:
+        wp._scan_block_toasts(FakePage(), "weixin-channels")
+    assert e.value.code == publish_guard.EXIT_COOLDOWN
+
+
+def test_zhihu_answer_auto_block_toast_writes_cooldown_status(monkeypatch, tmp_path):
+    """自动逃生口：点发布后弹处罚 toast → 冷却 + 退出 9，--status-file 落带原文的 error。"""
+    monkeypatch.setattr(semi_auto, "_toast_texts", lambda *_a: ["账号存在风险，已限制发布"])
+    sf = tmp_path / "s.json"
+    with pytest.raises(SystemExit) as e:
+        _zh_run(monkeypatch, "published", tmp_path, click=lambda *_a: True, semi=False, status_file=str(sf))
+    assert e.value.code == publish_guard.EXIT_COOLDOWN and publish_guard.active_cooldown("zhihu")
+    st = _status(sf)
+    assert st["state"] == "error" and st["message"].startswith("知乎提示处罚") and "已限制发布" in st["message"]
+
+
+def test_zhihu_answer_block_toast_status_write_failure_still_exits_9(monkeypatch, tmp_path):
+    import login_state
+
+    def boom(*_a, **_k):
+        raise PermissionError("模拟 os.replace 与读者撞车")
+    monkeypatch.setattr(login_state, "write_status", boom)
+    monkeypatch.setattr(semi_auto, "_toast_texts", lambda *_a: ["账号存在风险，已限制发布"])
+    with pytest.raises(SystemExit) as e:
+        za._scan_block_toasts(FakePage(), str(tmp_path / "s.json"))
+    assert e.value.code == publish_guard.EXIT_COOLDOWN

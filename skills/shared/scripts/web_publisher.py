@@ -396,6 +396,14 @@ def _scan_block_toasts(page, platform: str) -> None:
     for text in texts:
         if publish_guard.classify_block_text(text):
             publish_guard.on_block_detected(platform, text)
+            if _ACTIVE_PUBLISH_STATUS_FILE:   # 发布运行中：状态落 error（带原文），不停在 starting「发布中」
+                name = PLATFORMS.get(platform, {}).get("name", platform)
+                # 写不进也必须退出 9：视频号发表循环外层的 except Exception 会吞掉 OSError
+                try:
+                    login_state.write_status(_ACTIVE_PUBLISH_STATUS_FILE, "error",
+                                             f"{name}提示处罚/限制：{text[:120]}。已设为冷却，请勿重试，先向用户汇报。")
+                except OSError:
+                    pass
             sys.exit(publish_guard.EXIT_COOLDOWN)
 
 

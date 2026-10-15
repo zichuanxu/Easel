@@ -285,8 +285,8 @@ def _answer_published(page, baseline_url: str) -> bool:
     return False
 
 
-def _scan_block_toasts(page) -> None:
-    """扫 toast/通知文本：命中平台处罚/限制提示 → 设冷却并 exit 9，不重试。"""
+def _scan_block_toasts(page, status_file: str | None = None) -> None:
+    """扫 toast/通知文本：命中平台处罚/限制提示 → 设冷却 + 状态落 error（带原文）并 exit 9，不重试。"""
     try:
         texts = semi_auto._toast_texts(page, ZHIHU_TOAST_SELECTORS)
     except Exception:
@@ -294,6 +294,11 @@ def _scan_block_toasts(page) -> None:
     for text in texts:
         if publish_guard.classify_block_text(text):
             publish_guard.on_block_detected("zhihu", text)
+            try:   # 写不进（如 Windows 上与读者撞车）也必须退出 9
+                login_state.write_status(status_file, "error",
+                                         f"知乎提示处罚/限制：{text[:120]}。已设为冷却，请勿重试，先向用户汇报。")
+            except OSError:
+                pass
             sys.exit(publish_guard.EXIT_COOLDOWN)
 
 
@@ -416,7 +421,7 @@ def publish_answer(question_url: str, content: str, headed: bool = True, dry_run
             if not published:
                 result["error"] = "未找到或无法点击发布回答按钮"
                 return result
-            _scan_block_toasts(page)   # 处罚/限制提示 → 设冷却 + exit 9
+            _scan_block_toasts(page, status_file)   # 处罚/限制提示 → 设冷却 + 落状态 + exit 9
             current_url = page.url
             print(f"[INFO] 当前页面 URL: {current_url}", file=sys.stderr)
             if _answer_published(page, baseline_url):
