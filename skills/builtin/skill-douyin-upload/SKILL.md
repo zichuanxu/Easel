@@ -68,7 +68,7 @@ check（环境就绪？）
 | 码 | 含义 | 你该做什么 |
 |----|------|-----------|
 | 0 | 发布成功（读回核验） | 发布后留痕 |
-| 4 | 填表阶段出错（如输入框被弹层挡住），没走到发布、确定未发布 | 把 message 原样转告用户（含挡住它的元素与截图路径），不要重试 |
+| 4 | 发布前出错（如输入框被弹层挡住），脚本没点发布 | 把 message 原样转告用户（含挡住它的元素与截图路径），不要重试 |
 | 5 | 发布未确认 / 窗口已关 / 等待超时 / 读回没对上 | 告知用户去内容管理页核对，不要重试 |
 | 6 | 自动点击模式下 AI 声明没勾上；或读回时登录态失效 | 告知用户，必要时重新登录 |
 | 8 | 重复发布（同内容/同标题已发过） | 告知用户并停止；用户明确要求重发才加 `--allow-repost` |
@@ -76,8 +76,7 @@ check（环境就绪？）
 
 ### 冷却
 
-冷却（`outputs/_publish/cooldown.json`）**只有用户能解除**：用户在对话里明确说要解除时才可执行
-`python skills/shared/scripts/publish_guard.py cooldown clear --platform douyin`；查看状态 `publish_guard.py status`。
+冷却（`outputs/_publish/cooldown.json`）**只有用户能解除**：用户在对话里明确说要解除时才可执行 `python skills/shared/scripts/publish_guard.py cooldown clear --platform douyin`；查看状态 `publish_guard.py status`。
 
 ## 短信验证码处理（仅自动点击逃生口 / 旧流程）
 
