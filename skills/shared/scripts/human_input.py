@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 
 # 随机源单独一个，测试可以换成固定种子
 rng = random.Random()
@@ -25,11 +26,18 @@ TOP_MARGIN = 8
 BOTTOM_MARGIN = 8
 
 # 点 (x,y) 时浏览器实际命中的是不是这个元素（或它里面的东西）。闭合 Shadow DOM 的宿主
-# 会被重定向成宿主本身，所以也算命中。
+# 会被重定向成宿主本身，所以也算命中。没命中时返回盖在上面那个元素的简短描述
+# （标签#id.class "文字"），报错时带上——不然只知道「被挡住」，不知道被谁挡。
 _HIT_JS = """(el, [x, y]) => {
     const t = document.elementFromPoint(x, y);
-    return !!t && (t === el || el.contains(t));
+    if (t && (t === el || el.contains(t))) return true;
+    if (!t) return "";
+    const cls = (typeof t.className === "string" ? t.className : "").trim().split(/\\s+/).slice(0, 3).join(".");
+    const text = (t.innerText || t.textContent || "").trim().replace(/\\s+/g, " ").slice(0, 16);
+    return t.tagName.toLowerCase() + (t.id ? "#" + t.id : "") + (cls ? "." + cls : "")
+        + (text ? ` "${text}"` : "");
 }"""
+BLOCKED_MSG = "要点的元素被别的东西挡住了，没有点"
 
 
 def pause(page, lo_ms: int, hi_ms: int) -> None:
@@ -163,17 +171,56 @@ def _aim(page, target, x_frac: float | None) -> tuple[float, float]:
     if not band:
         raise RuntimeError("元素不在可点区域里，没法点")
     lo, hi = band
+    blocker = ""
     for _ in range(6):
         fx = (x_frac + rng.uniform(-0.015, 0.015)) if x_frac is not None else rng.uniform(0.3, 0.7)
         x = box["x"] + box["width"] * fx
         y = lo + (hi - lo) * rng.uniform(0.3, 0.7)
-        try:
-            hit = target.evaluate(_HIT_JS, [x, y])
-        except Exception:
-            hit = True                    # 查不了（元素句柄已失效等）就不拦，交给后面的步骤报错
-        if hit:
+        hit = _probe(target, x, y)
+        if hit is True:
             return x, y
-    raise RuntimeError("要点的元素被别的东西挡住了，没有点")
+        blocker = hit or blocker
+    raise RuntimeError(_blocked_msg(blocker))
+
+
+def _probe(target, x: float, y: float):
+    """(x,y) 命中 target 返回 True；被盖住返回盖在上面那个元素的描述（查不出是谁就是空串）。"""
+    try:
+        hit = target.evaluate(_HIT_JS, [x, y])
+    except Exception:
+        return True                       # 查不了（元素句柄已失效等）就不拦，交给后面的步骤报错
+    return True if hit is True else (hit if isinstance(hit, str) else "")
+
+
+def _blocked_msg(blocker: str) -> str:
+    return BLOCKED_MSG + (f"（挡在上面的是 {blocker}）" if blocker else "")
+
+
+def wait_until_clickable(page, target, timeout_ms: int = 15000, interval_ms: int = 500) -> None:
+    """等元素露在可点区域里、中间一带没被别的东西盖住，再返回；本身不点（元素不在可点区域时
+    会用滚轮把它滚进来）。弹窗收起动画、遮罩淡出都要时间，点之前先等它们走完；等到超时还被挡着
+    就报错，并说明挡在上面的是什么——宁可停下，也不对着弹层乱点。"""
+    interval_ms = max(1, interval_ms)
+    deadline = time.monotonic() + timeout_ms / 1000
+    blocker = ""
+    for i in range(timeout_ms // interval_ms + 1):
+        if i:
+            if time.monotonic() >= deadline:
+                break
+            page.wait_for_timeout(interval_ms)
+        # 还没渲染出来（display:none / 零尺寸）就只等，不去滚：scroll_into_view_if_needed
+        # 对看不见的元素会一直等到页面默认超时（抖音设的是 5 分钟），等待就没了上限
+        if _box(target) is None:
+            continue
+        box = _bring_into_view(page, target)
+        band = _visible_band(box, _viewport(page)[1]) if box else None
+        if not band:
+            continue
+        hit = _probe(target, box["x"] + box["width"] / 2, (band[0] + band[1]) / 2)
+        if hit is True:
+            return
+        blocker = hit or blocker
+    raise RuntimeError(_blocked_msg(blocker) if blocker else "元素一直不在可点区域里，没法点")
 
 
 def hover(page, target) -> None:

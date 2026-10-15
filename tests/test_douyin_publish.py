@@ -113,7 +113,9 @@ def env(tmp_path, monkeypatch):
                             outcome="verified", matched=item, evidence={}))
     monkeypatch.setattr(dy, "_declare_ai", lambda page: True)
 
-    def fake_click(page, n=0):
+    def fake_click(page, n=0, on_commit=None):
+        if on_commit:
+            on_commit()
         rec["clicks"] += 1
     monkeypatch.setattr(dy, "_click_publish", fake_click)
     return rec
@@ -269,7 +271,8 @@ def test_auto_mode_block_toast_after_click_exits_9(tmp_path, env, monkeypatch):
     monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "1")
     page = env["page"]
 
-    def click_then_ban(p, n=0):
+    def click_then_ban(p, n=0, on_commit=None):
+        on_commit()
         env["clicks"] += 1
         page.toasts = ["抖音投稿功能已被封禁"]
     monkeypatch.setattr(dy, "_click_publish", click_then_ban)
@@ -361,6 +364,127 @@ def test_auto_unconfirmed_records_ledger_with_flag(tmp_path, env, monkeypatch):
     last = json.loads(pg.ledger_path().read_text(encoding="utf-8").splitlines()[-1])
     assert last["unconfirmed"] is True and last["url"] == ""
     assert pg.find_duplicate("douyin", [a.video], a.title)   # 重复闸门能挡住二发
+
+
+# ---------------- 填表阶段出错（2026-10-15：标题框被挡住，状态卡在「发布中…」、没留现场） ----------------
+def test_fill_stage_error_reports_not_published_with_screenshot(tmp_path, env, monkeypatch):
+    """填表阶段出错：存现场、状态写 error「未发布」并带上原因、退出 4；不交接、不读回、不记台账。"""
+    def blocked(page, t, d, tags):
+        raise RuntimeError("要点的元素被别的东西挡住了，没有点（挡在上面的是 div.semi-modal-mask）")
+    monkeypatch.setattr(dy, "_fill_title_desc", blocked)
+    dumps, handoff, readback = [], [], []
+    shot = tmp_path / "_login" / "douyin-publish-error.png"
+    monkeypatch.setattr(dy, "_dump_publish_fail",
+                        lambda page, tag="publish-fail": dumps.append(tag) or shot)
+    monkeypatch.setattr(semi_auto, "await_human_publish", lambda *a, **k: handoff.append(1))
+    monkeypatch.setattr(platform_readback, "verify_douyin_publish", lambda *a, **k: readback.append(1))
+    monkeypatch.setattr(dy, "_readback_verify", lambda *a, **k: readback.append(1))
+    a = _args(tmp_path)
+    assert _run(a) == dy.EXIT_NOT_PUBLISHED
+    st = json.loads(Path(a.status_file).read_text(encoding="utf-8"))
+    assert st["state"] == "error" and "未发布" in st["message"] and "semi-modal-mask" in st["message"]
+    assert str(shot) in st["message"] and "内容管理页核对" in st["message"]
+    assert dumps == ["publish-error"] and not handoff and not readback
+    assert env["ctx"].closed and env["clicks"] == 0
+    assert not pg.find_duplicate("douyin", [a.video], a.title)
+
+
+def test_error_after_handoff_started_goes_to_readback(tmp_path, env, monkeypatch):
+    """交接开始后（人可能已经点了发布）才出的异常：按未确认走读回核验，不能直接判「未发布」。"""
+    def boom(page, **kw):
+        raise RuntimeError("页面结构变了")
+    monkeypatch.setattr(semi_auto, "await_human_publish", boom)
+    monkeypatch.setattr(dy, "_dump_publish_fail", lambda page, tag="publish-fail": None)
+    item = types.SimpleNamespace(platform_content_id="777", status="published")
+    seen = []
+
+    def reopen(p, a, title, **k):
+        seen.append(title)
+        return platform_readback.ReadbackResult(outcome="verified", matched=item, evidence={})
+    monkeypatch.setattr(dy, "_readback_verify", reopen)
+    a = _args(tmp_path)
+    assert dy._publish(a, "video") == 0
+    assert seen == [a.title]
+
+
+def test_fill_stage_dump_failure_says_no_screenshot(tmp_path, env, monkeypatch):
+    """截图没存下来就别说「已存」。"""
+    monkeypatch.setattr(dy, "_fill_title_desc", lambda *a: (_ for _ in ()).throw(RuntimeError("x")))
+    monkeypatch.setattr(dy, "_dump_publish_fail", lambda page, tag="publish-fail": None)
+    a = _args(tmp_path)
+    assert _run(a) == dy.EXIT_NOT_PUBLISHED
+    assert "截图没存下来" in json.loads(Path(a.status_file).read_text(encoding="utf-8"))["message"]
+
+
+def test_fill_stage_cooldown_exit_passes_through(tmp_path, env, monkeypatch):
+    """填表阶段撞上处罚提示（SystemExit 9）不能被当成「填表出错」吞掉改成 4。"""
+    def ban(*_a):
+        raise SystemExit(pg.EXIT_COOLDOWN)
+    monkeypatch.setattr(dy, "_fill_title_desc", ban)
+    monkeypatch.setattr(dy, "_dump_publish_fail", lambda page, tag="publish-fail": pytest.fail("不该当异常留现场"))
+    assert _run(_args(tmp_path)) == pg.EXIT_COOLDOWN
+
+
+def test_auto_mode_blocked_publish_button_is_not_published(tmp_path, env, monkeypatch):
+    """自动逃生口：发布按钮被挡、还没点（on_commit 之前出错）→ 按未发布退出 4，不读回、不记台账。"""
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "1")
+
+    def blocked(page, n=0, on_commit=None):
+        raise RuntimeError("要点的元素被别的东西挡住了，没有点（挡在上面的是 div#mask）")
+    monkeypatch.setattr(dy, "_click_publish", blocked)
+    monkeypatch.setattr(dy, "_dump_publish_fail", lambda page, tag="publish-fail": None)
+    readback = []
+    monkeypatch.setattr(dy, "_readback_verify", lambda *a, **k: readback.append(1))
+    a = _args(tmp_path)
+    assert _run(a) == dy.EXIT_NOT_PUBLISHED and not readback
+    assert not pg.find_duplicate("douyin", [a.video], a.title)
+
+
+def test_auto_mode_error_after_commit_goes_to_readback(tmp_path, env, monkeypatch):
+    """自动逃生口：已经去点了（on_commit 之后）才出错 → 可能已发出去，按未确认读回、记台账防二发。"""
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "1")
+
+    def click_then_crash(page, n=0, on_commit=None):
+        on_commit()
+        raise RuntimeError("点下去之后页面炸了")
+    monkeypatch.setattr(dy, "_click_publish", click_then_crash)
+    monkeypatch.setattr(dy, "_dump_publish_fail", lambda page, tag="publish-fail": None)
+    monkeypatch.setattr(dy, "_readback_verify",
+                        lambda *a, **k: platform_readback.ReadbackResult(outcome="unverified"))
+    a = _args(tmp_path)
+    assert _run(a) == 5
+    assert pg.find_duplicate("douyin", [a.video], a.title)
+
+
+def test_click_publish_marks_commit_only_after_button_is_clear(monkeypatch):
+    """_click_publish：按钮被挡就在 wait_until_clickable 报错，on_commit 不调、不点；没挡才先 on_commit 再点。"""
+    order = []
+    monkeypatch.setattr(dy, "_wait_publish_button_ready", lambda page: "btn")
+    monkeypatch.setattr(dy.human_pace, "pause_before_commit", lambda n: None)
+    monkeypatch.setattr(dy.human_input, "click", lambda page, el, *a, **k: order.append("click"))
+    page = types.SimpleNamespace(wait_for_timeout=lambda ms: None)
+
+    def blocked(page, el, **k):
+        raise RuntimeError("被挡住")
+    monkeypatch.setattr(dy.human_input, "wait_until_clickable", blocked)
+    with pytest.raises(RuntimeError):
+        dy._click_publish(page, 10, on_commit=lambda: order.append("commit"))
+    assert order == []
+    monkeypatch.setattr(dy.human_input, "wait_until_clickable", lambda page, el, **k: order.append("wait"))
+    dy._click_publish(page, 10, on_commit=lambda: order.append("commit"))
+    assert order == ["wait", "commit", "click"]
+
+
+def test_form_typing_waits_until_field_is_clickable(monkeypatch):
+    """填表前先等输入框露出来（封面弹窗收起、遮罩淡出要时间），再点；不是一上来就点。"""
+    order = []
+    monkeypatch.setattr(dy.human_input, "wait_until_clickable", lambda page, el, **k: order.append("wait"))
+    monkeypatch.setattr(dy.human_input, "click", lambda page, el, *a, **k: order.append("click"))
+    monkeypatch.setattr(dy.human_input, "pause", lambda *a: None)
+    monkeypatch.setattr(dy.human_input, "type_text", lambda page, text: order.append("type"))
+    page = types.SimpleNamespace(keyboard=types.SimpleNamespace(press=lambda k: None))
+    dy._human_type(page, object(), "标题", delay_ms=(65, 140))
+    assert order == ["wait", "click", "type"]
 
 
 def test_whoami_blocked_in_cooldown_without_browser(tmp_path, env, capsys):
