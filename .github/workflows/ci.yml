@@ -226,9 +226,11 @@ jobs:
 
       - name: doctor
         shell: bash
+        # 非交互且没有 .venv 时 setup.sh 装进当前 Python（这里是 setup-python 的），easel 在 PATH 上
         run: |
           if [ -x .venv/bin/easel ]; then .venv/bin/easel doctor
-          else .venv/Scripts/easel.exe doctor; fi
+          elif [ -f .venv/Scripts/easel.exe ]; then .venv/Scripts/easel.exe doctor
+          else easel doctor; fi
 
       - name: Upload install report
         if: always()

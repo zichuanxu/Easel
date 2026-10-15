@@ -768,6 +768,8 @@ class _RecordingChromium:
 @pytest.mark.parametrize("headed", [False, True])
 def test_launch_falls_back_to_real_chrome_window(monkeypatch, tmp_path, headed):
     monkeypatch.delenv("EASEL_XHS_HEADLESS", raising=False)
+    if hasattr(os, "geteuid"):
+        monkeypatch.setattr(os, "geteuid", lambda: 1000)   # Linux root 下会合理地加 --no-sandbox，与本条无关
     monkeypatch.setattr(xhs, "_browser_channel", lambda: "chrome")
     monkeypatch.setattr(xhs, "_cloak_executable", lambda: None)      # 没装 Cloak：退回本机 Chrome
     pw = _RecordingChromium()
@@ -835,7 +837,9 @@ def cloak_bin(monkeypatch, tmp_path):
     return exe
 
 
-def test_cloak_preferred_with_fixed_fingerprint(cloak_bin, tmp_path):
+@pytest.mark.parametrize("platform", ["darwin", "win32"])   # Linux 上 Cloak 一律加 --no-sandbox，见下一条
+def test_cloak_preferred_with_fixed_fingerprint(cloak_bin, monkeypatch, tmp_path, platform):
+    monkeypatch.setattr(xhs.sys, "platform", platform)
     pw = _RecordingChromium()
     base = str(tmp_path / "profiles")
     xhs._launch(pw, headed=False, base=base, proxy=None)
@@ -851,6 +855,16 @@ def test_cloak_preferred_with_fixed_fingerprint(cloak_bin, tmp_path):
     assert "--no-sandbox" not in first["args"]
     fp = json.loads((Path(base) / xhs.PROFILE_NAME / xhs.FINGERPRINT_FILE).read_text(encoding="utf-8"))
     assert seeds == [f"--fingerprint={fp['seed']}"] and fp["platform"] == "macos"
+
+
+@pytest.mark.parametrize("euid", [0, 1000])
+def test_cloak_on_linux_disables_sandbox_once(cloak_bin, monkeypatch, tmp_path, euid):
+    """同 cloakbrowser 包装库：Linux 上沙箱常起不来（容器、关了 user namespace），root 与否都加，且只加一次。"""
+    monkeypatch.setattr(xhs.sys, "platform", "linux")
+    monkeypatch.setattr(os, "geteuid", lambda: euid, raising=False)
+    pw = _RecordingChromium()
+    xhs._launch(pw, headed=False, base=str(tmp_path / "profiles"), proxy=None)
+    assert pw.calls[0]["args"].count("--no-sandbox") == 1
 
 
 def test_cloak_uses_own_data_dir_inside_account_dir(cloak_bin, tmp_path):

@@ -37,6 +37,8 @@ def no_path(tmp_path, monkeypatch):
     # 脚本位置的「项目根」（上三级）是 tmp_path/elsewhere，不能和 cwd 重合
     monkeypatch.setattr(tts, "__file__", str(tmp_path / "elsewhere" / "ws" / "shared" / "scripts" / "tts.py"))
     monkeypatch.setattr(tts.sys, "executable", str(tmp_path / "sys-python" / "python"))
+    # 旧固定目录也隔离掉，不让本机 / CI 机器上的真实文件影响结果
+    monkeypatch.setattr(tts, "LEGACY_EDGE_TTS_DIRS", ())
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
@@ -49,8 +51,6 @@ def test_finds_edge_tts_next_to_interpreter(no_path, monkeypatch):
 
 def test_ignores_venv_in_current_directory(no_path):
     """cwd 可能是任意目录（下载的仓库等），不执行那里的 .venv/bin/edge-tts。"""
-    if Path("/root/miniconda3/bin/edge-tts").exists():
-        pytest.skip("本机有旧路径 /root/miniconda3/bin/edge-tts")
     _fake_edge_tts(no_path / ".venv" / BIN_DIR)
     assert tts.find_edge_tts() is None
 
@@ -63,9 +63,30 @@ def test_finds_edge_tts_in_repo_venv_via_script_location(no_path, monkeypatch):
 
 
 def test_returns_none_when_not_installed(no_path):
-    if Path("/root/miniconda3/bin/edge-tts").exists():
-        pytest.skip("本机有旧路径 /root/miniconda3/bin/edge-tts")
     assert tts.find_edge_tts() is None
+
+
+def test_finds_edge_tts_in_legacy_dir(no_path, monkeypatch):
+    b = _fake_edge_tts(no_path / "legacy-bin")
+    monkeypatch.setattr(tts, "LEGACY_EDGE_TTS_DIRS", (b.parent,))
+    assert _same(tts.find_edge_tts(), b)
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                    reason="要靠 POSIX 目录权限造出「没权限」；root 不受权限限制")
+def test_unreadable_dir_counts_as_not_installed(no_path, monkeypatch):
+    """CI 机器上 /root 这类目录对当前用户不可读：探测要当「没找到」，不能抛 PermissionError。"""
+    locked = no_path / "locked"
+    b = _fake_edge_tts(locked / "bin")
+    monkeypatch.setattr(tts, "LEGACY_EDGE_TTS_DIRS", (b.parent,))
+    locked.chmod(0)
+    try:
+        assert tts.find_edge_tts() is None
+        # 找兼容层解释器时同理：旁边的 python 探测不了就跳过，不抛
+        cmd = tts._edge_tts_cmd(str(b))
+        assert cmd == [str(b)] or cmd[-1].endswith("edge_tts_compat.py")
+    finally:
+        locked.chmod(stat.S_IRWXU)
 
 
 def _speech_rows(tmp_path, monkeypatch, env_text: str, found: bool) -> list[dict]:

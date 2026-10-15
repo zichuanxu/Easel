@@ -62,12 +62,18 @@ def _die(msg: str, code: int = 1) -> "NoReturn":  # type: ignore[valid-type]
     sys.exit(code)
 
 
+# 上游早期部署机的固定位置，保留兼容
+LEGACY_EDGE_TTS_DIRS: tuple[Path, ...] = (Path("/root/miniconda3/bin"),)
+
+
 def find_edge_tts() -> str | None:
     """定位 edge-tts 命令，找不到返回 None。
 
     PATH 之外还找当前解释器旁边、项目 .venv 里的：edge-tts 装在项目 .venv 中，
     而 gateway / agent 起脚本时 PATH 不一定激活了 .venv —— 只查 PATH 会误报「未安装」。
     不找当前目录下的 .venv：cwd 可能是任意目录，不能执行那里的程序。
+    目录没权限（如普通用户看 /root）按没找到算：shutil.which 不抛，别换成 Path.exists()，
+    后者在 Python 3.12 上遇到 EACCES 会抛 PermissionError。
     """
     p = shutil.which("edge-tts")
     if p:
@@ -77,7 +83,7 @@ def find_edge_tts() -> str | None:
     if len(here.parents) > 3:   # <项目根>/skills/shared/scripts/tts.py
         root = here.parents[3]
         dirs += [root / ".venv" / "bin", root / ".venv" / "Scripts"]
-    dirs.append(Path("/root/miniconda3/bin"))
+    dirs += LEGACY_EDGE_TTS_DIRS
     for d in dirs:
         p = shutil.which("edge-tts", path=str(d))
         if p:
@@ -141,7 +147,8 @@ def _edge_tts_cmd(binp: str) -> list[str]:
         cands.append(sb)
     cands.append(sys.executable)
     for py in dict.fromkeys(cands):
-        if (py == sys.executable or Path(py).is_file()) and _has_module(py, "edge_tts"):
+        # os.path.isfile：没权限时返回 False；Path.is_file() 在 3.12 上会抛 PermissionError
+        if (py == sys.executable or os.path.isfile(py)) and _has_module(py, "edge_tts"):
             return [py, compat]
     print("⚠️ 没找到装了 edge_tts 的 Python，跳过兼容层直接调 edge-tts"
           "（2026-10 起可能 403，见 docs/known-issues.md）", file=sys.stderr)
