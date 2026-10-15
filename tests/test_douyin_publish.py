@@ -363,6 +363,56 @@ def test_auto_unconfirmed_records_ledger_with_flag(tmp_path, env, monkeypatch):
     assert pg.find_duplicate("douyin", [a.video], a.title)   # 重复闸门能挡住二发
 
 
+# ---------------- 填表阶段出错（2026-10-15：标题框被挡住，状态卡在「发布中…」、没留现场） ----------------
+def test_fill_stage_error_reports_not_published_with_screenshot(tmp_path, env, monkeypatch):
+    """填表阶段出错：存现场、状态写 error「未发布」并带上原因、退出 4；不交接、不读回、不记台账。"""
+    def blocked(page, t, d, tags):
+        raise RuntimeError("要点的元素被别的东西挡住了，没有点（挡在上面的是 div.semi-modal-mask）")
+    monkeypatch.setattr(dy, "_fill_title_desc", blocked)
+    dumps, handoff, readback = [], [], []
+    monkeypatch.setattr(dy, "_dump_publish_fail", lambda page, tag="publish-fail": dumps.append(tag))
+    monkeypatch.setattr(semi_auto, "await_human_publish", lambda *a, **k: handoff.append(1))
+    monkeypatch.setattr(platform_readback, "verify_douyin_publish", lambda *a, **k: readback.append(1))
+    monkeypatch.setattr(dy, "_readback_verify", lambda *a, **k: readback.append(1))
+    a = _args(tmp_path)
+    assert _run(a) == dy.EXIT_NOT_PUBLISHED
+    st = json.loads(Path(a.status_file).read_text(encoding="utf-8"))
+    assert st["state"] == "error" and "未发布" in st["message"] and "semi-modal-mask" in st["message"]
+    assert dumps == ["publish-error"] and not handoff and not readback
+    assert env["ctx"].closed and env["clicks"] == 0
+    assert not pg.find_duplicate("douyin", [a.video], a.title)
+
+
+def test_error_after_handoff_started_goes_to_readback(tmp_path, env, monkeypatch):
+    """交接开始后（人可能已经点了发布）才出的异常：按未确认走读回核验，不能直接判「未发布」。"""
+    def boom(page, **kw):
+        raise RuntimeError("页面结构变了")
+    monkeypatch.setattr(semi_auto, "await_human_publish", boom)
+    monkeypatch.setattr(dy, "_dump_publish_fail", lambda page, tag="publish-fail": None)
+    item = types.SimpleNamespace(platform_content_id="777", status="published")
+    seen = []
+
+    def reopen(p, a, title, **k):
+        seen.append(title)
+        return platform_readback.ReadbackResult(outcome="verified", matched=item, evidence={})
+    monkeypatch.setattr(dy, "_readback_verify", reopen)
+    a = _args(tmp_path)
+    assert dy._publish(a, "video") == 0
+    assert seen == [a.title]
+
+
+def test_form_typing_waits_until_field_is_clickable(monkeypatch):
+    """填表前先等输入框露出来（封面弹窗收起、遮罩淡出要时间），再点；不是一上来就点。"""
+    order = []
+    monkeypatch.setattr(dy.human_input, "wait_until_clickable", lambda page, el, **k: order.append("wait"))
+    monkeypatch.setattr(dy.human_input, "click", lambda page, el, *a, **k: order.append("click"))
+    monkeypatch.setattr(dy.human_input, "pause", lambda *a: None)
+    monkeypatch.setattr(dy.human_input, "type_text", lambda page, text: order.append("type"))
+    page = types.SimpleNamespace(keyboard=types.SimpleNamespace(press=lambda k: None))
+    dy._human_type(page, object(), "标题", delay_ms=(65, 140))
+    assert order == ["wait", "click", "type"]
+
+
 def test_whoami_blocked_in_cooldown_without_browser(tmp_path, env, capsys):
     pg.set_cooldown("douyin", "测试冷却")
     with pytest.raises(SystemExit) as e:
