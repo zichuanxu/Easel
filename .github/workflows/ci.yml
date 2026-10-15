@@ -225,12 +225,21 @@ jobs:
         run: ./setup.ps1 -OpenClaw -NonInteractive
 
       - name: doctor
+        if: runner.os != 'Windows'
         shell: bash
         # 非交互且没有 .venv 时 setup.sh 装进当前 Python（这里是 setup-python 的），easel 在 PATH 上
         run: |
           if [ -x .venv/bin/easel ]; then .venv/bin/easel doctor
-          elif [ -f .venv/Scripts/easel.exe ]; then .venv/Scripts/easel.exe doctor
           else easel doctor; fi
+
+      # setup.ps1 用 winget 装的命令（ffmpeg 等）只写进注册表 PATH，用户新开终端才生效；
+      # Actions 的每个 step 继承的是 runner 进程的 PATH，这里同 setup.ps1 一样补上注册表里的。
+      - name: doctor (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:Path = $env:Path + ';' + [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+          .venv\Scripts\easel.exe doctor
 
       - name: Upload install report
         if: always()
