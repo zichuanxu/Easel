@@ -125,9 +125,24 @@ def calc_title_length(s: str) -> int:
     return (byte_len + 1) // 2
 
 
+# 发布运行中的状态文件：_publish 过了发布闸门才设置（web_publisher 同款）。之后任何 _die / 处罚退出都先把
+# 原因落成 error 终态，web / agent 看到的状态不会停在 starting「发布中」。发布路径上没有吞 SystemExit 的地方，
+# 所以不会提前误报 error。
+_ACTIVE_PUBLISH_STATUS_FILE: str | None = None
+
+
+def _mark_publish_error(msg: str) -> None:
+    if _ACTIVE_PUBLISH_STATUS_FILE:
+        try:
+            login_state.write_status(_ACTIVE_PUBLISH_STATUS_FILE, "error", msg[:300])
+        except OSError:
+            pass   # 写不进（如 Windows 上与 web 轮询读撞车）也要按原退出码退出
+
+
 def _die(msg: str, code: int = 1) -> None:
     print(f"ERROR: {msg}", file=sys.stderr)
     semi_auto.note_exit_reason(msg)
+    _mark_publish_error(msg)
     sys.exit(code)
 
 
@@ -988,19 +1003,25 @@ def _scan_block_toasts(page) -> str | None:
     return None
 
 
+def _exit_if_blocked(page) -> None:
+    """命中平台处罚提示（_scan_block_toasts 已设冷却）→ 状态落 error（带原文）并退出 9，不重试。"""
+    text = _scan_block_toasts(page)
+    if text:
+        _mark_publish_error(f"小红书提示处罚/限制：{text[:120]}。已设为冷却，请勿重试，先向用户汇报。")
+        sys.exit(publish_guard.EXIT_COOLDOWN)
+
+
 def _wait_publish_success(page, timeout_s: int = 40) -> None:
     """（自动点击逃生口路径）点发布后等成功信号；期间扫 toast，命中处罚提示 → 设冷却并 exit 9。"""
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        if _scan_block_toasts(page):
-            sys.exit(publish_guard.EXIT_COOLDOWN)
+        _exit_if_blocked(page)
         how = _publish_succeeded(page)
         if how:
             print(f"✅ 发布成功（{how}）")
             return
         page.wait_for_timeout(500)
-    if _scan_block_toasts(page):
-        sys.exit(publish_guard.EXIT_COOLDOWN)
+    _exit_if_blocked(page)
     _die("发布未确认成功：点击发布后未跳离发布页/未见成功提示（不要自动重试，请到创作中心核对）。" + _diag_after_publish(page))
 
 
@@ -1785,6 +1806,8 @@ def _record_unconfirmed(media, title: str) -> None:
 
 
 def _publish(a, kind: str) -> int:
+    global _ACTIVE_PUBLISH_STATUS_FILE
+    _ACTIVE_PUBLISH_STATUS_FILE = None   # 上一次运行（同进程）留下的不算；过了发布闸门再设
     sf_pub = getattr(a, "status_file", None)
     if sf_pub:
         semi_auto.guard_status_on_exit(sf_pub)   # 任何退出路径：状态文件停在非终态时补写 error
@@ -1822,6 +1845,7 @@ def _publish(a, kind: str) -> int:
     # 发布闸门：平台冷却（exit 9）+ 重复发布（exit 8）。放在起浏览器之前。
     publish_guard.guard_before_publish("xiaohongshu", media, a.title,
                                        allow_repost=getattr(a, "allow_repost", False))
+    _ACTIVE_PUBLISH_STATUS_FILE = sf_pub or None   # 从这里起是发布运行：之后每个退出都落 error 终态
     if not left:
         _die(f"小红书发得太密，这次不发：{why}", 5)
 
@@ -1871,7 +1895,8 @@ def _publish(a, kind: str) -> int:
                 publish_guard.record_publish("xiaohongshu", media, a.title)
                 semi_auto.report_final(sf_pub, "success", "发布成功（已检测到「发布成功」）。")
             except PWTimeout as e:
-                _die(f"步骤超时（选择器可能已失效，检查 SELECTORS）：{e}")
+                # 自动逃生口下可能是点过发布之后才超时：提示放在 {e} 前面，状态消息截到 300 字也不会丢
+                _die(f"步骤超时，没有确认发布结果（请先到创作中心核对，不要自动重试；选择器可能已失效，检查 SELECTORS）：{e}")
             finally:
                 if not a.keep_open:
                     ctx.close()

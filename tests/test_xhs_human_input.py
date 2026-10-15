@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import sys
@@ -545,4 +546,141 @@ def test_zhihu_comments_fetch_blocked_in_cooldown(monkeypatch):
     monkeypatch.setitem(sys.modules, "playwright.sync_api", None)
     with pytest.raises(SystemExit) as e:
         zhihu_comments_fetch.fetch_comments("https://zhuanlan.zhihu.com/p/1")
+    assert e.value.code == publish_guard.EXIT_COOLDOWN
+
+
+# ── 发布运行中的每个退出都要把状态落成 error（不能停在 web 写的 starting「发布中」） ─────
+
+
+class _PubPage:
+    url = "https://creator.xiaohongshu.com/publish/publish"
+
+    def set_default_timeout(self, *_a):
+        pass
+
+    def goto(self, *_a, **_k):
+        pass
+
+    def wait_for_timeout(self, *_a):
+        pass
+
+    def query_selector(self, _s):          # 编辑页元素一律找不到：真实 _fill_form 跑到这里就该 _die
+        return None
+
+
+@pytest.fixture
+def pub_env(tmp_path, monkeypatch):
+    """_publish 的假浏览器：已登录、tab / 上传放行，表单走真实 _fill_and_submit。返回 (args, 状态文件, page)。"""
+    page = _PubPage()
+    ctx = types.SimpleNamespace(pages=[page], close=lambda: None)
+    fake = types.ModuleType("playwright.sync_api")
+    fake.sync_playwright = contextlib.nullcontext
+    fake.TimeoutError = type("PWTimeout", (Exception,), {})
+    monkeypatch.setitem(sys.modules, "playwright", types.ModuleType("playwright"))
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake)
+    monkeypatch.setattr(xhs, "_launch", lambda *_a, **_k: ctx)
+    monkeypatch.setattr(xhs, "_query_safe", lambda *_a: object())
+    monkeypatch.setattr(xhs, "activity_budget", lambda *_a: (3, ""))
+    monkeypatch.setattr(xhs, "record_activity", lambda *_a: None)
+    monkeypatch.setattr(xhs, "_click_publish_tab", lambda *_a: None)
+    monkeypatch.setattr(xhs, "_upload_images", lambda *_a: None)
+    monkeypatch.setattr(xhs.human_input, "pause", lambda *_a: None)
+    monkeypatch.setattr(semi_auto, "guard_status_on_exit", lambda *_a: None)   # 不登记进程退出钩子
+    monkeypatch.setattr("calendar_ops.record_publish", lambda *a, **k: None)    # 不写真实内容日历
+    monkeypatch.setattr(xhs, "_ACTIVE_PUBLISH_STATUS_FILE", None)               # 测试结束复原，不串到别的用例
+    monkeypatch.delenv("EASEL_PUBLISH_DEBUG", raising=False)                    # 失败截图不写进仓库 outputs/
+    sf = tmp_path / "st.json"
+    return _pub_args(tmp_path, status_file=str(sf), handoff_timeout=5), sf, page
+
+
+def _st(sf):
+    return json.loads(Path(sf).read_text(encoding="utf-8"))
+
+
+def test_publish_not_logged_in_writes_error_status(pub_env, monkeypatch):
+    a, sf, page = pub_env
+    monkeypatch.setattr(xhs, "_query_safe", lambda *_a: None)
+    page.url = "https://creator.xiaohongshu.com/login"
+    with pytest.raises(SystemExit) as e:
+        xhs.cmd_publish(a)
+    assert e.value.code == 1
+    assert _st(sf)["state"] == "error" and "未登录" in _st(sf)["message"]
+
+
+def test_publish_form_failure_writes_error_status(pub_env):
+    """真实 _fill_and_submit → _fill_form 找不到标题框 → _die：状态落 error 且是同一条原因。"""
+    a, sf, _page = pub_env
+    with pytest.raises(SystemExit) as e:
+        xhs.cmd_publish(a)
+    assert e.value.code == 1
+    assert _st(sf)["state"] == "error" and "标题输入框" in _st(sf)["message"]
+
+
+def test_publish_step_timeout_writes_error_status(pub_env, monkeypatch):
+    a, sf, _page = pub_env
+    pw_timeout = sys.modules["playwright.sync_api"].TimeoutError
+    monkeypatch.setattr(xhs, "_upload_images", lambda *_a: (_ for _ in ()).throw(pw_timeout("上传卡住")))
+    with pytest.raises(SystemExit):
+        xhs.cmd_publish(a)
+    assert _st(sf)["state"] == "error" and "步骤超时" in _st(sf)["message"]
+
+
+def test_publish_rate_gate_writes_error_status(pub_env, monkeypatch):
+    a, sf, _page = pub_env
+    monkeypatch.setattr(xhs, "activity_budget", lambda *_a: (0, "太密"))
+    with pytest.raises(SystemExit) as e:
+        xhs.cmd_publish(a)
+    assert e.value.code == 5
+    assert _st(sf)["state"] == "error" and "太密" in _st(sf)["message"]
+
+
+def test_auto_publish_block_toast_writes_cooldown_status(pub_env, monkeypatch):
+    a, sf, _page = pub_env
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "1")
+    monkeypatch.setattr(xhs, "_fill_form", lambda *_a: "")
+    monkeypatch.setattr(xhs, "_wait_publish_clickable", lambda *_a, **_k: ("old", object()))
+    monkeypatch.setattr(xhs.human_input, "click", lambda *_a, **_k: None)
+    monkeypatch.setattr(xhs, "_confirm_publish_dialog", lambda *_a: None)
+    monkeypatch.setattr(semi_auto, "_toast_texts", lambda *_a: ["你的发布功能已被限制"])
+    with pytest.raises(SystemExit) as e:
+        xhs.cmd_publish(a)
+    assert e.value.code == publish_guard.EXIT_COOLDOWN and publish_guard.active_cooldown("xiaohongshu")
+    st = _st(sf)
+    assert st["state"] == "error" and st["message"].startswith("小红书提示处罚") and "已被限制" in st["message"]
+
+
+def test_semi_publish_success_still_ends_in_success(pub_env, monkeypatch):
+    a, sf, _page = pub_env
+    monkeypatch.setattr(xhs, "_fill_form", lambda *_a: "")
+    monkeypatch.setattr(semi_auto, "await_human_publish", lambda *_a, **_k: "published")
+    assert xhs.cmd_publish(a) == 0
+    assert _st(sf)["state"] == "success"
+
+
+def test_validation_exit_ignores_stale_status_file(pub_env, monkeypatch, tmp_path):
+    """参数校验失败还没进入发布运行：不写状态，也不写进上一次运行残留的状态文件。"""
+    a, sf, _page = pub_env
+    stale = tmp_path / "stale.json"
+    monkeypatch.setattr(xhs, "_ACTIVE_PUBLISH_STATUS_FILE", str(stale))
+    a.title = ""
+    with pytest.raises(SystemExit):
+        xhs.cmd_publish(a)
+    assert not stale.exists() and not sf.exists()
+
+
+def test_status_write_failure_keeps_exit_codes(monkeypatch, tmp_path):
+    import login_state
+
+    def boom(*_a, **_k):
+        raise PermissionError("模拟 os.replace 与读者撞车")
+    monkeypatch.setattr(login_state, "write_status", boom)
+    monkeypatch.setattr(xhs, "_ACTIVE_PUBLISH_STATUS_FILE", str(tmp_path / "st.json"))
+    with pytest.raises(SystemExit) as e:
+        xhs._die("随便什么原因", 3)
+    assert e.value.code == 3
+    monkeypatch.setattr(semi_auto, "_toast_texts", lambda *_a: ["你的发布功能已被限制"])
+    page = types.SimpleNamespace(url="https://creator.xiaohongshu.com/publish/publish",
+                                 query_selector=lambda _s: object(), wait_for_timeout=lambda _ms: None)
+    with pytest.raises(SystemExit) as e:
+        xhs._wait_publish_success(page, 1)
     assert e.value.code == publish_guard.EXIT_COOLDOWN
