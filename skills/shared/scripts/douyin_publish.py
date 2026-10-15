@@ -134,9 +134,15 @@ AI_DECLARE_FAILED_MSG = ("没能勾上「自主声明 → 内容由AI生成」�
 TOAST_SELECTORS = tuple(semi_auto.DEFAULT_TOAST_SELECTORS) + (SELECTORS["toast"],)
 
 
-def _die(msg: str, code: int = 1) -> None:
+def _die(msg: str, code: int = 1, sf=None) -> None:
+    """打印原因并退出。sf（状态文件）非空时先把同一条原因落成 error 终态——发布写过
+    「starting / 发布中…」之后的退出都要带上 sf，否则 web / agent 看到的状态永远停在发布中。"""
     print(f"ERROR: {msg}", file=sys.stderr)
     semi_auto.note_exit_reason(msg)
+    try:
+        login_state.write_status(sf, "error", msg)   # sf 为空时 write_status 直接跳过
+    except OSError:
+        pass                                         # 状态写不进也要按原退出码退出
     sys.exit(code)
 
 
@@ -326,13 +332,13 @@ def _human_type(page, el, text: str, delay_ms: tuple[int, int] | None = None) ->
         page.wait_for_timeout(15)
 
 
-def _go_upload(page):
+def _go_upload(page, sf=None):
     """首页点「高清发布」→ 等进 content/upload。REF goUploadPage。"""
     if "content/upload" in page.url:
         return
     btn = page.query_selector(SELECTORS["hd_publish"])
     if not btn:
-        _die("未找到「高清发布」按钮（检查 SELECTORS.hd_publish，或未登录）")
+        _die("未找到「高清发布」按钮（检查 SELECTORS.hd_publish，或未登录）", sf=sf)
     human_input.click(page, btn)
     deadline = time.time() + 15
     while time.time() < deadline:
@@ -340,16 +346,16 @@ def _go_upload(page):
             page.wait_for_timeout(800)
             return
         page.wait_for_timeout(500)
-    _die("点击高清发布后未进入上传页（content/upload）")
+    _die("点击高清发布后未进入上传页（content/upload）", sf=sf)
 
 
-def _switch_tab(page, kind: str):
+def _switch_tab(page, kind: str, sf=None):
     """切「发布视频/发布图文」tab。REF switchPublishType。"""
     sel = SELECTORS["tab_video"] if kind == "video" else SELECTORS["tab_imagetext"]
     try:
         page.wait_for_selector(sel, timeout=10000)
     except Exception:
-        _die(f"未找到发布 tab（{kind}），检查 SELECTORS.tab_*")
+        _die(f"未找到发布 tab（{kind}），检查 SELECTORS.tab_*", sf=sf)
     el = page.query_selector(sel)
     if el:
         human_input.click(page, el)
@@ -358,16 +364,16 @@ def _switch_tab(page, kind: str):
     page.wait_for_timeout(400)
 
 
-def _upload_files(page, paths: list[str]):
+def _upload_files(page, paths: list[str], sf=None):
     """隐藏 file input 塞文件（比拦截 filechooser 稳）。REF _clickAndChooseFile。"""
     fi = page.query_selector(SELECTORS["file_input"]) or page.query_selector(SELECTORS["file_input_fallback"])
     if not fi:
-        _die("未找到上传 file input（检查 SELECTORS.file_input）")
+        _die("未找到上传 file input（检查 SELECTORS.file_input）", sf=sf)
     fi.set_input_files(paths)
     page.wait_for_timeout(1000)
 
 
-def _wait_video_processed(page, timeout_s: int = 480):
+def _wait_video_processed(page, timeout_s: int = 480, sf=None):
     """等上传/转码完成 + 编辑器就绪。编辑页（content/post/video）渲染完成、标题输入框可交互
     即视为基线就绪信号，不依赖 uploading 进度条元素是否存在：真机实测（2026-09）编辑页存在
     class 含 'uploading-container' 的**常驻**元素，若把『uploading 消失』当作就绪条件会死等到
@@ -402,7 +408,7 @@ def _wait_video_processed(page, timeout_s: int = 480):
             page.wait_for_timeout(1200)       # 编辑器完全可交互
             return
         page.wait_for_timeout(2000)
-    _die(f"视频上传/转码超时或编辑器未就绪（{timeout_s}s）")
+    _die(f"视频上传/转码超时或编辑器未就绪（{timeout_s}s）", sf=sf)
 
 
 def _select_ai_cover(page):
@@ -534,7 +540,12 @@ def _check_block(page, sf=None) -> None:
     for text in texts:
         if publish_guard.classify_block_text(text):
             publish_guard.on_block_detected("douyin", text)
-            login_state.write_status(sf, "error", f"抖音提示处罚/限制：{text[:120]}。已设为冷却，请勿重试，先向用户汇报。")
+            # 写状态失败（如 Windows 上与 web 轮询读撞车）也必须退出 9：
+            # _wait_toast 外层的 except Exception 会吞掉 OSError，冷却退出就丢了
+            try:
+                login_state.write_status(sf, "error", f"抖音提示处罚/限制：{text[:120]}。已设为冷却，请勿重试，先向用户汇报。")
+            except OSError:
+                pass
             sys.exit(publish_guard.EXIT_COOLDOWN)
 
 
@@ -551,10 +562,10 @@ def _is_published(page) -> bool:
         return False
 
 
-def _fill_title_desc(page, title: str, desc: str, tags: list[str]):
+def _fill_title_desc(page, title: str, desc: str, tags: list[str], sf=None):
     ti = page.query_selector(SELECTORS["title_input"])
     if not ti:
-        _die("未找到标题输入框（检查 SELECTORS.title_input）")
+        _die("未找到标题输入框（检查 SELECTORS.title_input）", sf=sf)
     _human_type(page, ti, title, delay_ms=(65, 140))     # 随机打字节奏
     human_pace.pace("field-switch")                      # 标题→简介的自然切换停顿
     # 抖音话题写进简介正文（# 自动联想成话题）
@@ -580,7 +591,7 @@ def _find_publish_button(page):
     return None
 
 
-def _wait_publish_button_ready(page, timeout_s: int = 180):
+def _wait_publish_button_ready(page, timeout_s: int = 180, sf=None):
     """等「发布」按钮进入可提交稳态（提交前独立收敛阶段，绝不在按钮未就绪时点——
     防「点了但没生效」的静默假提交）。就绪 = 按钮可见 + 非 disabled/aria-disabled，且**连续两次**
     检查通过（间隔 1.5s）。超时按未提交处理并 dump 现场。"""
@@ -601,13 +612,13 @@ def _wait_publish_button_ready(page, timeout_s: int = 180):
             return btn
         page.wait_for_timeout(1500)
     _dump_publish_fail(page, "publish-button-not-ready")
-    _die(f"发布按钮迟迟未就绪（上传未完成/表单校验未过），已按未提交处理（{timeout_s}s）")
+    _die(f"发布按钮迟迟未就绪（上传未完成/表单校验未过），已按未提交处理（{timeout_s}s）", sf=sf)
 
 
-def _click_publish(page, content_length: int = 0):
+def _click_publish(page, content_length: int = 0, sf=None):
     """单次提交契约：整个发布流程**唯一一次**点击「发布」。
     点前等按钮就绪 → 复核/提交双停顿 → 点击。REF publishVideo step8。"""
-    btn = _wait_publish_button_ready(page)
+    btn = _wait_publish_button_ready(page, sf=sf)
     human_pace.pause_before_commit(content_length)
     page.wait_for_timeout(300)
     human_input.click(page, btn)
@@ -627,9 +638,11 @@ def _dump_publish_fail(page, tag: str = "publish-fail") -> None:
         pass
 
 
-def _wait_toast(page, timeout_s: int = 20) -> None:
+def _wait_toast(page, timeout_s: int = 20, sf=None) -> None:
     """判发布结果：①URL 跳内容管理页(content/manage) = 成功；②toast 含「成功」= 成功；
-    ③toast 含失败/错误类词 = 失败(dump)；超时未确认 → dump 后按未确认处理（不误报成功）。"""
+    ③toast 含失败/错误类词 = 失败(dump)；超时未确认 → dump 后按未确认处理（不误报成功）。
+    sf 只交给 _check_block（冷却退出 9 要落状态）；这里的 _die 会被 _publish 收尾段接住、
+    转去读回核验，不能提前把状态写成 error。"""
     start_url = page.url
     deadline = time.time() + timeout_s
     while time.time() < deadline:
@@ -639,7 +652,7 @@ def _wait_toast(page, timeout_s: int = 20) -> None:
                                            and url != start_url):
                 print(f"✅ 发布成功（已跳转：{url[:70]}）")
                 return
-            _check_block(page)          # 处罚提示 → 冷却 + 退出 9（SystemExit，调用方不得吞）
+            _check_block(page, sf)      # 处罚提示 → 冷却 + 退出 9（SystemExit，调用方不得吞）
             t = page.query_selector(SELECTORS["toast"])
             if t:
                 txt = (t.inner_text() or "").strip()
@@ -1422,22 +1435,23 @@ def _publish(a, kind: str) -> int:
         try:
             page.goto(HOME_URL, wait_until="domcontentloaded")
             _wait_ready(page)
+            # 从这里起已写过「starting」：每个 _die 都要带 sf=sf 落 error 终态
             if not _logged_in(page):
-                _die("未登录，请先 `login` 扫码")
+                _die("未登录，请先 `login` 扫码", sf=sf)
             _check_block(page, sf)
             # 发前快照：记录当前作品 id 集，读回时用于排除旧作品
             snapshot_ids = platform_readback.capture_douyin_snapshot(page)
-            _go_upload(page)
+            _go_upload(page, sf=sf)
             human_pace.pace("task-switch")               # 进编辑器的自然停顿
-            _switch_tab(page, "video" if kind == "video" else "imagetext")
-            _upload_files(page, media)
+            _switch_tab(page, "video" if kind == "video" else "imagetext", sf=sf)
+            _upload_files(page, media, sf=sf)
             human_pace.pace("field-switch")              # 上传后到填写前
             if kind == "video":
-                _wait_video_processed(page)
+                _wait_video_processed(page, sf=sf)
                 _check_block(page, sf)
                 _select_ai_cover(page)
                 _set_dual_cover(page)
-            _fill_title_desc(page, a.title, a.content or "", tags)
+            _fill_title_desc(page, a.title, a.content or "", tags, sf=sf)
             # AI 声明（选择器未校准）：半自动勾不上只提示人手动勾；自动点击模式勾不上 fail-closed
             ai_manual = False
             if declare_ai and not _declare_ai(page):
@@ -1468,7 +1482,7 @@ def _publish(a, kind: str) -> int:
                     abort = handoff
             else:
                 # ---- 逃生口：脚本点发布（单次点击，无自动重试）----
-                _click_publish(page, len(a.title) + len(a.content or ""))
+                _click_publish(page, len(a.title) + len(a.content or ""), sf=sf)
                 page.wait_for_timeout(1500)
                 _check_block(page, sf)
                 # 点击后轮询等风控墙浮现（2026-09-12 真机发现：墙的渲染晚于 2.5s，
@@ -1502,7 +1516,7 @@ def _publish(a, kind: str) -> int:
                                 _dump_publish_fail(page, "publish-sms-fail")
                                 published = False
                         if published is None:
-                            _wait_toast(page, timeout_s=40)
+                            _wait_toast(page, timeout_s=40, sf=sf)
                             published = True
                     except SystemExit as e:
                         if e.code == publish_guard.EXIT_COOLDOWN:

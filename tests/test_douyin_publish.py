@@ -6,6 +6,7 @@
 - 默认半自动：脚本不点发布，await_human_publish 交接；published → 读回 → 记台账；blocked → 9；closed/timeout → 5；
 - 自动点击逃生口（EASEL_DOMESTIC_AUTO_PUBLISH=1）：只点一次；AI 声明勾不上 → 6；toast 命中处罚 → 冷却 + 9。
 """
+import functools
 import json
 import sys
 import types
@@ -20,6 +21,10 @@ import platform_readback
 import publish_guard as pg
 import real_browser
 import semi_auto
+
+# env 会把这些发布步骤换成桩；状态终态测试要用回真实实现
+_REAL = {n: getattr(dy, n) for n in ("_go_upload", "_switch_tab", "_upload_files", "_wait_video_processed",
+                                     "_fill_title_desc", "_click_publish", "_wait_toast")}
 
 
 @pytest.fixture(autouse=True)
@@ -50,6 +55,12 @@ class FakePage:
 
     def is_closed(self):
         return False
+
+    def query_selector(self, _sel):          # 编辑页元素一律找不到（真实步骤跑到这里就该 _die）
+        return None
+
+    def wait_for_selector(self, sel, **_k):
+        raise TimeoutError(f"fake: {sel}")
 
     def locator(self, sel):
         page = self
@@ -96,16 +107,16 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(dy, "_launch", fake_launch)
     monkeypatch.setattr(dy, "_wait_ready", lambda page: None)
     monkeypatch.setattr(dy, "_logged_in", lambda page: True)
-    monkeypatch.setattr(dy, "_go_upload", lambda page: None)
-    monkeypatch.setattr(dy, "_switch_tab", lambda page, kind: None)
-    monkeypatch.setattr(dy, "_upload_files", lambda page, paths: None)
-    monkeypatch.setattr(dy, "_wait_video_processed", lambda page: None)
+    monkeypatch.setattr(dy, "_go_upload", lambda page, sf=None: None)
+    monkeypatch.setattr(dy, "_switch_tab", lambda page, kind, sf=None: None)
+    monkeypatch.setattr(dy, "_upload_files", lambda page, paths, sf=None: None)
+    monkeypatch.setattr(dy, "_wait_video_processed", lambda page, sf=None: None)
     monkeypatch.setattr(dy, "_select_ai_cover", lambda page: None)
     monkeypatch.setattr(dy, "_set_dual_cover", lambda page: None)
-    monkeypatch.setattr(dy, "_fill_title_desc", lambda page, t, d, tags: None)
+    monkeypatch.setattr(dy, "_fill_title_desc", lambda page, t, d, tags, sf=None: None)
     monkeypatch.setattr(dy.human_pace, "pace", lambda *a, **k: None)
     monkeypatch.setattr(dy, "_verify_wall", lambda page: False)
-    monkeypatch.setattr(dy, "_wait_toast", lambda page, timeout_s=20: None)
+    monkeypatch.setattr(dy, "_wait_toast", lambda page, timeout_s=20, sf=None: None)
     monkeypatch.setattr(platform_readback, "capture_douyin_snapshot", lambda page: set())
     item = types.SimpleNamespace(platform_content_id="777", status="published")
     monkeypatch.setattr(platform_readback, "verify_douyin_publish",
@@ -113,7 +124,7 @@ def env(tmp_path, monkeypatch):
                             outcome="verified", matched=item, evidence={}))
     monkeypatch.setattr(dy, "_declare_ai", lambda page: True)
 
-    def fake_click(page, n=0):
+    def fake_click(page, n=0, sf=None):
         rec["clicks"] += 1
     monkeypatch.setattr(dy, "_click_publish", fake_click)
     return rec
@@ -269,7 +280,7 @@ def test_auto_mode_block_toast_after_click_exits_9(tmp_path, env, monkeypatch):
     monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "1")
     page = env["page"]
 
-    def click_then_ban(p, n=0):
+    def click_then_ban(p, n=0, sf=None):
         env["clicks"] += 1
         page.toasts = ["抖音投稿功能已被封禁"]
     monkeypatch.setattr(dy, "_click_publish", click_then_ban)
@@ -353,7 +364,8 @@ def test_semi_unverified_readback_ends_in_error_never_success(tmp_path, env, mon
 def test_auto_unconfirmed_records_ledger_with_flag(tmp_path, env, monkeypatch):
     monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "1")
     pw_timeout = sys.modules["playwright.sync_api"].TimeoutError
-    monkeypatch.setattr(dy, "_wait_toast", lambda page, timeout_s=20: (_ for _ in ()).throw(pw_timeout("x")))
+    monkeypatch.setattr(dy, "_wait_toast",
+                        lambda page, timeout_s=20, sf=None: (_ for _ in ()).throw(pw_timeout("x")))
     monkeypatch.setattr(platform_readback, "verify_douyin_publish",
                         lambda page, **k: platform_readback.ReadbackResult(outcome="unverified"))
     a = _args(tmp_path)
@@ -369,3 +381,111 @@ def test_whoami_blocked_in_cooldown_without_browser(tmp_path, env, capsys):
         dy.cmd_whoami(types.SimpleNamespace(profile_base=None, proxy=None, no_proxy=True))
     assert e.value.code == pg.EXIT_COOLDOWN and env["launch"] == []
     assert "冷却" in capsys.readouterr().err
+
+
+# ---------------- 写过「发布中…」之后，每条 _die 退出都要先落 error（不能永远停在 starting） ----------------
+def _status(a):
+    return json.loads(Path(a.status_file).read_text(encoding="utf-8"))
+
+
+def test_not_logged_in_writes_error_status(tmp_path, env, monkeypatch):
+    monkeypatch.setattr(dy, "_logged_in", lambda page: False)
+    a = _args(tmp_path)
+    assert _run(a) == 1
+    st = _status(a)
+    assert st["state"] == "error" and "未登录" in st["message"]
+
+
+@pytest.mark.parametrize("step,needle", [
+    ("_go_upload", "高清发布"),
+    ("_switch_tab", "发布 tab"),
+    ("_upload_files", "file input"),
+    ("_wait_video_processed", "转码超时"),
+    ("_fill_title_desc", "标题输入框"),
+])
+def test_editor_step_failure_writes_error_status(tmp_path, env, monkeypatch, step, needle):
+    real = _REAL[step]
+    if step == "_wait_video_processed":
+        real = functools.partial(real, timeout_s=0)      # 立刻超时，不真等 480s
+    monkeypatch.setattr(dy, step, real)                 # 只换回这一步：FakePage 找不到元素 → _die
+    a = _args(tmp_path)
+    assert _run(a) == 1
+    st = _status(a)
+    assert st["state"] == "error" and needle in st["message"]
+
+
+def test_auto_mode_publish_button_never_ready_writes_error_status(tmp_path, env, monkeypatch):
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "1")
+    monkeypatch.setattr(dy, "_click_publish", _REAL["_click_publish"])
+    monkeypatch.setattr(dy, "_wait_publish_button_ready",
+                        functools.partial(dy._wait_publish_button_ready, timeout_s=0))   # 立刻超时
+    a = _args(tmp_path)
+    assert _run(a) == 1
+    st = _status(a)
+    assert st["state"] == "error" and "发布按钮迟迟未就绪" in st["message"]
+    assert not pg.find_duplicate("douyin", [a.video], a.title)   # 没点发布 → 不记台账
+
+
+def test_wait_toast_ban_writes_cooldown_status(tmp_path):
+    sf = tmp_path / "st.json"
+    with pytest.raises(SystemExit) as e:
+        dy._wait_toast(FakePage(toasts=["抖音投稿功能已被封禁"]), timeout_s=5, sf=str(sf))
+    assert e.value.code == pg.EXIT_COOLDOWN and pg.active_cooldown("douyin")
+    st = json.loads(sf.read_text(encoding="utf-8"))
+    assert st["state"] == "error" and "处罚" in st["message"]
+
+
+def _record_states(monkeypatch):
+    """记录写进状态文件的 state 序列（sf 为空的写入不算）。"""
+    import login_state
+    seen, orig = [], login_state.write_status
+
+    def rec(path, state, *a, **k):
+        if path:
+            seen.append(state)
+        return orig(path, state, *a, **k)
+    monkeypatch.setattr(login_state, "write_status", rec)
+    return seen
+
+
+def test_auto_mode_unconfirmed_toast_never_flashes_error_before_readback(tmp_path, env, monkeypatch):
+    """收尾段 _wait_toast 的 _die 会被接住、转读回核验：读回成功时状态只能 starting → success，
+    不能先闪一下 error（web 看到 error 就当终态了）。"""
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "1")
+    monkeypatch.setattr(dy, "_wait_toast",          # 立刻「结果未确认」→ _die(5)，被收尾段接住
+                        lambda page, timeout_s=20, sf=None: _REAL["_wait_toast"](page, timeout_s=0, sf=sf))
+    seen = _record_states(monkeypatch)
+    assert dy._publish(_args(tmp_path), "video") == 0          # env 的读回桩返回 verified
+    assert seen == ["starting", "success"]
+
+
+def test_auto_mode_late_ban_toast_keeps_cooldown_status(tmp_path, env, monkeypatch):
+    """处罚 toast 到收尾等待时才弹：退出 9，状态是冷却那条 error，不被后续写入覆盖。"""
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "1")
+    page = env["page"]
+
+    def ban_after_click_check(p):            # 点击后那次即时 _check_block 已过，这时处罚 toast 才浮现
+        page.toasts = ["抖音投稿功能已被封禁"]
+        return False
+    monkeypatch.setattr(dy, "_verify_wall", ban_after_click_check)
+    monkeypatch.setattr(dy, "_wait_toast",
+                        lambda page, timeout_s=20, sf=None: _REAL["_wait_toast"](page, timeout_s=1, sf=sf))
+    a = _args(tmp_path)
+    assert _run(a) == pg.EXIT_COOLDOWN and env["clicks"] == 1
+    st = _status(a)
+    assert st["state"] == "error" and "处罚" in st["message"] and pg.active_cooldown("douyin")
+
+
+def test_status_write_failure_keeps_exit_code(tmp_path, monkeypatch):
+    import login_state
+
+    def boom(*_a, **_k):
+        raise PermissionError("模拟 Windows 上 os.replace 与读者撞车")
+    monkeypatch.setattr(login_state, "write_status", boom)
+    sf = str(tmp_path / "st.json")
+    with pytest.raises(SystemExit) as e:
+        dy._die("随便什么原因", 3, sf=sf)
+    assert e.value.code == 3
+    with pytest.raises(SystemExit) as e:          # _wait_toast 的 except Exception 不能把冷却退出 9 吞掉
+        dy._wait_toast(FakePage(toasts=["抖音投稿功能已被封禁"]), timeout_s=1, sf=sf)
+    assert e.value.code == pg.EXIT_COOLDOWN
