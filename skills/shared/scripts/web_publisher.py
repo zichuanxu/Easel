@@ -17,7 +17,7 @@
 ⚠️ 选择器时效性：各平台网页改版频繁，内置选择器为**最佳努力**，**首次使用需人工校验/更新**
    （见各平台 config 的 selector_caveat 与 SKILL 文档）。发布前务必先 `plan` 预览、`login` 目视确认。
 
-【半自动】默认（未设 EASEL_DOMESTIC_AUTO_PUBLISH=1）：脚本在可见的真实浏览器里填完表单，停在发布按钮前，
+【半自动】默认（EASEL_DOMESTIC_AUTO_PUBLISH 没开该平台）：脚本在可见的真实浏览器里填完表单，停在发布按钮前，
 由用户亲自点「发布」，脚本只被动观察结果；真发前过 publish_guard（冷却 exit 9 / 重复 exit 8）。
 浏览器内核同 xhs_publish：CloakBrowser → 本机 Chrome/Edge（环境变量 EASEL_CHANNELS_BROWSER /
 EASEL_KUAISHOU_BROWSER / EASEL_ZHIHU_BROWSER=chrome 可强制 Chrome；_HEADLESS=1 仅无桌面机器用）。

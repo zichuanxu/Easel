@@ -4,7 +4,7 @@
 - 浏览器走 real_browser.launch（EASEL_DOUYIN_BROWSER / EASEL_DOUYIN_HEADLESS），发布一律开窗口；
 - 真发前过 publish_guard（冷却 → 9，重复 → 8），dry-run 只展示闸门状态；
 - 默认半自动：脚本不点发布，await_human_publish 交接；published → 读回 → 记台账；blocked → 9；closed/timeout → 5；
-- 自动点击逃生口（EASEL_DOMESTIC_AUTO_PUBLISH=1）：只点一次；AI 声明勾不上 → 6；toast 命中处罚 → 冷却 + 9。
+- 自动点击逃生口（EASEL_DOMESTIC_AUTO_PUBLISH 为 1 或含 douyin）：只点一次；AI 声明勾不上 → 6；toast 命中处罚 → 冷却 + 9。
 """
 import functools
 import json

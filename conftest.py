@@ -35,6 +35,13 @@ def _sandbox_openclaw_state_dir(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _sandbox_skill_dotenv(tmp_path_factory, monkeypatch):
+    # 技能脚本读项目根 .env 的开关（如 semi_auto 的 EASEL_DOMESTIC_AUTO_PUBLISH）一律指到不存在的临时
+    # 文件：开发机真 .env 里开了抖音自动点击，用例 delenv 之后也不能悄悄读到它、把半自动用例跑成自动点击。
+    monkeypatch.setenv("EASEL_ENV_FILE", str(tmp_path_factory.mktemp("dotenv") / ".env"))
+
+
+@pytest.fixture(autouse=True)
 def isolate_web_outputs(request, tmp_path_factory, monkeypatch):
     if not request.node.path.is_relative_to(Path(__file__).parent / "tests"):
         return

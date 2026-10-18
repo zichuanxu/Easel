@@ -19,7 +19,7 @@
       --content-file outputs/zhihu_answers/story1.md \
       --exec --headed
 
-【半自动】默认（未设 EASEL_DOMESTIC_AUTO_PUBLISH=1）：脚本在可见的真实浏览器里把回答填好，停在「发布回答」
+【半自动】默认（EASEL_DOMESTIC_AUTO_PUBLISH 没开知乎）：脚本在可见的真实浏览器里把回答填好，停在「发布回答」
 按钮前，由用户亲自点；脚本只被动观察结果。真发前过 publish_guard（同一问题已回答过 → exit 8；平台冷却 → exit 9）。
 浏览器内核同 web_publisher / xhs_publish：CloakBrowser → 本机 Chrome/Edge（EASEL_ZHIHU_BROWSER=chrome 强制 Chrome，
 EASEL_ZHIHU_HEADLESS=1 仅无桌面机器用）。换内核后需要在账号页重新扫码登录一次。
@@ -341,7 +341,7 @@ def publish_answer(question_url: str, content: str, headed: bool = True, dry_run
         print(f"[DRY-RUN] 将回答问题：{question_url}", file=sys.stderr)
         print(f"[DRY-RUN] 回答字数：{len(content)} 字", file=sys.stderr)
         print(f"[DRY-RUN] 内容预览（前100字）：{content[:100]}...", file=sys.stderr)
-        print(f"[DRY-RUN] 模式：{'半自动（窗口里填好，由你亲自点发布）' if semi else '自动点击（EASEL_DOMESTIC_AUTO_PUBLISH=1）'}",
+        print(f"[DRY-RUN] 模式：{'半自动（窗口里填好，由你亲自点发布）' if semi else '自动点击（EASEL_DOMESTIC_AUTO_PUBLISH 已开知乎）'}",
               file=sys.stderr)
         for ln in _guard_status_lines([str(content_path)] if content_path else [], question_url):
             print(f"[DRY-RUN] {ln}", file=sys.stderr)
@@ -416,7 +416,7 @@ def publish_answer(question_url: str, content: str, headed: bool = True, dry_run
                 semi_auto.report_final(status_file, "success", "发布成功（已检测到回答页/发布成功提示）。")
                 return result
 
-            # 3'. 自动点击逃生口（EASEL_DOMESTIC_AUTO_PUBLISH=1，仅用户自己设）：只点一次，不重试
+            # 3'. 自动点击逃生口（EASEL_DOMESTIC_AUTO_PUBLISH 开了知乎，仅用户自己设）：只点一次，不重试
             published = _click_publish_btn(page)
             if not published:
                 result["error"] = "未找到或无法点击发布回答按钮"

@@ -17,13 +17,16 @@
     # published 只代表「检测到用户点了发布」，状态文件此时是非终态 verifying；调用方核对通过后自己写 success。
     # blocked 时 publish_guard 已把该平台设为冷却；调用方应 sys.exit(publish_guard.EXIT_COOLDOWN)，不得重试。
 
-逃生口：环境变量 EASEL_DOMESTIC_AUTO_PUBLISH=1 才允许脚本自动点击发布（auto_click_allowed）。
-这个开关**只能由用户自己**在 .env / 终端里设置；agent 永远不得设置它，也不得建议用户设置它来「省事」。
+逃生口：EASEL_DOMESTIC_AUTO_PUBLISH 才允许脚本自动点击发布（auto_click_allowed）：1 = 所有国内平台，
+逗号分隔的平台名（如 douyin）= 只放开这些平台。这个开关**只能由用户自己**在项目根 .env / 终端里设置；
+agent 永远不得设置它，也不得建议用户设置它来「省事」。
 
 纯 stdlib（page 由调用方传入，只用 Playwright 同步 API 的 locator / is_closed / wait_for_timeout 子集）。
 """
 from __future__ import annotations
 
+import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -34,6 +37,8 @@ import login_state  # noqa: E402
 import publish_guard  # noqa: E402
 
 AUTO_PUBLISH_ENV = "EASEL_DOMESTIC_AUTO_PUBLISH"
+# 指定读哪个 .env（测试沙箱用：根 conftest 指到临时文件，绝不读开发机真 .env）；默认项目根 .env
+ENV_FILE_ENV = "EASEL_ENV_FILE"
 AWAITING_MESSAGE = "已在窗口里填好，请检查后亲自点击『发布』（脚本不会替你点）。"
 
 VERIFYING_MESSAGE = "已检测到发布，正在核对…"
@@ -52,11 +57,58 @@ _sleep = time.sleep
 _monotonic = time.monotonic
 
 
+def _dotenv_path() -> Path | None:
+    """项目根 .env：EASEL_ENV_FILE → EASEL_ROOT/.env → 从本文件往上找带 setup.sh 的目录。
+    都找不到（如 OpenClaw workspace 里拍平的副本）返回 None，开关按没开算。"""
+    explicit = os.environ.get(ENV_FILE_ENV)
+    if explicit:
+        return Path(explicit)
+    root = os.environ.get("EASEL_ROOT")
+    if root:
+        return Path(root) / ".env"
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "setup.sh").is_file():
+            return parent / ".env"
+    return None
+
+
+def _dotenv_value(key: str) -> str | None:
+    """按 shell source 的规矩读 .env 里某个键：可带 export、成对引号去掉、行尾 # 注释去掉、后写的覆盖先写的。"""
+    path = _dotenv_path()
+    try:
+        text = path.read_text(encoding="utf-8-sig") if path else ""
+    except (OSError, UnicodeError):       # 读不了 / 不是 UTF-8：按没设处理，别把发布脚本带崩
+        return None
+    value = None
+    for raw in text.splitlines():
+        name, sep, val = raw.strip().partition("=")
+        name = re.sub(r"^export\s+", "", name.strip())
+        if not sep or name != key:
+            continue
+        val = val.strip()
+        quoted = re.match(r"""^(["'])(.*?)\1(?:\s+#.*)?$""", val)
+        value = quoted.group(2) if quoted else re.sub(r"\s+#.*$", "", val)
+    return value
+
+
+def auto_publish_setting() -> str:
+    """开关的原始值：进程环境里有就用它（哪怕是空串＝明确关掉）；没有再读项目根 .env——
+    gateway 不加载 .env，只写在那里也得生效。"""
+    value = os.environ.get(AUTO_PUBLISH_ENV)
+    if value is None:
+        value = _dotenv_value(AUTO_PUBLISH_ENV)
+    return (value or "").strip()
+
+
 def auto_click_allowed(platform: str = "") -> bool:
-    """是否允许脚本自动点击「发布」：仅当环境变量 EASEL_DOMESTIC_AUTO_PUBLISH == "1"（默认关）。
-    这是用户自己掌控的逃生口，agent 不得设置。platform 目前不影响判定，保留给将来按平台细分。"""
-    import os
-    return (os.environ.get(AUTO_PUBLISH_ENV) or "").strip() == "1"
+    """是否允许脚本自动点击「发布」（默认关）。这是用户自己掌控的逃生口，agent 不得设置。
+    EASEL_DOMESTIC_AUTO_PUBLISH：1 = 所有国内平台；平台名列表（逗号 / 空格分隔，如 douyin、douyin,kuaishou；
+    中文名和别名也认：抖音、视频号、xhs…）= 只放开这些平台；其余值（true / yes / 0 / 空）都当没开。"""
+    raw = auto_publish_setting()
+    if raw == "1":
+        return True
+    names = {publish_guard.canonical_platform(n) for n in re.split(r"[,，;；\s]+", raw) if n}
+    return bool(platform) and publish_guard.canonical_platform(platform) in names
 
 
 def _write_status(status_file, on_status, state: str, message: str) -> None:
