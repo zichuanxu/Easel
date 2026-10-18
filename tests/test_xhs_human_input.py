@@ -161,6 +161,80 @@ def test_fully_covered_element_is_not_clicked():
     assert ("down",) not in page.log
 
 
+class BlockedEl(FakeEl):
+    """前 n 次探测被 blocker 盖住（弹窗收起动画、遮罩淡出），之后才露出来。"""
+
+    def __init__(self, page, x, y, blocked_probes, blocker="div.semi-modal-mask", **kw):
+        super().__init__(page, x, y, **kw)
+        self.left, self.blocker = blocked_probes, blocker
+
+    def evaluate(self, _js, point):
+        self.probes.append(point)
+        if self.left > 0:
+            self.left -= 1
+            return self.blocker        # 命中检查查出盖在上面的元素，返回它的描述
+        return True
+
+
+def test_blocked_click_names_the_covering_element():
+    """2026-10-15 抖音发布：只报「被挡住」、没说被谁挡，又没截图，查不出原因。"""
+    page = FakePage()
+    el = BlockedEl(page, 100, 300, blocked_probes=99)
+    with pytest.raises(RuntimeError, match="被别的东西挡住.*semi-modal-mask"):
+        human_input.click(page, el)
+    assert ("down",) not in page.log
+
+
+def test_wait_until_clickable_waits_out_a_closing_overlay():
+    page = FakePage()
+    el = BlockedEl(page, 100, 300, blocked_probes=3)
+    human_input.wait_until_clickable(page, el, timeout_ms=5000, interval_ms=500)
+    assert len(el.probes) == 4 and page.waited == [500, 500, 500]
+    assert not [e for e in page.log if e[0] in ("move", "down")]     # 只等，不动鼠标、不点
+
+
+def test_wait_until_clickable_gives_up_with_blocker_after_timeout():
+    page = FakePage()
+    el = BlockedEl(page, 100, 300, blocked_probes=99)
+    with pytest.raises(RuntimeError, match="被别的东西挡住.*semi-modal-mask"):
+        human_input.wait_until_clickable(page, el, timeout_ms=2000, interval_ms=500)
+    assert len(el.probes) == 5 and ("down",) not in page.log
+
+
+def test_wait_until_clickable_does_not_scroll_to_a_hidden_element():
+    """还没渲染出来的元素（display:none / 零尺寸）只等不滚：scroll_into_view_if_needed 对它会一直
+    等到页面默认超时（抖音设 5 分钟），每轮都等一次就远超 15 秒上限（审查发现）。"""
+    page = FakePage()
+    el = FakeEl(page, 100, 300, w=0, h=0)
+    with pytest.raises(RuntimeError, match="一直不在可点区域"):
+        human_input.wait_until_clickable(page, el, timeout_ms=2000, interval_ms=500)
+    assert not any(e[0] == "scroll_into_view" for e in page.log)
+    assert page.waited == [500] * 4 and not el.probes
+
+
+def test_wait_until_clickable_stops_at_wall_clock_deadline(monkeypatch):
+    """每轮探测本身慢（滚动、页面卡）时，按真实时间截止，不是把轮数跑满。"""
+    clock = iter(range(0, 100, 2))                 # 每读一次表过去 2 秒
+    monkeypatch.setattr(human_input, "time", types.SimpleNamespace(monotonic=lambda: next(clock)))
+    page = FakePage()
+    el = BlockedEl(page, 100, 300, blocked_probes=99)
+    with pytest.raises(RuntimeError, match="semi-modal-mask"):
+        human_input.wait_until_clickable(page, el, timeout_ms=5000, interval_ms=500)
+    assert len(el.probes) == 3 and page.waited == [500, 500]     # 轮数上限是 11，到 5 秒就停
+
+
+def test_hit_check_only_true_counts_as_clear():
+    """命中检查只认 True；返回非空字符串（挡在上面的元素描述）就是被挡，不能当真值放行。"""
+    page = FakePage()
+    el = BlockedEl(page, 100, 300, blocked_probes=99, blocker="div#mask")
+    with pytest.raises(RuntimeError, match="div#mask"):
+        human_input.click(page, el)
+    el2 = BlockedEl(page, 100, 300, blocked_probes=99, blocker="")   # 查不出是谁（点在窗口外）
+    with pytest.raises(RuntimeError, match="被别的东西挡住了，没有点$"):
+        human_input.click(page, el2)
+    assert ("down",) not in page.log
+
+
 def test_zero_size_element_is_not_clicked():
     page = FakePage()
     el = FakeEl(page, 100, 300, w=0, h=0)

@@ -117,9 +117,11 @@ HEADLESS_ENV = "EASEL_DOUYIN_HEADLESS"
 BROWSER_ENV = "EASEL_DOUYIN_BROWSER"
 
 # 退出码：6=AI 声明没勾上（自动点击模式 fail-closed）；5=发布未确认/窗口关闭/等待超时；
+# 4=发布前出错（填表时输入框被挡等，脚本没点发布；现场截图已存）；
 # 8=重复发布(publish_guard)；9=冷却/平台处罚提示(publish_guard)。
 EXIT_AI_DECLARE = 6
 EXIT_UNCONFIRMED = 5
+EXIT_NOT_PUBLISHED = 4
 
 # 「自主声明 → 内容由AI生成」。⚠️ 以下选择器按文字猜的，**尚未在真机上校准**（账号被封期间无法试）：
 # 半自动模式下勾不上不报错，只在交接提示里让用户手动勾；自动点击模式下勾不上则 fail-closed（退出 6）。
@@ -317,6 +319,8 @@ def _human_type(page, el, text: str, delay_ms: tuple[int, int] | None = None) ->
     delay_ms 不为 None（发布表单）：human_input 曲线移动鼠标点进去 + 按词组输入；
     为 None（登录验证码等）：快速逐字输入。"""
     if delay_ms is not None:
+        # 先等输入框露出来：前面选封面开过弹窗，收起动画 / 遮罩淡出期间点会被挡（2026-10-15 发布失败）
+        human_input.wait_until_clickable(page, el)
         human_input.click(page, el)
         human_input.pause(page, 200, 600)
         page.keyboard.press(_select_all_key())
@@ -615,27 +619,33 @@ def _wait_publish_button_ready(page, timeout_s: int = 180, sf=None):
     _die(f"发布按钮迟迟未就绪（上传未完成/表单校验未过），已按未提交处理（{timeout_s}s）", sf=sf)
 
 
-def _click_publish(page, content_length: int = 0, sf=None):
+def _click_publish(page, content_length: int = 0, sf=None, on_commit=None):
     """单次提交契约：整个发布流程**唯一一次**点击「发布」。
-    点前等按钮就绪 → 复核/提交双停顿 → 点击。REF publishVideo step8。"""
+    点前等按钮就绪 → 复核/提交双停顿 → 等按钮没被挡 → 点击。REF publishVideo step8。
+    on_commit 在真正去点之前一刻调用：调用方据此区分「肯定还没点」和「可能已经点了」。"""
     btn = _wait_publish_button_ready(page, sf=sf)
     human_pace.pause_before_commit(content_length)
     page.wait_for_timeout(300)
+    human_input.wait_until_clickable(page, btn)   # 被弹层挡住就在这里报错——还没点
+    if on_commit:
+        on_commit()
     human_input.click(page, btn)
 
 
-def _dump_publish_fail(page, tag: str = "publish-fail") -> None:
-    """发布失败/超时时落盘编辑页 DOM + 截图，供选择器校准。"""
+def _dump_publish_fail(page, tag: str = "publish-fail") -> Path | None:
+    """发布失败/超时时落盘编辑页 DOM + 截图，供选择器校准。返回截图路径（没存下来返回 None）。"""
     d = DEFAULT_QR_OUT.parent
     try:
         d.mkdir(parents=True, exist_ok=True)
         (d / f"douyin-{tag}.html").write_text(page.content(), encoding="utf-8")
     except Exception:
         pass
+    shot = d / f"douyin-{tag}.png"
     try:
-        page.screenshot(path=str(d / f"douyin-{tag}.png"))
+        page.screenshot(path=str(shot))
     except Exception:
-        pass
+        return None
+    return shot
 
 
 def _wait_toast(page, timeout_s: int = 20, sf=None) -> None:
@@ -1425,7 +1435,9 @@ def _publish(a, kind: str) -> int:
     started_ms = int(time.time() * 1000)
     published = None   # None=未确认（崩溃/超时→重开核验）；True/False=界面层已判定
     readback = None    # 读回对账（权威判定）：platform_readback.ReadbackResult
-    abort = None       # 半自动交接结局：blocked / closed / timeout（不再读回，直接按未发布退出）
+    abort = None       # 半自动交接结局：blocked / closed / timeout；error=发布前出错（都不再读回，按未发布退出）
+    error_msg = ""     # abort == "error" 时写给用户的说明
+    submitted = False  # 已进入交接 / 要去点发布了：之后的异常可能发生在发布之后，只能按未确认去读回
     snapshot_ids: set[str] = set()   # 发前快照（发布前作品 id 集；发布动作前在页面里抓）
     with sync_playwright() as p:
         # 发布一律开窗口（半自动要有窗口给人点；EASEL_DOUYIN_HEADLESS 对发布无效）
@@ -1472,6 +1484,7 @@ def _publish(a, kind: str) -> int:
 
                 if ai_manual:
                     print(f"✋ {AI_DECLARE_MANUAL_HINT}", flush=True)
+                submitted = True
                 handoff = semi_auto.await_human_publish(
                     page, platform="douyin", is_published=_is_published,
                     toast_selectors=TOAST_SELECTORS, status_file=sf,
@@ -1482,7 +1495,10 @@ def _publish(a, kind: str) -> int:
                     abort = handoff
             else:
                 # ---- 逃生口：脚本点发布（单次点击，无自动重试）----
-                _click_publish(page, len(a.title) + len(a.content or ""), sf=sf)
+                def _mark_submitted():
+                    nonlocal submitted
+                    submitted = True
+                _click_publish(page, len(a.title) + len(a.content or ""), sf=sf, on_commit=_mark_submitted)
                 page.wait_for_timeout(1500)
                 _check_block(page, sf)
                 # 点击后轮询等风控墙浮现（2026-09-12 真机发现：墙的渲染晚于 2.5s，
@@ -1545,6 +1561,17 @@ def _publish(a, kind: str) -> int:
         except PWError as e:
             print(f"⚠️ 发布过程渲染异常（{e}）——将重开浏览器核验", file=sys.stderr)
             published = None
+        except Exception as e:  # noqa: BLE001  其余异常（点不到被挡住的元素、选择器失效…）
+            # 先留现场：2026-10-15 标题框被挡住时什么都没留下，只能猜原因
+            shot = _dump_publish_fail(page, "publish-error")
+            if submitted:
+                print(f"⚠️ 发布过程异常（{e}）——将重开浏览器核验", file=sys.stderr)
+                published = None
+            else:
+                abort = "error"
+                error_msg = (f"未发布：发布前出错（{e}），脚本没有点「发布」，不要自动重试。"
+                             f"若你自己已在窗口里点过发布，请到创作者中心内容管理页核对。"
+                             + (f"现场截图：{shot}" if shot else "现场截图没存下来。"))
         finally:
             try:
                 if not a.keep_open:
@@ -1558,6 +1585,9 @@ def _publish(a, kind: str) -> int:
             readback = _readback_verify(p, a, a.title, since_ms=started_ms,
                                         snapshot_ids=snapshot_ids)
     # 半自动交接没走到「已发布」：不重试、不读回，明确报「未发布」
+    if abort == "error":
+        login_state.write_status(sf, "error", error_msg)   # 不写的话状态会一直停在「发布中…」
+        _die(error_msg, EXIT_NOT_PUBLISHED)
     if abort == "blocked":
         sys.exit(publish_guard.EXIT_COOLDOWN)       # on_block_detected 已设冷却并打印，状态文件已写 error
     if abort in ("closed", "timeout"):
