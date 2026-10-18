@@ -85,7 +85,7 @@
 - **禁止自写脚本/探测脚本去操作国内平台页面**（抖音/小红书/视频号/快手/知乎）；只能用仓库内的发布/查询脚本。
 - 重复拦截（exit 8）与平台冷却（exit 9）由 `skills/shared/scripts/publish_guard.py` 负责，不得绕过。`--allow-repost` 与 `publish_guard.py cooldown clear` 只在用户于对话中明确要求时使用。
 - 国内平台是**半自动**：脚本在可见窗口里把内容填好后停在发布按钮前，提醒用户检查并亲自点「发布」；不要尝试替用户点击。
-- 不要设置 `EASEL_DOMESTIC_AUTO_PUBLISH`（只有用户自己能开的逃生口）。
+- 不要设置 `EASEL_DOMESTIC_AUTO_PUBLISH`（只有用户自己能开的逃生口），也不要把它写进项目根 `.env`。
 
 执行任一发布层 SKILL 前做人设一致性检查：
 

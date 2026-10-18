@@ -162,7 +162,7 @@ Schema：`{topic, profile, created, updated, title, summary, platform, kind, sta
 
 - **真发前调用** `publish_guard.guard_before_publish(platform, media_paths, title, allow_repost=...)`：先查平台冷却（exit 9，`EXIT_COOLDOWN`），再查重复发布（同平台、同媒体 sha256 或同归一化标题、30 天内；exit 8，`EXIT_DUPLICATE`）。跨平台发同一条内容不算重复。发布成功后调用 `record_publish(...)` 记账（`outputs/_publish/ledger.jsonl`，冷却在 `outputs/_publish/cooldown.json`）。
 - **fail-stop**：发布失败或结果未确认时不得自动重试同一平台；检测到平台处罚/限流 toast（`classify_block_text`，只对 toast/通知元素文本用）时调用 `on_block_detected` 并以 exit 9 退出。`--allow-repost` 与 `cooldown clear` 只在用户明确要求时使用。
-- **国内浏览器平台半自动**（抖音/小红书/视频号/快手/知乎）：用 `real_browser.launch` 开可见真实浏览器（Cloak → 本机 Chrome/Edge → 自带 Chromium；每平台独立登录目录 + 固定指纹文件），填完表单后由 `semi_auto.await_human_publish` 停在发布按钮前，由用户亲自点击「发布」；脚本只被动观察结果。`EASEL_DOMESTIC_AUTO_PUBLISH=1` 才允许自动点击，仅用户可设，agent 不得设置。
+- **国内浏览器平台半自动**（抖音/小红书/视频号/快手/知乎）：用 `real_browser.launch` 开可见真实浏览器（Cloak → 本机 Chrome/Edge → 自带 Chromium；每平台独立登录目录 + 固定指纹文件），填完表单后由 `semi_auto.await_human_publish` 停在发布按钮前，由用户亲自点击「发布」；脚本只被动观察结果。`EASEL_DOMESTIC_AUTO_PUBLISH` 为 `1`（全部国内平台）或含该平台名（如 `douyin`）才允许自动点击，写在项目根 `.env` 即生效（`semi_auto.auto_click_allowed`），仅用户可设，agent 不得设置。
 - **不做**发布频率限制、不做国内平台的后台抓取/探测。
 
 **有界编排约定**：manifest 只当**薄索引**（`summary` 一行给编排层路由 + `outputs[]` 指路径），**不复制内容**。跨层要传的东西分两类，都落 `outputs/<主题>/` 成文件，不留在对话里：

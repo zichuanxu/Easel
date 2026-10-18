@@ -62,6 +62,98 @@ def test_auto_click_default_off(monkeypatch):
     assert semi_auto.auto_click_allowed("douyin") is True
 
 
+def test_auto_click_per_platform(monkeypatch):
+    """填平台名只放开这些平台：只开抖音时小红书 / 知乎 / 快手 / 视频号照旧半自动。"""
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "douyin")
+    assert semi_auto.auto_click_allowed("douyin") is True
+    for other in ("xiaohongshu", "zhihu", "kuaishou", "weixin-channels", ""):
+        assert semi_auto.auto_click_allowed(other) is False
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, " Douyin , kuaishou ")
+    assert semi_auto.auto_click_allowed("douyin") and semi_auto.auto_click_allowed("kuaishou")
+    assert semi_auto.auto_click_allowed("xiaohongshu") is False
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "1")
+    assert all(semi_auto.auto_click_allowed(p) for p in ("douyin", "xiaohongshu", "zhihu", "kuaishou"))
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "1,douyin")       # 列表里夹个 1 不等于全开
+    assert semi_auto.auto_click_allowed("douyin") and not semi_auto.auto_click_allowed("xiaohongshu")
+
+
+def test_auto_click_accepts_chinese_names_and_aliases(monkeypatch):
+    """中文名 / 别名按平台码认：写「抖音，视频号」就是 douyin + weixin-channels，别的不开。"""
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "抖音，视频号")
+    assert semi_auto.auto_click_allowed("douyin") and semi_auto.auto_click_allowed("weixin-channels")
+    assert not semi_auto.auto_click_allowed("xiaohongshu") and not semi_auto.auto_click_allowed("kuaishou")
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "xhs")
+    assert semi_auto.auto_click_allowed("xiaohongshu") and not semi_auto.auto_click_allowed("douyin")
+
+
+def _dotenv(tmp_path, monkeypatch, text):
+    env_file = tmp_path / ".env"
+    env_file.write_bytes(text if isinstance(text, bytes) else text.encode("utf-8"))
+    monkeypatch.setenv(semi_auto.ENV_FILE_ENV, str(env_file))
+
+
+@pytest.mark.parametrize("line,expected", [
+    ("EASEL_DOMESTIC_AUTO_PUBLISH=douyin", "douyin"),
+    ("export EASEL_DOMESTIC_AUTO_PUBLISH=douyin", "douyin"),
+    ('EASEL_DOMESTIC_AUTO_PUBLISH="douyin"', "douyin"),
+    ("EASEL_DOMESTIC_AUTO_PUBLISH='douyin'", "douyin"),
+    ("EASEL_DOMESTIC_AUTO_PUBLISH=douyin  # 只开抖音", "douyin"),
+    ('EASEL_DOMESTIC_AUTO_PUBLISH="douyin"  # 只开抖音', "douyin"),
+    ("# EASEL_DOMESTIC_AUTO_PUBLISH=douyin", ""),
+    ("EASEL_DOMESTIC_AUTO_PUBLISH_X=douyin", ""),
+])
+def test_dotenv_line_parsed_like_shell_source(tmp_path, monkeypatch, line, expected):
+    _dotenv(tmp_path, monkeypatch, f"OTHER=1\n{line}\n")
+    assert semi_auto.auto_publish_setting() == expected
+
+
+def test_auto_click_reads_project_dotenv(tmp_path, monkeypatch):
+    """gateway 不加载 .env：进程环境里没设时读项目根 .env（后写的覆盖先写的）；进程环境设了（哪怕空串）就以它为准。"""
+    _dotenv(tmp_path, monkeypatch, "EASEL_DOMESTIC_AUTO_PUBLISH=kuaishou\nEASEL_DOMESTIC_AUTO_PUBLISH=douyin\n")
+    assert semi_auto.auto_click_allowed("douyin") is True
+    assert semi_auto.auto_click_allowed("kuaishou") is False
+    assert semi_auto.auto_click_allowed("xiaohongshu") is False
+    monkeypatch.setenv(semi_auto.AUTO_PUBLISH_ENV, "")
+    assert semi_auto.auto_click_allowed("douyin") is False          # 环境里明确关掉，盖过 .env
+    monkeypatch.delenv(semi_auto.AUTO_PUBLISH_ENV)
+    monkeypatch.setenv(semi_auto.ENV_FILE_ENV, str(tmp_path / "missing.env"))
+    assert semi_auto.auto_click_allowed("douyin") is False          # 没有 .env 就是没开
+
+
+@pytest.mark.parametrize("value,on", [("1", True), ("true", False), ("yes", False), ("0", False), ("", False)])
+def test_dotenv_values_mean_the_same_as_env_values(tmp_path, monkeypatch, value, on):
+    _dotenv(tmp_path, monkeypatch, f"EASEL_DOMESTIC_AUTO_PUBLISH={value}\n")
+    assert semi_auto.auto_click_allowed("douyin") is on
+
+
+def test_non_utf8_dotenv_counts_as_off(tmp_path, monkeypatch):
+    """.env 不是 UTF-8（如 GBK）：按没开处理，不能把发布脚本带崩。"""
+    _dotenv(tmp_path, monkeypatch, "# 抖音\nEASEL_DOMESTIC_AUTO_PUBLISH=douyin\n".encode("gbk"))
+    assert semi_auto.auto_click_allowed("douyin") is False
+
+
+def test_flattened_workspace_copy_without_root_stays_off(tmp_path, monkeypatch):
+    """OpenClaw workspace 里拍平的 shared/scripts 副本：没有 EASEL_ROOT、往上找不到 setup.sh → 不读任何 .env，开关不开。"""
+    monkeypatch.delenv(semi_auto.ENV_FILE_ENV)
+    monkeypatch.delenv("EASEL_ROOT", raising=False)
+    (tmp_path / ".env").write_text("EASEL_DOMESTIC_AUTO_PUBLISH=1\n", encoding="utf-8")
+    monkeypatch.setattr(semi_auto, "__file__", str(tmp_path / "workspace" / "shared" / "scripts" / "semi_auto.py"))
+    assert semi_auto._dotenv_path() is None
+    assert semi_auto.auto_click_allowed("douyin") is False
+
+
+def test_dotenv_found_via_project_root_marker(tmp_path, monkeypatch):
+    """没设 EASEL_ENV_FILE 时按 EASEL_ROOT → 带 setup.sh 的上级目录找 .env。"""
+    monkeypatch.delenv(semi_auto.ENV_FILE_ENV)
+    (tmp_path / ".env").write_text("EASEL_DOMESTIC_AUTO_PUBLISH=douyin\n", encoding="utf-8")
+    monkeypatch.setenv("EASEL_ROOT", str(tmp_path))
+    assert semi_auto._dotenv_path() == tmp_path / ".env"
+    assert semi_auto.auto_click_allowed("douyin") is True
+    monkeypatch.delenv("EASEL_ROOT")
+    root = semi_auto._dotenv_path()
+    assert root is not None and (root.parent / "setup.sh").is_file()   # 仓库里跑：找到的是本仓库根
+
+
 def test_published(tmp_path):
     page = FakePage()
     sf = tmp_path / "s.json"
@@ -168,3 +260,10 @@ def test_platform_toast_selectors_not_broad():
     for sel in allsel:
         for broad in ("Modal", "dialog", "tips", "[class*=message]", "notice", "message-box"):
             assert broad not in sel, sel
+
+
+def test_tests_never_read_the_real_dotenv():
+    """根 conftest 把 EASEL_ENV_FILE 指到不存在的临时文件：开发机 .env 开了自动点击也影响不到用例。"""
+    path = semi_auto._dotenv_path()
+    repo_env = Path(__file__).resolve().parents[1] / ".env"
+    assert path is not None and path != repo_env and not path.exists()

@@ -11,7 +11,7 @@
 （EASEL_XHS_HEADLESS=1 可强开，仅限没有桌面的机器，很容易被识别）。
 另有发帖频率闸门（_activity_check）和「笔记含 AI 合成内容」声明（_declare_ai）。
 
-【半自动】默认（未设 EASEL_DOMESTIC_AUTO_PUBLISH=1）填完表单后停在发布按钮前，由用户亲自点「发布」，
+【半自动】默认（EASEL_DOMESTIC_AUTO_PUBLISH 没开小红书）填完表单后停在发布按钮前，由用户亲自点「发布」，
 脚本只被动观察结果（semi_auto.await_human_publish）；真发前还过 publish_guard（冷却/重复，退出码 9/8）。
 
 移植的关键健壮技巧（源见各处 REF 注释）：

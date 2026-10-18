@@ -4,7 +4,7 @@
 2026-10 抖音投稿功能因脚本/AI 托管被封，现改为半自动：real_browser 开可见窗口（Cloak 优先 → 本机 Chrome →
 自带 Chromium 告警），human_input 真人节奏点击/输入，填完标题/简介/话题/封面/AI 声明后停在发布按钮前，
 由用户亲自点击（semi_auto.await_human_publish）；脚本只被动观察结果。发布前过 publish_guard 重复/冷却闸门，
-toast 命中处罚提示即设冷却并退出 9。仅当用户自己设了 EASEL_DOMESTIC_AUTO_PUBLISH=1 才会脚本点发布。
+toast 命中处罚提示即设冷却并退出 9。仅当用户自己把 EASEL_DOMESTIC_AUTO_PUBLISH 设成 1 或含 douyin 才会脚本点发布。
 
 替代旧的 CDP/puppeteer/MCP Node 死栈（那套需真实 Chrome + MCP，本 Linux 环境跑不了）。
 用 Playwright + 持久化登录态（可见窗口）驱动创作者后台；创作者平台流程与选择器移植自
@@ -1344,7 +1344,7 @@ def _plan_lines(kind, title, desc, media, tags):
         f"  3. {'上传视频等转码(≤5min)+选AI封面+双封面' if kind == 'video' else '上传图片'}",
         "  4. 填标题/简介（真人节奏）+ # 话题 + 自主声明「内容由AI生成」（选择器未校准）",
         "  5. 停在发布按钮前（状态 awaiting_user_click），用户检查后亲自点「发布」；"
-        "（仅 EASEL_DOMESTIC_AUTO_PUBLISH=1 时脚本才点）",
+        "（仅 EASEL_DOMESTIC_AUTO_PUBLISH 为 1 或含 douyin 时脚本才点）",
         "  6. 发布后读回作品列表对账（标题+时间窗对上才算发布成功）→ 记入发布台账",
     ]
 
@@ -1428,7 +1428,7 @@ def _publish(a, kind: str) -> int:
     except Exception as e:
         _die(f"需要 playwright：{e}", 3)
     sf = getattr(a, "status_file", None)
-    auto = semi_auto.auto_click_allowed("douyin")   # 逃生口：用户自己设了 EASEL_DOMESTIC_AUTO_PUBLISH=1
+    auto = semi_auto.auto_click_allowed("douyin")   # 逃生口：用户自己开了 EASEL_DOMESTIC_AUTO_PUBLISH（1 或含 douyin）
     declare_ai = bool(getattr(a, "ai_declare", True))
     handoff_timeout = float(getattr(a, "handoff_timeout", 3600) or 3600)
     login_state.write_status(sf, "starting", "发布中…")
